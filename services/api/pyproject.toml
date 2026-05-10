@@ -1,0 +1,15 @@
+[project]
+name = "ezbet-api"
+version = "0.1.0"
+description = "MVP API for ezbet news ingestion and publishing."
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn[standard]==0.34.2",
+  "pydantic==2.11.4",
+  "psycopg[binary]==3.2.9"
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

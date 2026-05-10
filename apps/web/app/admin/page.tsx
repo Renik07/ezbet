@@ -1,0 +1,689 @@
+import Link from "next/link";
+
+import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { getEditorialStudioData } from "@/lib/editorial";
+
+import {
+  activatePromptVersion,
+  archivePromptVersion,
+  createSourceNow,
+  deleteSourceNow,
+  ingestRssTestBatchNow,
+  probeNewSourceNow,
+  probeSourceNow,
+  resetDatabaseNow,
+  runContentPlannerNow,
+  runEditorialNow,
+  savePromptVersion,
+  updateSourceNow
+} from "./actions";
+
+type AdminSearchParams = {
+  notice?: string;
+  detail?: string;
+  sourceKey?: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  sourceType?: string;
+  sourceNotes?: string;
+  probeOk?: string;
+  probeReadiness?: string;
+  probeCount?: string;
+  probeFullTextOk?: string;
+  probeLeadOk?: string;
+  probeTagsCount?: string;
+  probeSampleTitle?: string;
+  probeSampleUrl?: string;
+};
+
+export default async function AdminPage({
+  searchParams
+}: {
+  searchParams?: Promise<AdminSearchParams>;
+}) {
+  const params = (await searchParams) ?? {};
+  const notice = getNoticeMessage(params.notice, params.detail);
+  const sourceDraft = {
+    key: params.sourceKey ?? "",
+    title: params.sourceTitle ?? "",
+    url: params.sourceUrl ?? "",
+    type: params.sourceType ?? "rss",
+    notes: params.sourceNotes ?? "",
+  };
+  const draftProbe =
+    params.notice === "source-draft-probed" || params.notice === "source-draft-probe-error"
+      ? {
+          ok: params.probeOk === "true",
+          readiness: params.probeReadiness ?? "unknown",
+          count: params.probeCount ?? "0",
+          fullTextOk: params.probeFullTextOk === "true",
+          leadOk: params.probeLeadOk === "true",
+          tagsCount: params.probeTagsCount ?? "0",
+          sampleTitle: params.probeSampleTitle,
+          sampleUrl: params.probeSampleUrl
+        }
+      : null;
+  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, isLive } =
+    await getEditorialStudioData();
+  const promptGroups = groupPrompts(prompts);
+  const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
+
+  return (
+    <main className="page-shell">
+      <section className="hero" style={{ paddingBottom: 22 }}>
+        <div className="eyebrow">Admin</div>
+        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Prompt management и editorial control</h1>
+            <p>
+              {isLive
+                ? "Админка уже подключена к живому editorial API. Здесь можно выпускать новые версии prompt’ов и вручную запускать editorial cycle."
+                : "API сейчас недоступен, поэтому админка показывает fallback-состояние и не сможет сохранить изменения."}
+            </p>
+        <div className="hero-actions">
+          <form action={resetDatabaseNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Очистить БД"
+              pendingLabel="Очищаем БД..."
+            />
+          </form>
+          <form action={ingestRssTestBatchNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Загрузить 5 с каждого источника"
+              pendingLabel="Тянем источники..."
+            />
+          </form>
+          <form action={runContentPlannerNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Обновить content plan"
+              pendingLabel="Планировщик работает..."
+            />
+          </form>
+          <form action={runEditorialNow}>
+            <PendingSubmitButton
+              className="button-primary"
+              idleLabel="Запустить editorial run"
+              pendingLabel="AI-редакция работает..."
+            />
+          </form>
+          <Link className="button-secondary" href="/studio">
+            Открыть studio
+          </Link>
+          <Link className="button-secondary" href="/news">
+            К ленте
+          </Link>
+        </div>
+        {notice ? (
+          <div className="section-card" style={{ marginTop: 18 }}>
+            <p style={{ margin: 0 }}>{notice}</p>
+          </div>
+        ) : null}
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>AI status</h2>
+            <p>Здесь видно, используем ли мы живой OpenAI слой или работаем на template fallback.</p>
+          </div>
+        </div>
+        <div className="stats-grid">
+          <div className="stat">
+            <strong>{editorialStatus.openaiEnabled ? "Live" : "Fallback"}</strong>
+            <span>
+              {editorialStatus.openaiEnabled
+                ? `${editorialStatus.providerLabel} · ${editorialStatus.apiStyle}`
+                : "живой AI сейчас не активен"}
+            </span>
+          </div>
+          <div className="stat">
+            <strong>{editorialStatus.openaiModel}</strong>
+            <span>текущая модель writer/editor</span>
+          </div>
+          <div className="stat">
+            <strong>{editorialStatus.webSearchEnabled ? "On" : "Off"}</strong>
+            <span>web search для extraction fallback</span>
+          </div>
+          <div className="stat">
+            <strong>{drafts.filter((draft) => draft.generationMode !== "template").length}</strong>
+            <span>drafts в выборке, сгенерированные живой моделью</span>
+          </div>
+          <div className="stat">
+            <strong>{drafts.filter((draft) => draft.status === "fallback_only").length}</strong>
+            <span>template fallback-only, внутренние и непубликуемые</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Source registry</h2>
+            <p>
+              Здесь управляется список источников. Для текущего MVP в статус <strong>active</strong> можно переводить
+              поддерживаемые adapter&apos;ы: сейчас это <strong>rss</strong>, <strong>scraping</strong> и{" "}
+              <strong>AI search</strong>. Для <strong>scraping</strong> и <strong>AI search</strong> перед активацией
+              нужен успешный preflight.
+            </p>
+          </div>
+        </div>
+        <div style={{ marginBottom: 24 }}>
+          <article className="news-card source-create-card">
+            <span>new source</span>
+            <h3>Добавить источник</h3>
+            <form action={createSourceNow} className="prompt-form">
+              <label className="field">
+                <span>Key</span>
+                <input name="key" placeholder="championat-news" defaultValue={sourceDraft.key} required />
+              </label>
+              <label className="field">
+                <span>Title</span>
+                <input name="title" placeholder="Championat" defaultValue={sourceDraft.title} required />
+              </label>
+              <label className="field">
+                <span>URL</span>
+                <input name="url" placeholder="https://example.com/feed.xml" defaultValue={sourceDraft.url} required />
+              </label>
+              <div className="source-inline-fields">
+                <label className="field field-compact">
+                  <span>Type</span>
+                  <select name="sourceType" defaultValue={sourceDraft.type}>
+                    <option value="rss">rss</option>
+                    <option value="scraping">scraping</option>
+                    <option value="ai_research">ai search</option>
+                  </select>
+                </label>
+              </div>
+              <input type="hidden" name="status" value="draft" />
+              <p className="footer-note">
+                Новый источник создаётся как draft. После проверки его можно активировать в карточке ниже.
+              </p>
+              <label className="field field-compact">
+                <span>Source hints</span>
+                <textarea
+                  name="notes"
+                  rows={3}
+                  defaultValue={sourceDraft.notes}
+                  placeholder="Например: искать только футбольные новости, исключить видео и трансляции"
+                />
+              </label>
+              {draftProbe ? (
+                <div className={draftProbe.ok ? "source-probe-preview" : "source-card-error"}>
+                  <strong>Проверка:</strong> {draftProbe.readiness} · элементов: {draftProbe.count} · full text:{" "}
+                  {draftProbe.fullTextOk ? "ok" : "нет"} · lead: {draftProbe.leadOk ? "ok" : "нет"} · tags:{" "}
+                  {draftProbe.tagsCount}
+                  {draftProbe.sampleTitle ? (
+                    <>
+                      <br />
+                      Sample: {draftProbe.sampleTitle}
+                      {draftProbe.sampleUrl ? (
+                        <>
+                          {" · "}
+                          <a href={draftProbe.sampleUrl} target="_blank" rel="noreferrer">
+                            открыть
+                          </a>
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="source-button-row">
+                <PendingSubmitButton
+                  className="button-secondary"
+                  idleLabel="Проверить источник"
+                  pendingLabel="Проверяем..."
+                  formAction={probeNewSourceNow}
+                />
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Добавить источник"
+                  pendingLabel="Сохраняем источник..."
+                />
+              </div>
+            </form>
+          </article>
+        </div>
+        <div className="source-grid">
+          {sources.map((source) => {
+            const state = sourceStateMap.get(source.key);
+            const lamp = getSourceLamp(state?.lastStatus, state?.lastProbeReadiness);
+            const readiness = getReadinessBadge(state?.lastProbeReadiness);
+
+            return (
+            <article key={source.key} className="news-card source-card">
+              <div className="source-card-top">
+                <div className="source-status-wrap">
+                  <span className={`source-lamp source-lamp-${lamp.tone}`} />
+                  <span>{lamp.label}</span>
+                </div>
+                <span>
+                  {formatSourceType(source.sourceType)} · {source.status}
+                </span>
+              </div>
+              <h3>{source.title}</h3>
+              <p className="source-card-url">{source.url}</p>
+              <form action={updateSourceNow} className="prompt-form">
+                <input type="hidden" name="sourceKey" value={source.key} />
+                <label className="field field-compact">
+                  <span>Key</span>
+                  <input value={source.key} disabled readOnly />
+                </label>
+                <label className="field field-compact">
+                  <span>Title</span>
+                  <input name="title" defaultValue={source.title} required />
+                </label>
+                <label className="field field-compact">
+                  <span>URL</span>
+                  <input name="url" defaultValue={source.url} required />
+                </label>
+                <div className="source-inline-fields">
+                  <label className="field field-compact">
+                    <span>Type</span>
+                    <select name="sourceType" defaultValue={source.sourceType}>
+                      <option value="rss">rss</option>
+                      <option value="scraping">scraping</option>
+                      <option value="ai_research">ai search</option>
+                    </select>
+                  </label>
+                  <label className="field field-compact">
+                    <span>Status</span>
+                    <select name="status" defaultValue={source.status}>
+                      <option value="draft">draft</option>
+                      <option value="active">active</option>
+                      <option value="archived">archived</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="field field-compact">
+                  <span>{source.sourceType === "ai_research" ? "Source hints" : "Notes"}</span>
+                  <textarea
+                    name="notes"
+                    rows={source.sourceType === "ai_research" ? 3 : 2}
+                    defaultValue={source.notes}
+                  />
+                </label>
+                <div className="button-row">
+                  <PendingSubmitButton
+                    className="button-secondary"
+                    idleLabel="Сохранить"
+                    pendingLabel="Сохраняем..."
+                  />
+                </div>
+              </form>
+              <div className="source-button-row">
+                <form action={probeSourceNow}>
+                  <input type="hidden" name="sourceKey" value={source.key} />
+                  <PendingSubmitButton
+                    className="button-secondary"
+                    idleLabel="Проверить"
+                    pendingLabel="Проверяем..."
+                  />
+                </form>
+                <form action={deleteSourceNow}>
+                  <input type="hidden" name="sourceKey" value={source.key} />
+                  <PendingSubmitButton
+                    className="button-secondary"
+                    idleLabel="Удалить"
+                    pendingLabel="Удаляем..."
+                  />
+                </form>
+              </div>
+              <p className="footer-note" style={{ marginTop: 10 }}>
+                Последняя проверка: {formatDateTime(state?.lastProbeAt)} · элементов: {state?.lastProbeCount ?? 0}
+              </p>
+              <p className="footer-note">
+                Preflight: <strong>{readiness.label}</strong> · full text:{" "}
+                {state?.lastProbeFullTextOk ? "ok" : "нет"} · lead: {state?.lastProbeLeadOk ? "ok" : "нет"} · tags:{" "}
+                {state?.lastProbeTagsCount ?? 0}
+              </p>
+              {state?.lastProbeSampleTitle ? (
+                <p className="footer-note">
+                  Sample: {state.lastProbeSampleTitle}
+                  {state.lastProbeSampleUrl ? (
+                    <>
+                      {" · "}
+                      <a href={state.lastProbeSampleUrl} target="_blank" rel="noreferrer">
+                        открыть
+                      </a>
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
+              <p className="footer-note">
+                Fetch: {state?.fetchStatus ?? "idle"} · Parse: {state?.parseStatus ?? "idle"} · retry:{" "}
+                {state?.retryCount ?? 0}
+              </p>
+              <p className="footer-note">
+                Последний удачный fetch: {formatDateTime(state?.lastSuccessfulFetchAt)} · parse:{" "}
+                {formatDateTime(state?.lastSuccessfulParseAt)}
+              </p>
+              <p className="footer-note">
+                Последний batch: {state?.lastItemCount ?? 0} · failures подряд: {state?.consecutiveFailures ?? 0}
+              </p>
+              {(source.sourceType === "scraping" || source.sourceType === "ai_research") &&
+              source.status !== "draft" &&
+              state?.lastProbeReadiness !== "ready" &&
+              state?.lastProbeReadiness !== "ready_ai" ? (
+                <p className="source-card-error">
+                  Для этого источника перед статусом active нужен preflight со статусом ready или ready_ai.
+                </p>
+              ) : null}
+              {state?.lastError ? <p className="source-card-error">{state.lastError}</p> : null}
+            </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Prompt editors</h2>
+            <p>Каждое сохранение создаёт новую версию prompt’а. При активации она сразу становится рабочей.</p>
+          </div>
+        </div>
+        <div className="admin-grid">
+          {promptGroups.map((group) => (
+            <article key={group.agentKey} className="news-card">
+              <span>{group.agentKey}</span>
+              <h3>{group.active?.name ?? group.agentKey}</h3>
+              <form action={savePromptVersion} className="prompt-form">
+                <input type="hidden" name="agentKey" value={group.agentKey} />
+
+                <label className="field">
+                  <span>Name</span>
+                  <input name="name" defaultValue={group.active?.name ?? `${group.agentKey} prompt`} required />
+                </label>
+
+                <label className="field">
+                  <span>Model</span>
+                  <input name="model" defaultValue={group.active?.model ?? "local-editor-mvp"} required />
+                </label>
+
+                <label className="field">
+                  <span>System prompt</span>
+                  <textarea
+                    name="systemPrompt"
+                    defaultValue={group.active?.systemPrompt ?? ""}
+                    rows={5}
+                    required
+                  />
+                </label>
+
+                <label className="field">
+                  <span>User template</span>
+                  <textarea
+                    name="userPromptTemplate"
+                    defaultValue={group.active?.userPromptTemplate ?? ""}
+                    rows={4}
+                    required
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Notes</span>
+                  <textarea name="notes" defaultValue={group.active?.notes ?? ""} rows={3} />
+                </label>
+
+                <label className="checkbox-row">
+                  <input name="activate" type="checkbox" defaultChecked />
+                  <span>Сразу активировать новую версию</span>
+                </label>
+
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Сохранить новую версию"
+                  pendingLabel="Сохраняем prompt..."
+                />
+              </form>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Prompt history</h2>
+            <p>Здесь можно откатиться на прошлую версию или архивировать неактуальную.</p>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          {prompts.map((prompt) => (
+            <article key={prompt.id} className="news-card">
+              <span>
+                {prompt.agentKey} · v{prompt.version} · {prompt.status}
+              </span>
+              <h3>{prompt.name}</h3>
+              <p>{prompt.notes || prompt.systemPrompt}</p>
+              <p>
+                <strong>Model:</strong> {prompt.model}
+              </p>
+              <div className="button-row">
+                {prompt.status !== "active" ? (
+                  <form action={activatePromptVersion}>
+                    <input type="hidden" name="promptId" value={prompt.id} />
+                    <PendingSubmitButton
+                      className="button-secondary"
+                      idleLabel="Activate"
+                      pendingLabel="Activating..."
+                    />
+                  </form>
+                ) : null}
+                {prompt.status !== "active" && prompt.status !== "archived" ? (
+                  <form action={archivePromptVersion}>
+                    <input type="hidden" name="promptId" value={prompt.id} />
+                    <PendingSubmitButton
+                      className="button-secondary"
+                      idleLabel="Archive"
+                      pendingLabel="Archiving..."
+                    />
+                  </form>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Content plan</h2>
+            <p>Планировщик выбирает, какие raw_items идут в редакционный контур и в каком формате.</p>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
+          {contentPlan.slice(0, 6).map((item) => (
+            <article key={item.id} className="news-card">
+              <span>
+                {item.priorityLabel} · {item.plannedFormat} · {item.status}
+              </span>
+              <h3>{item.title}</h3>
+              <p>{item.reason}</p>
+              <p className="footer-note" style={{ marginTop: 12 }}>
+                {item.sourceTitle} · score {item.priorityScore}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Editorial queue</h2>
+            <p>Последние drafts и reviews прямо в админке, чтобы не прыгать между экранами.</p>
+          </div>
+        </div>
+        <div className="stats-grid" style={{ marginBottom: 18 }}>
+          <div className="stat">
+            <strong>{drafts.length}</strong>
+            <span>drafts в текущей выборке</span>
+          </div>
+          <div className="stat">
+            <strong>{reviews.length}</strong>
+            <span>review entries в текущей выборке</span>
+          </div>
+          <div className="stat">
+            <strong>{contentPlan.length}</strong>
+            <span>content plan items в текущей выборке</span>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
+          {drafts.slice(0, 4).map((draft) => (
+            <article key={draft.id} className="news-card">
+              <span>
+                {draft.category} · {draft.status} · {draft.reviewStatus} · {draft.generationMode}
+              </span>
+              <h3>{draft.title}</h3>
+              <p>{draft.dek}</p>
+              {draft.status === "fallback_only" ? (
+                <p className="source-card-error">
+                  Fallback-only: этот draft оставлен только для внутреннего просмотра и никогда не должен публиковаться.
+                </p>
+              ) : null}
+              {draft.generationMode === "template" ? (
+                <p className="source-card-error">
+                  Template fallback: такой draft не должен автоматически публиковаться.
+                </p>
+              ) : null}
+              <p className="footer-note" style={{ marginTop: 12 }}>
+                {draft.sourceTitle} · {draft.promptName}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+type Prompt = Awaited<ReturnType<typeof getEditorialStudioData>>["prompts"][number];
+
+function getNoticeMessage(notice?: string, detail?: string) {
+  switch (notice) {
+    case "db-reset":
+      return "Локальная БД очищена, source-state сброшен.";
+    case "sources-ingested":
+      return "Тестовая пачка новостей из активных источников загружена в систему.";
+    case "source-created":
+      return "Новый источник сохранён.";
+    case "source-updated":
+      return "Источник обновлён.";
+    case "source-deleted":
+      return "Источник удалён.";
+    case "source-probed":
+      return "Проверка источника завершена, статус обновлён.";
+    case "source-draft-probed":
+      return detail ? `Проверка нового источника завершена: ${detail}` : "Проверка нового источника завершена.";
+    case "source-draft-probe-error":
+      return detail
+        ? `Проверка нового источника не удалась: ${detail}`
+        : "Проверка нового источника не удалась.";
+    case "source-activation-blocked":
+      return "Источник не переведён в active: сначала нужен успешный preflight-check для scraping или AI search.";
+    case "source-save-error":
+      return detail
+        ? `Источник не сохранён: ${detail}`
+        : "Источник не сохранён: проверьте тип, статус и preflight.";
+    case "content-plan-run":
+      return "Content plan успешно обновлён.";
+    case "editorial-run":
+      return "Editorial run завершён, новые draft-материалы и review-результаты подтянуты.";
+    case "prompt-saved":
+      return "Новая версия prompt’а сохранена.";
+    case "prompt-activated":
+      return "Версия prompt’а активирована.";
+    case "prompt-archived":
+      return "Версия prompt’а отправлена в архив.";
+    default:
+      return null;
+  }
+}
+
+function formatDateTime(value?: string) {
+  if (!value) {
+    return "ещё не было";
+  }
+
+  return new Date(value).toLocaleString("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function formatSourceType(value: string) {
+  switch (value) {
+    case "ai_research":
+    case "ai_search":
+      return "ai search";
+    default:
+      return value;
+  }
+}
+
+function groupPrompts(prompts: Prompt[]) {
+  const grouped = new Map<string, { agentKey: string; active?: Prompt; versions: Prompt[] }>();
+
+  for (const prompt of prompts) {
+    const entry = grouped.get(prompt.agentKey) ?? {
+      agentKey: prompt.agentKey,
+      active: undefined,
+      versions: []
+    };
+
+    entry.versions.push(prompt);
+    if (prompt.status === "active") {
+      entry.active = prompt;
+    }
+
+    grouped.set(prompt.agentKey, entry);
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => left.agentKey.localeCompare(right.agentKey));
+}
+
+function getSourceLamp(status?: string, readiness?: string) {
+  if (readiness === "ready") {
+    return { tone: "green", label: "ready" };
+  }
+  if (readiness === "ready_ai") {
+    return { tone: "green", label: "ready_ai" };
+  }
+  if (readiness === "partial" || readiness === "feed_only") {
+    return { tone: "amber", label: readiness };
+  }
+  switch (status) {
+    case "probe_ok":
+    case "ok":
+      return { tone: "green", label: "ok" };
+    case "probe_error":
+      return { tone: "red", label: "error" };
+    default:
+      return { tone: "amber", label: "idle" };
+  }
+}
+
+function getReadinessBadge(readiness?: string) {
+  switch (readiness) {
+    case "ready":
+      return { label: "ready" };
+    case "ready_ai":
+      return { label: "ready via AI" };
+    case "partial":
+      return { label: "partial" };
+    case "feed_only":
+      return { label: "feed-only" };
+    case "fetch_error":
+      return { label: "fetch error" };
+    case "empty":
+      return { label: "empty" };
+    case "unsupported":
+      return { label: "unsupported" };
+    default:
+      return { label: "unknown" };
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "key": "sports-ru-topnews",
+      "title": "Sports.ru",
+      "url": "https://www.sports.ru/rss/topnews.xml",
+      "category": "Спорт"
+    },
+    {
+      "key": "sport-express-news",
+      "title": "Спорт-Экспресс",
+      "url": "https://www.sport-express.ru/services/materials/news/se/",
+      "category": "Спорт"
+    }
+  ]
+}

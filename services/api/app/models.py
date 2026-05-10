@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class NewsItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    category: str
+    published_at: datetime = Field(serialization_alias="publishedAt")
+    source: str
+    link: Optional[str] = None
+    status: str = "published"
+    ai_reviewed: bool = Field(default=False, serialization_alias="aiReviewed")
+    article_slug: Optional[str] = Field(default=None, serialization_alias="articleSlug")
+
+
+class Article(BaseModel):
+    id: str
+    slug: str
+    news_item_id: str = Field(serialization_alias="newsItemId")
+    raw_item_id: str = Field(serialization_alias="rawItemId")
+    title: str
+    lead: Optional[str] = None
+    dek: str
+    body: str
+    category: str
+    source_title: str = Field(serialization_alias="sourceTitle")
+    source_url: Optional[str] = Field(default=None, serialization_alias="sourceUrl")
+    tags: list[str] = Field(default_factory=list)
+    published_at: datetime = Field(serialization_alias="publishedAt")
+    ai_reviewed: bool = Field(default=True, serialization_alias="aiReviewed")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="createdAt",
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class RawItem(BaseModel):
+    id: str
+    source_key: str = Field(serialization_alias="sourceKey")
+    source_title: str = Field(serialization_alias="sourceTitle")
+    source_url: str = Field(serialization_alias="sourceUrl")
+    category: str
+    normalized_category: str = Field(serialization_alias="normalizedCategory")
+    external_id: str = Field(serialization_alias="externalId")
+    dedupe_key: str = Field(serialization_alias="dedupeKey")
+    title: str
+    summary: str
+    lead: Optional[str] = None
+    url: Optional[str] = None
+    published_at: datetime = Field(serialization_alias="publishedAt")
+    fetched_at: datetime = Field(serialization_alias="fetchedAt")
+    importance_score: int = Field(serialization_alias="importanceScore")
+    triage_label: str = Field(serialization_alias="triageLabel")
+    is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
+    duplicate_of: Optional[str] = Field(default=None, serialization_alias="duplicateOf")
+    full_text: Optional[str] = Field(default=None, serialization_alias="fullText")
+    tags: list[str] = Field(default_factory=list)
+    payload: str
+
+
+class RawItemPreview(BaseModel):
+    id: str
+    source_key: str = Field(serialization_alias="sourceKey")
+    source_title: str = Field(serialization_alias="sourceTitle")
+    category: str
+    normalized_category: str = Field(serialization_alias="normalizedCategory")
+    title: str
+    summary: str
+    lead: Optional[str] = None
+    url: Optional[str] = None
+    published_at: datetime = Field(serialization_alias="publishedAt")
+    fetched_at: datetime = Field(serialization_alias="fetchedAt")
+    importance_score: int = Field(serialization_alias="importanceScore")
+    triage_label: str = Field(serialization_alias="triageLabel")
+    is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
+    full_text: Optional[str] = Field(default=None, serialization_alias="fullText")
+    tags: list[str] = Field(default_factory=list)
+
+
+class PromptConfig(BaseModel):
+    id: str
+    agent_key: str = Field(serialization_alias="agentKey")
+    name: str
+    version: int
+    status: str = "active"
+    system_prompt: str = Field(serialization_alias="systemPrompt")
+    user_prompt_template: str = Field(serialization_alias="userPromptTemplate")
+    model: str
+    provider: str = "internal"
+    notes: str = ""
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="createdAt",
+    )
+
+
+class DraftArticle(BaseModel):
+    id: str
+    raw_item_id: str = Field(serialization_alias="rawItemId")
+    title: str
+    dek: str
+    body: str
+    category: str
+    source_title: str = Field(serialization_alias="sourceTitle")
+    source_url: Optional[str] = Field(default=None, serialization_alias="sourceUrl")
+    published_at: datetime = Field(serialization_alias="publishedAt")
+    status: str = "draft"
+    review_status: str = Field(default="pending", serialization_alias="reviewStatus")
+    review_summary: Optional[str] = Field(default=None, serialization_alias="reviewSummary")
+    prompt_config_id: str = Field(serialization_alias="promptConfigId")
+    prompt_name: str = Field(serialization_alias="promptName")
+    model: str
+    generation_mode: str = Field(default="template", serialization_alias="generationMode")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="createdAt",
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class EditorReview(BaseModel):
+    id: str
+    draft_id: str = Field(serialization_alias="draftId")
+    status: str = "reviewed"
+    summary: str
+    notes: str = ""
+    prompt_config_id: str = Field(serialization_alias="promptConfigId")
+    prompt_name: str = Field(serialization_alias="promptName")
+    model: str
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="createdAt",
+    )
+
+
+class ContentPlanItem(BaseModel):
+    id: str
+    raw_item_id: str = Field(serialization_alias="rawItemId")
+    title: str
+    source_title: str = Field(serialization_alias="sourceTitle")
+    category: str
+    priority_score: int = Field(serialization_alias="priorityScore")
+    priority_label: str = Field(serialization_alias="priorityLabel")
+    planned_format: str = Field(serialization_alias="plannedFormat")
+    status: str = "planned"
+    reason: str
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="createdAt",
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class NewsListResponse(BaseModel):
+    items: list[NewsItem]
+
+
+class ArticleResponse(BaseModel):
+    item: Article
+
+
+class RawItemListResponse(BaseModel):
+    items: list[RawItem]
+
+
+class RawItemPreviewListResponse(BaseModel):
+    items: list[RawItemPreview]
+
+
+class IngestResponse(BaseModel):
+    ingested: int
+    published: int
+    items: list[NewsItem]
+    raw_items: int = Field(serialization_alias="rawItems")
+
+
+class SourceItem(BaseModel):
+    key: str
+    title: str
+    url: str
+    category: str
+    source_type: str = Field(default="rss", serialization_alias="sourceType")
+    status: str = "active"
+    notes: str = ""
+
+
+class SourceListResponse(BaseModel):
+    items: list[SourceItem]
+
+
+class SourceCreateRequest(BaseModel):
+    key: str
+    title: str
+    url: str
+    category: str
+    source_type: str = Field(default="rss", serialization_alias="sourceType")
+    status: str = "draft"
+    notes: str = ""
+
+
+class SourceUpdateRequest(BaseModel):
+    title: str
+    url: str
+    category: str
+    source_type: str = Field(default="rss", serialization_alias="sourceType")
+    status: str = "draft"
+    notes: str = ""
+
+
+class SourceSyncState(BaseModel):
+    source_key: str = Field(serialization_alias="sourceKey")
+    source_title: str = Field(serialization_alias="sourceTitle")
+    last_fetched_at: Optional[datetime] = Field(default=None, serialization_alias="lastFetchedAt")
+    last_successful_fetch_at: Optional[datetime] = Field(
+        default=None, serialization_alias="lastSuccessfulFetchAt"
+    )
+    last_successful_parse_at: Optional[datetime] = Field(
+        default=None, serialization_alias="lastSuccessfulParseAt"
+    )
+    last_published_at: Optional[datetime] = Field(default=None, serialization_alias="lastPublishedAt")
+    last_external_id: Optional[str] = Field(default=None, serialization_alias="lastExternalId")
+    last_item_count: int = Field(default=0, serialization_alias="lastItemCount")
+    fetch_status: str = Field(default="idle", serialization_alias="fetchStatus")
+    parse_status: str = Field(default="idle", serialization_alias="parseStatus")
+    fetch_error_count: int = Field(default=0, serialization_alias="fetchErrorCount")
+    parse_error_count: int = Field(default=0, serialization_alias="parseErrorCount")
+    consecutive_failures: int = Field(default=0, serialization_alias="consecutiveFailures")
+    retry_count: int = Field(default=0, serialization_alias="retryCount")
+    last_probe_at: Optional[datetime] = Field(default=None, serialization_alias="lastProbeAt")
+    last_probe_count: int = Field(default=0, serialization_alias="lastProbeCount")
+    last_probe_readiness: str = Field(default="unknown", serialization_alias="lastProbeReadiness")
+    last_probe_full_text_ok: bool = Field(default=False, serialization_alias="lastProbeFullTextOk")
+    last_probe_lead_ok: bool = Field(default=False, serialization_alias="lastProbeLeadOk")
+    last_probe_tags_count: int = Field(default=0, serialization_alias="lastProbeTagsCount")
+    last_probe_sample_title: Optional[str] = Field(default=None, serialization_alias="lastProbeSampleTitle")
+    last_probe_sample_url: Optional[str] = Field(default=None, serialization_alias="lastProbeSampleUrl")
+    last_status: str = Field(default="idle", serialization_alias="lastStatus")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class SourceProbeResponse(BaseModel):
+    source_key: str = Field(serialization_alias="sourceKey")
+    ok: bool
+    item_count: int = Field(serialization_alias="itemCount")
+    message: str
+    readiness: str
+    full_text_ok: bool = Field(serialization_alias="fullTextOk")
+    lead_ok: bool = Field(serialization_alias="leadOk")
+    tags_count: int = Field(serialization_alias="tagsCount")
+    sample_title: Optional[str] = Field(default=None, serialization_alias="sampleTitle")
+    sample_url: Optional[str] = Field(default=None, serialization_alias="sampleUrl")
+
+
+class SourceSyncStateListResponse(BaseModel):
+    items: list[SourceSyncState]
+
+
+class PromptConfigListResponse(BaseModel):
+    items: list[PromptConfig]
+
+
+class PromptConfigCreateRequest(BaseModel):
+    agent_key: str = Field(serialization_alias="agentKey")
+    name: str
+    system_prompt: str = Field(serialization_alias="systemPrompt")
+    user_prompt_template: str = Field(serialization_alias="userPromptTemplate")
+    model: str
+    notes: str = ""
+    activate: bool = True
+
+
+class PromptStatusUpdateRequest(BaseModel):
+    status: str
+
+
+class DraftArticleListResponse(BaseModel):
+    items: list[DraftArticle]
+
+
+class EditorReviewListResponse(BaseModel):
+    items: list[EditorReview]
+
+
+class ContentPlanListResponse(BaseModel):
+    items: list[ContentPlanItem]
+
+
+class EditorialRunResponse(BaseModel):
+    generated: int
+    reviewed: int
+    drafts: list[DraftArticle]
+
+
+class ContentPlanRunResponse(BaseModel):
+    planned: int
+    items: list[ContentPlanItem]
+
+
+class EditorialStatusResponse(BaseModel):
+    openai_enabled: bool = Field(serialization_alias="openaiEnabled")
+    openai_model: str = Field(serialization_alias="openaiModel")
+    fallback_mode: bool = Field(serialization_alias="fallbackMode")
+    provider_label: str = Field(serialization_alias="providerLabel")
+    api_style: str = Field(serialization_alias="apiStyle")
+    web_search_enabled: bool = Field(serialization_alias="webSearchEnabled")
+
+
+class ResetResponse(BaseModel):
+    cleared: bool

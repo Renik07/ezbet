@@ -1,0 +1,750 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from socket import timeout as SocketTimeout
+from typing import Any
+from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from .config import OpenAISettings, get_openai_settings
+from .models import DraftArticle, PromptConfig, RawItem, SourceItem
+
+
+@dataclass
+class DraftGenerationResult:
+    title: str
+    dek: str
+    body: str
+    model: str
+    generation_mode: str
+
+
+@dataclass
+class ReviewGenerationResult:
+    summary: str
+    notes: str
+    model: str
+    generation_mode: str
+
+
+@dataclass
+class PlannerRerankItem:
+    raw_item_id: str
+    score: int
+    reason: str
+
+
+@dataclass
+class SourceDiscoveryItem:
+    title: str
+    summary: str
+    url: str
+    published_at: str | None
+    full_text: str | None
+    source_title: str | None
+    tags: list[str]
+
+
+@dataclass
+class ResolvedArticleTarget:
+    url: str
+    published_at: str | None
+    source_title: str | None
+
+
+@dataclass
+class ArticleExtractionResult:
+    full_text: str | None
+    lead: str | None
+    tags: list[str]
+    model: str
+    generation_mode: str
+
+
+LLM_REQUEST_EXCEPTIONS = (ValueError, HTTPError, URLError, TimeoutError, SocketTimeout, OSError)
+
+
+class OpenAIEditorialClient:
+    def __init__(self, settings: OpenAISettings | None = None) -> None:
+        self.settings = settings or get_openai_settings()
+
+    @property
+    def enabled(self) -> bool:
+        return self.settings.enabled
+
+    def generate_draft(self, raw_item: RawItem, prompt: PromptConfig) -> DraftGenerationResult | None:
+        if not self.enabled:
+            return None
+
+        source_body = (raw_item.full_text or "").strip()
+        source_body_block = f"full_text: {source_body}\n" if source_body else ""
+        lead_block = f"lead: {raw_item.lead}\n" if raw_item.lead else ""
+        tags_block = f"tags: {', '.join(raw_item.tags)}\n" if raw_item.tags else ""
+        input_text = (
+            "Return only valid JSON with keys title, dek, body.\n"
+            f"source_title: {raw_item.source_title}\n"
+            f"title: {raw_item.title}\n"
+            f"summary: {raw_item.summary}\n"
+            f"{lead_block}"
+            f"{tags_block}"
+            f"{source_body_block}"
+            f"category: {raw_item.normalized_category}\n"
+            f"priority: {raw_item.triage_label} ({raw_item.importance_score}/100)\n"
+            "Constraints: do not invent facts, keep the tone concise, write in Russian, "
+            "and separate body paragraphs with two newline characters."
+        )
+        instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
+
+        try:
+            payload = self._create_response(instructions=instructions, input_text=input_text)
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        title = _clean_text(data.get("title")) or raw_item.title
+        dek = _clean_text(data.get("dek")) or raw_item.summary
+        body = _clean_text(data.get("body"))
+        if not body:
+            return None
+
+        return DraftGenerationResult(
+            title=title,
+            dek=dek,
+            body=body,
+            model=self.settings.model,
+            generation_mode=f"llm_{self.settings.api_style}",
+        )
+
+    def review_draft(
+        self,
+        draft: DraftArticle,
+        raw_item: RawItem,
+        prompt: PromptConfig,
+    ) -> ReviewGenerationResult | None:
+        if not self.enabled:
+            return None
+
+        source_body = (raw_item.full_text or "").strip()
+        source_body_block = f"source_full_text: {source_body}\n" if source_body else ""
+        lead_block = f"source_lead: {raw_item.lead}\n" if raw_item.lead else ""
+        tags_block = f"source_tags: {', '.join(raw_item.tags)}\n" if raw_item.tags else ""
+        input_text = (
+            "Return only valid JSON with keys summary and notes.\n"
+            f"source_title: {raw_item.source_title}\n"
+            f"source_summary: {raw_item.summary}\n"
+            f"{lead_block}"
+            f"{tags_block}"
+            f"{source_body_block}"
+            f"draft_title: {draft.title}\n"
+            f"draft_dek: {draft.dek}\n"
+            f"draft_body: {draft.body}\n"
+            "Constraints: review in Russian, mention whether the draft stays close to the source, "
+            "and if data is thin, recommend a manual source check."
+        )
+        instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
+
+        try:
+            payload = self._create_response(instructions=instructions, input_text=input_text)
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        summary = _clean_text(data.get("summary"))
+        notes = _clean_text(data.get("notes"))
+        if not summary or not notes:
+            return None
+
+        return ReviewGenerationResult(
+            summary=summary,
+            notes=notes,
+            model=self.settings.model,
+            generation_mode=f"llm_{self.settings.api_style}",
+        )
+
+    def rewrite_draft(
+        self,
+        draft: DraftArticle,
+        raw_item: RawItem,
+        prompt: PromptConfig,
+        reason: str,
+    ) -> DraftGenerationResult | None:
+        if not self.enabled:
+            return None
+
+        source_body = (raw_item.full_text or "").strip()
+        source_body_block = f"source_full_text: {source_body}\n" if source_body else ""
+        lead_block = f"source_lead: {raw_item.lead}\n" if raw_item.lead else ""
+        tags_block = f"source_tags: {', '.join(raw_item.tags)}\n" if raw_item.tags else ""
+        input_text = (
+            "Return only valid JSON with keys title, dek, body.\n"
+            f"rewrite_reason: {reason}\n"
+            f"source_title: {raw_item.source_title}\n"
+            f"source_summary: {raw_item.summary}\n"
+            f"{lead_block}"
+            f"{tags_block}"
+            f"{source_body_block}"
+            f"current_title: {draft.title}\n"
+            f"current_dek: {draft.dek}\n"
+            f"current_body: {draft.body}\n"
+            "Constraints: keep only facts that are supported by the source summary, write in Russian, "
+            "reduce repetition, avoid boilerplate phrasing, and keep the article concise but readable."
+        )
+        instructions = (
+            f"{prompt.system_prompt}\n\n"
+            f"{prompt.user_prompt_template}\n\n"
+            "Это rewrite pass. Перепиши материал лучше, чем текущая версия, не добавляя новых фактов."
+        )
+
+        try:
+            payload = self._create_response(instructions=instructions, input_text=input_text)
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        title = _clean_text(data.get("title")) or draft.title
+        dek = _clean_text(data.get("dek")) or draft.dek
+        body = _clean_text(data.get("body"))
+        if not body:
+            return None
+
+        return DraftGenerationResult(
+            title=title,
+            dek=dek,
+            body=body,
+            model=self.settings.model,
+            generation_mode=f"llm_{self.settings.api_style}_rewrite",
+        )
+
+    def rerank_plan_candidates(
+        self,
+        raw_items: list[RawItem],
+        *,
+        limit: int,
+    ) -> list[PlannerRerankItem] | None:
+        if not self.enabled or not raw_items:
+            return None
+
+        candidate_lines: list[str] = []
+        for item in raw_items:
+            candidate_lines.append(
+                "\n".join(
+                    (
+                        f"id: {item.id}",
+                        f"source: {item.source_title}",
+                        f"title: {item.title}",
+                        f"summary: {item.summary}",
+                        f"category: {item.normalized_category}",
+                        f"importance_score: {item.importance_score}",
+                        f"triage_label: {item.triage_label}",
+                        f"published_at: {item.published_at.isoformat()}",
+                    )
+                )
+            )
+
+        input_text = (
+            "Return only valid JSON with key items.\n"
+            f"Need top_limit: {limit}\n"
+            "For each selected item return: id, score, reason.\n"
+            "Score must be integer 0..100.\n"
+            "Select only the strongest candidates for a sports news homepage and editorial queue.\n"
+            "Prefer: freshness, importance of event, officiality, exclusivity, tournament weight, "
+            "clear factual news value.\n"
+            "Avoid over-prioritizing weak promo/video/live items.\n\n"
+            "Candidates:\n"
+            + "\n\n".join(candidate_lines)
+        )
+        instructions = (
+            "Ты редактор планирования ezbet.ru. Твоя задача — быстро переоценить короткий shortlist "
+            "новостей и выбрать верхние кандидаты для публикации. Отвечай только JSON без пояснений."
+        )
+
+        try:
+            payload = self._create_response(instructions=instructions, input_text=input_text)
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        items = data.get("items")
+        if not isinstance(items, list):
+            return None
+
+        known_ids = {item.id for item in raw_items}
+        reranked: list[PlannerRerankItem] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_item_id = _clean_text(item.get("id"))
+            if not raw_item_id or raw_item_id not in known_ids:
+                continue
+            try:
+                score = int(item.get("score"))
+            except (TypeError, ValueError):
+                continue
+            reason = _clean_text(item.get("reason")) or "AI rerank selected this candidate for the shortlist."
+            reranked.append(
+                PlannerRerankItem(
+                    raw_item_id=raw_item_id,
+                    score=max(0, min(score, 100)),
+                    reason=reason,
+                )
+            )
+
+        if not reranked:
+            return None
+
+        return reranked[:limit]
+
+    def discover_source_items(
+        self,
+        source: SourceItem,
+        *,
+        limit: int,
+        prompt: PromptConfig | None = None,
+    ) -> list[SourceDiscoveryItem] | None:
+        if not self.enabled or not self._should_enable_web_search_for_request():
+            return None
+
+        host = urlsplit(source.url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+
+        notes_block = f"source_specific_ai_search_instructions: {source.notes}\n" if source.notes.strip() else ""
+        input_text = (
+            "Return only valid JSON with key items.\n"
+            f"Need up to {limit} latest relevant news items from this source.\n"
+            f"source_title: {source.title}\n"
+            f"source_url: {source.url}\n"
+            f"source_category: {source.category}\n"
+            f"{notes_block}"
+            "For each item return: title, summary, url, published_at, source_title, tags.\n"
+            "Rules:\n"
+            "- search only this source/domain\n"
+            "- prefer fresh sports news items, not promos, nav pages, tag pages, video hubs or subscriptions\n"
+            "- summary should be concise and factual in Russian\n"
+            "- source_title should be the publication/site name if visible, otherwise use the given source title\n"
+            "- url must point to the article page\n"
+            "- published_at should be ISO 8601 if you can infer it, otherwise null\n"
+            "- tags should be a short topical array in Russian\n"
+            "- do not invent facts\n"
+        )
+        instructions = (
+            f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
+            if prompt is not None
+            else (
+                "Ты discovery-слой ezbet.ru. Найди на указанном домене свежие новостные материалы и верни "
+                "строго JSON без пояснений."
+            )
+        )
+
+        try:
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                tools=self._build_web_search_tools(source.url),
+            )
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        items = data.get("items")
+        if not isinstance(items, list):
+            return None
+
+        discovered: list[SourceDiscoveryItem] = []
+        seen_urls: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = _clean_text(item.get("title"))
+            summary = _clean_text(item.get("summary"))
+            url = _clean_text(item.get("url"))
+            published_at = _clean_text(item.get("published_at")) or None
+            source_title = _clean_text(item.get("source_title")) or source.title
+            tags_value = item.get("tags")
+            tags: list[str] = []
+            if isinstance(tags_value, list):
+                tags = [tag for tag in (_clean_text(tag) for tag in tags_value) if tag]
+
+            if not title or not url or url in seen_urls:
+                continue
+            if host and host not in url.lower():
+                continue
+            if not summary:
+                summary = title
+
+            seen_urls.add(url)
+            discovered.append(
+                SourceDiscoveryItem(
+                    title=title,
+                    summary=summary,
+                    url=url,
+                    published_at=published_at,
+                    full_text=None,
+                    source_title=source_title,
+                    tags=tags,
+                )
+            )
+
+        return discovered[:limit] or None
+
+    def resolve_article_target(
+        self,
+        *,
+        source: SourceItem,
+        raw_title: str,
+        current_url: str,
+    ) -> ResolvedArticleTarget | None:
+        if not self.enabled or not self._should_enable_web_search_for_request():
+            return None
+
+        host = urlsplit(source.url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+
+        input_text = (
+            "Return only valid JSON with keys url, published_at, source_title.\n"
+            f"source_title: {source.title}\n"
+            f"source_url: {source.url}\n"
+            f"candidate_title: {raw_title}\n"
+            f"current_url: {current_url}\n"
+            "Find the exact canonical article URL on this domain for the given title.\n"
+            "Rules:\n"
+            "- search only this source/domain\n"
+            "- prefer the exact article page, not tag pages or mirrors\n"
+            "- if current_url is wrong or normalized incorrectly, return the better canonical URL\n"
+            "- if you cannot improve the URL, return the current_url\n"
+            "- published_at should be ISO 8601 if visible, otherwise null\n"
+            "- do not invent facts\n"
+        )
+        instructions = (
+            "Ты resolve-слой ezbet.ru. Найди точную canonical article URL по заголовку и домену. "
+            "Отвечай только JSON."
+        )
+
+        try:
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                tools=self._build_web_search_tools(source.url),
+            )
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        url = _clean_text(data.get("url"))
+        if not url:
+            return None
+        if host and host not in url.lower():
+            return None
+
+        published_at = _clean_text(data.get("published_at")) or None
+        source_title = _clean_text(data.get("source_title")) or source.title
+        return ResolvedArticleTarget(
+            url=url,
+            published_at=published_at,
+            source_title=source_title,
+        )
+
+    def extract_article_enrichment(
+        self,
+        *,
+        url: str,
+        source_title: str,
+        raw_title: str,
+        raw_summary: str,
+        html: str,
+    ) -> ArticleExtractionResult | None:
+        if not self.enabled:
+            return None
+
+        prepared_html = _prepare_html_for_article_extraction(
+            html=html,
+            raw_title=raw_title,
+            raw_summary=raw_summary,
+            limit=28000,
+        )
+        input_text = (
+            "Return only valid JSON with keys full_text, lead, tags.\n"
+            f"url: {url}\n"
+            f"source_title: {source_title}\n"
+            f"raw_title: {raw_title}\n"
+            f"raw_summary: {raw_summary}\n"
+            "Rules:\n"
+            "- full_text: extract the main article text only, not a rewrite\n"
+            "- lead: extract a short intro or lead if it is clearly present\n"
+            "- tags: return a short array of topical tags in Russian\n"
+            "- ignore menus, promos, related blocks, comments and footer text\n"
+            "- if the article text is inside JSON/script data, extract only the article text\n"
+            "- if provided HTML is weak or incomplete, use web search results to find the exact article by URL/title and extract it\n"
+            "- preserve the original wording of the article as much as possible; normalize whitespace only\n"
+            "- do not paraphrase, shorten, rewrite or summarize the article body\n"
+            "- do not invent facts\n\n"
+            f"HTML:\n{prepared_html}"
+        )
+        instructions = (
+            "Ты extraction-слой ezbet.ru. Из HTML нужно дословно достать основной текст новости и базовые метаданные. "
+            "Отвечай только JSON."
+        )
+
+        try:
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                tools=self._build_web_search_tools(url),
+                include=["web_search_call.action.sources"] if self._should_enable_web_search_for_request() else None,
+            )
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        full_text = _clean_text(data.get("full_text")) or None
+        lead = _clean_text(data.get("lead")) or None
+        tags_value = data.get("tags")
+        tags: list[str] = []
+        if isinstance(tags_value, list):
+            tags = [tag for tag in (_clean_text(item) for item in tags_value) if tag]
+
+        if full_text is None and lead is None and not tags:
+            return None
+
+        return ArticleExtractionResult(
+            full_text=full_text,
+            lead=lead,
+            tags=tags,
+            model=self.settings.model,
+            generation_mode=f"llm_{self.settings.api_style}_extraction",
+        )
+
+    def _create_response(
+        self,
+        *,
+        instructions: str,
+        input_text: str,
+        tools: list[dict[str, Any]] | None = None,
+        include: list[str] | None = None,
+    ) -> str:
+        if self.settings.api_style == "chat_completions":
+            return self._create_chat_completion(instructions=instructions, input_text=input_text)
+        return self._create_responses_completion(
+            instructions=instructions,
+            input_text=input_text,
+            tools=tools,
+            include=include,
+        )
+
+    def _create_responses_completion(
+        self,
+        *,
+        instructions: str,
+        input_text: str,
+        tools: list[dict[str, Any]] | None = None,
+        include: list[str] | None = None,
+    ) -> str:
+        payload_body: dict[str, Any] = {
+            "model": self.settings.model,
+            "instructions": instructions,
+            "input": input_text,
+        }
+        if tools:
+            payload_body["tools"] = tools
+            payload_body["tool_choice"] = "auto"
+        if include:
+            payload_body["include"] = include
+
+        request_body = json.dumps(payload_body).encode("utf-8")
+        request = Request(
+            url=f"{self.settings.base_url.rstrip('/')}/responses",
+            data=request_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.api_key}",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        return _extract_output_text(payload)
+
+    def _should_enable_web_search_for_request(self) -> bool:
+        return (
+            self.settings.web_search_enabled
+            and self.settings.api_style == "responses"
+            and "openai.com" in self.settings.base_url
+        )
+
+    def _build_web_search_tools(self, url: str) -> list[dict[str, Any]] | None:
+        if not self._should_enable_web_search_for_request():
+            return None
+
+        host = urlsplit(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+
+        tool: dict[str, Any] = {
+            "type": "web_search",
+            "external_web_access": self.settings.web_search_live,
+            "filters": {
+                "allowed_domains": [host],
+            },
+            "search_context_size": self.settings.web_search_context_size,
+        }
+        return [tool]
+
+    def _create_chat_completion(self, *, instructions: str, input_text: str) -> str:
+        request_body = json.dumps(
+            {
+                "model": self.settings.model,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": input_text},
+                ],
+                "response_format": {"type": "json_object"},
+            }
+        ).encode("utf-8")
+        request = Request(
+            url=f"{self.settings.base_url.rstrip('/')}/chat/completions",
+            data=request_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.api_key}",
+            },
+            method="POST",
+        )
+
+        with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        return _extract_chat_completion_text(payload)
+
+
+def _extract_output_text(payload: dict[str, Any]) -> str:
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    chunks: list[str] = []
+    for item in payload.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+
+    return "\n".join(chunks).strip()
+
+
+def _clean_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _truncate_for_llm(value: str, limit: int) -> str:
+    cleaned = value.strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit]
+
+
+def _prepare_html_for_article_extraction(
+    *,
+    html: str,
+    raw_title: str,
+    raw_summary: str,
+    limit: int,
+) -> str:
+    cleaned = html.strip()
+    if len(cleaned) <= limit:
+        return cleaned
+
+    snippets: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add_snippet(label: str, snippet: str | None) -> None:
+        if not snippet:
+            return
+        compact = snippet.strip()
+        if not compact or compact in seen:
+            return
+        seen.add(compact)
+        snippets.append((label, compact))
+
+    add_snippet("HEAD", cleaned[:5000])
+    add_snippet("TAIL", cleaned[-3000:])
+
+    focus_terms = [raw_title, raw_summary]
+    focus_terms.extend(
+        term
+        for term in (
+            "<article",
+            "<main",
+            "articlebody",
+            "article-body",
+            "story-body",
+            "news__content",
+            "articlecontent",
+            "\"article\"",
+            "\"content\"",
+        )
+    )
+
+    lowered = cleaned.lower()
+    for term in focus_terms:
+        normalized_term = (term or "").strip()
+        if not normalized_term:
+            continue
+        lookup = normalized_term.lower()
+        index = lowered.find(lookup)
+        if index == -1 and len(lookup) > 80:
+            lookup = lookup[:80]
+            index = lowered.find(lookup)
+        if index == -1:
+            continue
+        start = max(0, index - 5000)
+        end = min(len(cleaned), index + 18000)
+        add_snippet(f"FOCUS:{normalized_term[:48]}", cleaned[start:end])
+        if sum(len(text) for _, text in snippets) >= limit:
+            break
+
+    if not snippets:
+        return _truncate_for_llm(cleaned, limit)
+
+    parts: list[str] = []
+    total = 0
+    for label, snippet in snippets:
+        block = f"<!-- {label} -->\n{snippet}"
+        remaining = limit - total
+        if remaining <= 0:
+            break
+        if len(block) > remaining:
+            block = block[:remaining]
+        parts.append(block)
+        total += len(block)
+
+    prepared = "\n\n".join(parts).strip()
+    return prepared or _truncate_for_llm(cleaned, limit)
+
+
+def _extract_chat_completion_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return ""
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+    return ""
