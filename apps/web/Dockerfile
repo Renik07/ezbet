@@ -4,14 +4,15 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
-COPY apps/web/package-lock.json apps/web/package-lock.json
 
-RUN npm install
+RUN npm ci --workspace web
 
 COPY apps/web apps/web
 
 WORKDIR /app/apps/web
 
+RUN npm run build
+
 EXPOSE 3000
 
-CMD ["npm", "run", "dev"]
+CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
