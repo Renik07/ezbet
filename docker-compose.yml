@@ -3,10 +3,11 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+    environment:
+      EZBET_API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: http://api:8000
     depends_on:
       - api
 
@@ -15,33 +16,15 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment:
-      DATABASE_URL: postgresql://ezbet:ezbet@postgres:5432/ezbet
+      DATABASE_URL: ${DATABASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_STYLE: ${OPENAI_API_STYLE:-responses}
+      OPENAI_PROVIDER_LABEL: ${OPENAI_PROVIDER_LABEL:-OpenAI}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-45}
+      OPENAI_WEB_SEARCH_ENABLED: ${OPENAI_WEB_SEARCH_ENABLED:-true}
+      OPENAI_WEB_SEARCH_LIVE: ${OPENAI_WEB_SEARCH_LIVE:-true}
+      OPENAI_WEB_SEARCH_CONTEXT_SIZE: ${OPENAI_WEB_SEARCH_CONTEXT_SIZE:-medium}
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: ezbet
-      POSTGRES_USER: ezbet
-      POSTGRES_PASSWORD: ezbet
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ezbet -d ezbet"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  postgres_data:

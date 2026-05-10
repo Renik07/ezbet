@@ -31,7 +31,7 @@ if [ -n "$STALE_API_PIDS" ]; then
   sleep 1
 fi
 
-POSTGRES_CONTAINER_ID="$(docker compose ps -q postgres)"
+POSTGRES_CONTAINER_ID="$(docker compose -f docker-compose.local.yml ps -q postgres)"
 
 if [ -n "$POSTGRES_CONTAINER_ID" ]; then
   echo "Waiting for PostgreSQL to become healthy..."

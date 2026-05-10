@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "dev": "sh ./scripts/dev.sh",
-    "dev:infra": "docker compose up -d postgres redis",
+    "dev:infra": "docker compose -f docker-compose.local.yml up -d postgres redis",
     "dev:api": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} python3 -m uvicorn services.api.app.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:web": "npm run dev --workspace web",
     "build:web": "npm run build --workspace web",
