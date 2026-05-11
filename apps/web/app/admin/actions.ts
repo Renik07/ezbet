@@ -5,6 +5,11 @@ import { redirect } from "next/navigation";
 
 import { resolveApiBaseUrl } from "@/lib/api";
 
+function redirectWithError(notice: string, error: unknown) {
+  const detail = extractApiErrorMessage(error);
+  redirect(`/admin?notice=${notice}&detail=${encodeURIComponent(detail)}`);
+}
+
 async function apiPost(path: string, body: Record<string, unknown>) {
   const baseUrl = resolveApiBaseUrl();
   if (!baseUrl) {
@@ -43,15 +48,19 @@ function extractApiErrorMessage(error: unknown) {
 }
 
 export async function savePromptVersion(formData: FormData) {
-  await apiPost("/api/v1/prompts", {
-    agent_key: String(formData.get("agentKey") ?? ""),
-    name: String(formData.get("name") ?? ""),
-    system_prompt: String(formData.get("systemPrompt") ?? ""),
-    user_prompt_template: String(formData.get("userPromptTemplate") ?? ""),
-    model: String(formData.get("model") ?? ""),
-    notes: String(formData.get("notes") ?? ""),
-    activate: formData.get("activate") === "on"
-  });
+  try {
+    await apiPost("/api/v1/prompts", {
+      agent_key: String(formData.get("agentKey") ?? ""),
+      name: String(formData.get("name") ?? ""),
+      system_prompt: String(formData.get("systemPrompt") ?? ""),
+      user_prompt_template: String(formData.get("userPromptTemplate") ?? ""),
+      model: String(formData.get("model") ?? ""),
+      notes: String(formData.get("notes") ?? ""),
+      activate: formData.get("activate") === "on"
+    });
+  } catch (error) {
+    redirectWithError("prompt-save-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -60,9 +69,13 @@ export async function savePromptVersion(formData: FormData) {
 
 export async function activatePromptVersion(formData: FormData) {
   const promptId = String(formData.get("promptId") ?? "");
-  await apiPost(`/api/v1/prompts/${promptId}/status`, {
-    status: "active"
-  });
+  try {
+    await apiPost(`/api/v1/prompts/${promptId}/status`, {
+      status: "active"
+    });
+  } catch (error) {
+    redirectWithError("prompt-activate-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -71,9 +84,13 @@ export async function activatePromptVersion(formData: FormData) {
 
 export async function archivePromptVersion(formData: FormData) {
   const promptId = String(formData.get("promptId") ?? "");
-  await apiPost(`/api/v1/prompts/${promptId}/status`, {
-    status: "archived"
-  });
+  try {
+    await apiPost(`/api/v1/prompts/${promptId}/status`, {
+      status: "archived"
+    });
+  } catch (error) {
+    redirectWithError("prompt-archive-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -81,7 +98,11 @@ export async function archivePromptVersion(formData: FormData) {
 }
 
 export async function runEditorialNow() {
-  await apiPost("/api/v1/editorial/run?limit=10", {});
+  try {
+    await apiPost("/api/v1/editorial/run?limit=10", {});
+  } catch (error) {
+    redirectWithError("editorial-run-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -91,7 +112,11 @@ export async function runEditorialNow() {
 }
 
 export async function runContentPlannerNow() {
-  await apiPost("/api/v1/content-plan/run?limit=10", {});
+  try {
+    await apiPost("/api/v1/content-plan/run?limit=10", {});
+  } catch (error) {
+    redirectWithError("content-plan-run-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -99,7 +124,11 @@ export async function runContentPlannerNow() {
 }
 
 export async function resetDatabaseNow() {
-  await apiPost("/api/v1/dev/reset", {});
+  try {
+    await apiPost("/api/v1/dev/reset", {});
+  } catch (error) {
+    redirectWithError("db-reset-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -109,7 +138,11 @@ export async function resetDatabaseNow() {
 }
 
 export async function ingestRssTestBatchNow() {
-  await apiPost("/api/v1/ingest/sources?limit=5&perSource=true", {});
+  try {
+    await apiPost("/api/v1/ingest/sources?limit=5&perSource=true", {});
+  } catch (error) {
+    redirectWithError("sources-ingest-error", error);
+  }
 
   revalidatePath("/admin");
   revalidatePath("/studio");
@@ -207,7 +240,11 @@ export async function updateSourceNow(formData: FormData) {
 
 export async function deleteSourceNow(formData: FormData) {
   const sourceKey = String(formData.get("sourceKey") ?? "");
-  await apiPost(`/api/v1/sources/${sourceKey}/delete`, {});
+  try {
+    await apiPost(`/api/v1/sources/${sourceKey}/delete`, {});
+  } catch (error) {
+    redirectWithError("source-delete-error", error);
+  }
 
   revalidatePath("/admin");
   redirect("/admin?notice=source-deleted");
@@ -215,7 +252,11 @@ export async function deleteSourceNow(formData: FormData) {
 
 export async function probeSourceNow(formData: FormData) {
   const sourceKey = String(formData.get("sourceKey") ?? "");
-  await apiPost(`/api/v1/sources/${sourceKey}/probe`, {});
+  try {
+    await apiPost(`/api/v1/sources/${sourceKey}/probe`, {});
+  } catch (error) {
+    redirectWithError("source-probe-error", error);
+  }
 
   revalidatePath("/admin");
   redirect("/admin?notice=source-probed");

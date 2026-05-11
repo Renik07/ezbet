@@ -63,7 +63,7 @@ export default async function AdminPage({
           sampleUrl: params.probeSampleUrl
         }
       : null;
-  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, isLive } =
+  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, isLive, liveError } =
     await getEditorialStudioData();
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
@@ -78,12 +78,14 @@ export default async function AdminPage({
                 ? "Админка уже подключена к живому editorial API. Здесь можно выпускать новые версии prompt’ов и вручную запускать editorial cycle."
                 : "API сейчас недоступен, поэтому админка показывает fallback-состояние и не сможет сохранить изменения."}
             </p>
+            {!isLive && liveError ? <p className="source-card-error">{liveError}</p> : null}
         <div className="hero-actions">
           <form action={resetDatabaseNow}>
             <PendingSubmitButton
               className="button-secondary"
               idleLabel="Очистить БД"
               pendingLabel="Очищаем БД..."
+              disabled={!isLive}
             />
           </form>
           <form action={ingestRssTestBatchNow}>
@@ -91,6 +93,7 @@ export default async function AdminPage({
               className="button-secondary"
               idleLabel="Загрузить 5 с каждого источника"
               pendingLabel="Тянем источники..."
+              disabled={!isLive}
             />
           </form>
           <form action={runContentPlannerNow}>
@@ -98,6 +101,7 @@ export default async function AdminPage({
               className="button-secondary"
               idleLabel="Обновить content plan"
               pendingLabel="Планировщик работает..."
+              disabled={!isLive}
             />
           </form>
           <form action={runEditorialNow}>
@@ -105,6 +109,7 @@ export default async function AdminPage({
               className="button-primary"
               idleLabel="Запустить editorial run"
               pendingLabel="AI-редакция работает..."
+              disabled={!isLive}
             />
           </form>
           <Link className="button-secondary" href="/studio">
@@ -567,16 +572,24 @@ function getNoticeMessage(notice?: string, detail?: string) {
   switch (notice) {
     case "db-reset":
       return "Локальная БД очищена, source-state сброшен.";
+    case "db-reset-error":
+      return detail ? `Очистка БД не удалась: ${detail}` : "Очистка БД не удалась.";
     case "sources-ingested":
       return "Тестовая пачка новостей из активных источников загружена в систему.";
+    case "sources-ingest-error":
+      return detail ? `Загрузка источников не удалась: ${detail}` : "Загрузка источников не удалась.";
     case "source-created":
       return "Новый источник сохранён.";
     case "source-updated":
       return "Источник обновлён.";
     case "source-deleted":
       return "Источник удалён.";
+    case "source-delete-error":
+      return detail ? `Источник не удалён: ${detail}` : "Источник не удалён.";
     case "source-probed":
       return "Проверка источника завершена, статус обновлён.";
+    case "source-probe-error":
+      return detail ? `Проверка источника не удалась: ${detail}` : "Проверка источника не удалась.";
     case "source-draft-probed":
       return detail ? `Проверка нового источника завершена: ${detail}` : "Проверка нового источника завершена.";
     case "source-draft-probe-error":
@@ -591,14 +604,24 @@ function getNoticeMessage(notice?: string, detail?: string) {
         : "Источник не сохранён: проверьте тип, статус и preflight.";
     case "content-plan-run":
       return "Content plan успешно обновлён.";
+    case "content-plan-run-error":
+      return detail ? `Content plan не обновлён: ${detail}` : "Content plan не обновлён.";
     case "editorial-run":
       return "Editorial run завершён, новые draft-материалы и review-результаты подтянуты.";
+    case "editorial-run-error":
+      return detail ? `Editorial run не выполнен: ${detail}` : "Editorial run не выполнен.";
     case "prompt-saved":
       return "Новая версия prompt’а сохранена.";
+    case "prompt-save-error":
+      return detail ? `Новая версия prompt’а не сохранена: ${detail}` : "Новая версия prompt’а не сохранена.";
     case "prompt-activated":
       return "Версия prompt’а активирована.";
+    case "prompt-activate-error":
+      return detail ? `Версия prompt’а не активирована: ${detail}` : "Версия prompt’а не активирована.";
     case "prompt-archived":
       return "Версия prompt’а отправлена в архив.";
+    case "prompt-archive-error":
+      return detail ? `Версия prompt’а не архивирована: ${detail}` : "Версия prompt’а не архивирована.";
     default:
       return null;
   }

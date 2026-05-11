@@ -7,22 +7,25 @@ type PendingSubmitButtonProps = {
   pendingLabel: string;
   className: string;
   formAction?: (formData: FormData) => void | Promise<void>;
+  disabled?: boolean;
 };
 
 export function PendingSubmitButton({
   idleLabel,
   pendingLabel,
   className,
-  formAction
+  formAction,
+  disabled = false
 }: PendingSubmitButtonProps) {
   const { pending } = useFormStatus();
+  const isDisabled = pending || disabled;
 
   return (
     <button
       className={`${className} ${pending ? "is-pending" : ""}`}
       type="submit"
       formAction={formAction}
-      disabled={pending}
+      disabled={isDisabled}
     >
       {pending ? pendingLabel : idleLabel}
     </button>

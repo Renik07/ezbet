@@ -138,6 +138,7 @@ export type EditorialStudioData = {
   sourceStates: SourceSyncState[];
   sources: SourceConfig[];
   isLive: boolean;
+  liveError?: string;
 };
 
 export type RawDraftPair = {
@@ -350,7 +351,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialStatus: fallbackEditorialStatus,
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
-      isLive: false
+      isLive: false,
+      liveError: "EZBET_API_BASE_URL is not configured."
     };
   }
 
@@ -386,7 +388,21 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       !sourceStatesResponse.ok ||
       !sourcesResponse.ok
     ) {
-      throw new Error("Editorial endpoints unavailable");
+      const responses: Array<[string, number]> = [
+        ["prompts", promptsResponse.status],
+        ["raw-items", rawItemsResponse.status],
+        ["drafts", draftsResponse.status],
+        ["reviews", reviewsResponse.status],
+        ["content-plan", contentPlanResponse.status],
+        ["status", statusResponse.status],
+        ["source-states", sourceStatesResponse.status],
+        ["sources", sourcesResponse.status]
+      ];
+      const failedStatuses = responses
+        .filter(([, status]) => status >= 400)
+        .map(([name, status]) => `${name}: ${status}`)
+        .join(", ");
+      throw new Error(failedStatuses || "Editorial endpoints unavailable");
     }
 
     const promptsPayload = (await promptsResponse.json()) as { items: PromptConfig[] };
@@ -409,7 +425,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       sources: sourcesPayload.items,
       isLive: true
     };
-  } catch {
+  } catch (error) {
     return {
       prompts: fallbackPrompts,
       rawItems: fallbackRawItems,
@@ -419,7 +435,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialStatus: fallbackEditorialStatus,
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
-      isLive: false
+      isLive: false,
+      liveError: error instanceof Error ? error.message : "Unknown API error."
     };
   }
 }
