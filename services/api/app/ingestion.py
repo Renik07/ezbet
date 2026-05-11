@@ -547,7 +547,9 @@ def _parse_ai_research_source(
     if not ai_client.enabled:
         raise SourceFetchError("AI search source requires an enabled OpenAI Responses client.")
 
-    discovered = ai_client.discover_source_items(source, limit=12, prompt=ai_search_prompt)
+    discovered = ai_client.discover_source_items(source, limit=5, prompt=ai_search_prompt)
+    if not discovered:
+        discovered = _discover_ai_research_candidates_from_listing(source, timeout=timeout)[:5]
     if not discovered:
         return []
 
@@ -562,51 +564,8 @@ def _parse_ai_research_source(
 
         published = _try_parse_datetime(resolved_published_at or "") or fetched_at
         payload = payload or _serialize_ai_discovery_payload(source, discovered)
-        full_text: str | None = None
         lead = discovered_item.summary
         tags = discovered_item.tags
-
-        ai_enrichment = _extract_ai_research_article_enrichment(
-            ai_client=ai_client,
-            url=resolved_url,
-            source_title=resolved_source_title or source.title,
-            raw_title=discovered_item.title,
-            raw_summary=discovered_item.summary,
-            timeout=timeout,
-        )
-        if ai_enrichment is not None:
-            full_text = ai_enrichment.full_text
-            lead = ai_enrichment.lead or lead
-            if ai_enrichment.tags:
-                tags = ai_enrichment.tags
-
-        if not _is_usable_full_text(full_text, discovered_item.summary):
-            resolved_target = ai_client.resolve_article_target(
-                source=source,
-                raw_title=discovered_item.title,
-                current_url=resolved_url,
-            )
-            if resolved_target is not None and resolved_target.url != resolved_url:
-                resolved_url = resolved_target.url
-                resolved_published_at = resolved_target.published_at or resolved_published_at
-                resolved_source_title = resolved_target.source_title or resolved_source_title
-                published = _try_parse_datetime(resolved_published_at or "") or published
-                ai_enrichment = _extract_ai_research_article_enrichment(
-                    ai_client=ai_client,
-                    url=resolved_url,
-                    source_title=resolved_source_title or source.title,
-                    raw_title=discovered_item.title,
-                    raw_summary=discovered_item.summary,
-                    timeout=timeout,
-                )
-                if ai_enrichment is not None:
-                    full_text = ai_enrichment.full_text
-                    lead = ai_enrichment.lead or lead
-                    if ai_enrichment.tags:
-                        tags = ai_enrichment.tags
-
-        if not _is_usable_full_text(full_text, discovered_item.summary):
-            continue
 
         items.append(
             _build_raw_item(
@@ -617,7 +576,6 @@ def _parse_ai_research_source(
                 title=discovered_item.title,
                 summary=discovered_item.summary,
                 lead=lead,
-                full_text=full_text,
                 source_title=resolved_source_title,
                 source_url=resolved_url,
                 url=resolved_url,

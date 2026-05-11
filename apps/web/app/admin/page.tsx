@@ -200,9 +200,8 @@ export default async function AdminPage({
                   </select>
                 </label>
               </div>
-              <input type="hidden" name="status" value="draft" />
               <p className="footer-note">
-                Новый источник создаётся как draft. После проверки его можно активировать в карточке ниже.
+                AI search-источник после добавления сразу становится active и участвует в загрузке новостей.
               </p>
               <label className="field field-compact">
                 <span>Source hints</span>

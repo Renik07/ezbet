@@ -152,14 +152,15 @@ export async function ingestRssTestBatchNow() {
 }
 
 export async function createSourceNow(formData: FormData) {
+  const sourceType = String(formData.get("sourceType") ?? "rss");
   try {
     await apiPost("/api/v1/sources", {
       key: String(formData.get("key") ?? ""),
       title: String(formData.get("title") ?? ""),
       url: String(formData.get("url") ?? ""),
       category: String(formData.get("category") ?? ""),
-      source_type: String(formData.get("sourceType") ?? "rss"),
-      status: "draft",
+      source_type: sourceType,
+      status: sourceType === "ai_research" ? "active" : "draft",
       notes: String(formData.get("notes") ?? "")
     });
   } catch (error) {

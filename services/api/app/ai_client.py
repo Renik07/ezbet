@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from socket import timeout as SocketTimeout
 from typing import Any
 from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -306,7 +307,8 @@ class OpenAIEditorialClient:
         if not self.enabled or not self._should_enable_web_search_for_request():
             return None
 
-        host = urlsplit(source.url).netloc.lower()
+        discovery_url = _normalize_source_discovery_url(source.url)
+        host = urlsplit(discovery_url).netloc.lower()
         if host.startswith("www."):
             host = host[4:]
 
@@ -315,7 +317,7 @@ class OpenAIEditorialClient:
             "Return only valid JSON with key items.\n"
             f"Need up to {limit} latest relevant news items from this source.\n"
             f"source_title: {source.title}\n"
-            f"source_url: {source.url}\n"
+            f"source_url: {discovery_url}\n"
             f"source_category: {source.category}\n"
             f"{notes_block}"
             "For each item return: title, summary, url, published_at, source_title, tags.\n"
@@ -342,7 +344,7 @@ class OpenAIEditorialClient:
             payload = self._create_response(
                 instructions=instructions,
                 input_text=input_text,
-                tools=self._build_web_search_tools(source.url),
+                tools=self._build_web_search_tools(discovery_url),
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -638,6 +640,35 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
                 chunks.append(text.strip())
 
     return "\n".join(chunks).strip()
+
+
+def _normalize_source_discovery_url(url: str) -> str:
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return url.strip()
+
+    path = parts.path or "/"
+
+    # If a user pastes an article-like URL into ai search, step back to the
+    # parent listing path so discovery searches the section/domain, not one page.
+    article_like = (
+        path.endswith(".html")
+        or path.endswith(".htm")
+        or "/news/" in path
+        or path.rstrip("/").split("/")[-1].isdigit()
+    )
+
+    if article_like:
+        normalized_path = path
+        if normalized_path.endswith(".html") or normalized_path.endswith(".htm"):
+            normalized_path = normalized_path.rsplit("/", 1)[0] + "/"
+        elif not normalized_path.endswith("/"):
+            normalized_path = normalized_path.rsplit("/", 1)[0] + "/"
+        if not normalized_path:
+            normalized_path = "/"
+        return urlunsplit((parts.scheme, parts.netloc, normalized_path, "", ""))
+
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
 def _clean_text(value: Any) -> str:

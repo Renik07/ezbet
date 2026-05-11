@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 
@@ -2110,15 +2110,40 @@ class NewsRepository:
 
     @classmethod
     def _normalize_source_config(cls, source: SourceItem) -> SourceItem:
+        normalized_type = cls._normalize_source_type(source.source_type)
+        normalized_url = source.url.strip()
+        if normalized_type == "ai_research":
+            normalized_url = cls._normalize_ai_research_url(normalized_url)
         return SourceItem(
             key=source.key.strip(),
             title=source.title.strip(),
-            url=source.url.strip(),
+            url=normalized_url,
             category=source.category.strip(),
-            source_type=cls._normalize_source_type(source.source_type),
+            source_type=normalized_type,
             status=source.status.strip().lower(),
             notes=source.notes.strip(),
         )
+
+    @staticmethod
+    def _normalize_ai_research_url(url: str) -> str:
+        parts = urlsplit(url)
+        if not parts.scheme or not parts.netloc:
+            return url
+
+        path = parts.path or "/"
+        article_like = (
+            path.endswith(".html")
+            or path.endswith(".htm")
+            or path.rstrip("/").split("/")[-1].isdigit()
+        )
+
+        if article_like:
+            if "/" in path.rstrip("/"):
+                path = path.rsplit("/", 1)[0] + "/"
+            else:
+                path = "/"
+
+        return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
     @staticmethod
     def _validate_source_config(source: SourceItem) -> None:
@@ -2140,7 +2165,7 @@ class NewsRepository:
             )
 
     def _validate_source_activation_readiness(self, source: SourceItem) -> None:
-        if source.status != "active" or source.source_type not in {"scraping", "ai_research"}:
+        if source.status != "active" or source.source_type != "scraping":
             return
 
         state = self.get_source_sync_state_map().get(source.key)

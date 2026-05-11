@@ -48,6 +48,7 @@ async def lifespan(_: FastAPI):
     repository.ensure_prompt_defaults(default_prompt_configs())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v3")
     repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v3")
+    repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
     repository.sync_news_ai_review_flags()
     yield
 
