@@ -23,7 +23,8 @@ def get_database_url() -> str:
 @dataclass(frozen=True)
 class OpenAISettings:
     api_key: str | None
-    model: str
+    editorial_model: str
+    search_model: str
     base_url: str
     timeout_seconds: int
     api_style: str
@@ -38,9 +39,11 @@ class OpenAISettings:
 
 
 def get_openai_settings() -> OpenAISettings:
+    default_model = _get_env("OPENAI_MODEL", "gpt-5") or "gpt-5"
     return OpenAISettings(
         api_key=_get_env("OPENAI_API_KEY"),
-        model=_get_env("OPENAI_MODEL", "gpt-5") or "gpt-5",
+        editorial_model=_get_env("OPENAI_EDITORIAL_MODEL", default_model) or default_model,
+        search_model=_get_env("OPENAI_SEARCH_MODEL", default_model) or default_model,
         base_url=_get_env("OPENAI_BASE_URL", "https://api.openai.com/v1") or "https://api.openai.com/v1",
         timeout_seconds=int(_get_env("OPENAI_TIMEOUT_SECONDS", "45") or "45"),
         api_style=_get_env("OPENAI_API_STYLE", "responses") or "responses",

@@ -33,7 +33,7 @@ export default async function StudioPage() {
             AI mode:{" "}
             <strong>
               {editorialStatus.openaiEnabled
-                ? `${editorialStatus.providerLabel} live (${editorialStatus.openaiModel}, ${editorialStatus.apiStyle})`
+                ? `${editorialStatus.providerLabel} live (editorial: ${editorialStatus.openaiModel}, search: ${editorialStatus.openaiSearchModel}, ${editorialStatus.apiStyle})`
                 : "template fallback"}
             </strong>
           </p>

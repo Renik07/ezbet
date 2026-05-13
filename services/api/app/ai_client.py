@@ -114,7 +114,7 @@ class OpenAIEditorialClient:
             title=title,
             dek=dek,
             body=body,
-            model=self.settings.model,
+            model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}",
         )
 
@@ -160,7 +160,7 @@ class OpenAIEditorialClient:
         return ReviewGenerationResult(
             summary=summary,
             notes=notes,
-            model=self.settings.model,
+            model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}",
         )
 
@@ -214,7 +214,7 @@ class OpenAIEditorialClient:
             title=title,
             dek=dek,
             body=body,
-            model=self.settings.model,
+            model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}_rewrite",
         )
 
@@ -345,6 +345,7 @@ class OpenAIEditorialClient:
                 instructions=instructions,
                 input_text=input_text,
                 tools=self._build_web_search_tools(discovery_url),
+                model=self.settings.search_model,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -430,6 +431,7 @@ class OpenAIEditorialClient:
                 instructions=instructions,
                 input_text=input_text,
                 tools=self._build_web_search_tools(source.url),
+                model=self.settings.search_model,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -495,6 +497,7 @@ class OpenAIEditorialClient:
                 instructions=instructions,
                 input_text=input_text,
                 tools=self._build_web_search_tools(url),
+                model=self.settings.search_model,
                 include=["web_search_call.action.sources"] if self._should_enable_web_search_for_request() else None,
             )
             data = json.loads(payload)
@@ -515,7 +518,7 @@ class OpenAIEditorialClient:
             full_text=full_text,
             lead=lead,
             tags=tags,
-            model=self.settings.model,
+            model=self.settings.search_model,
             generation_mode=f"llm_{self.settings.api_style}_extraction",
         )
 
@@ -524,14 +527,20 @@ class OpenAIEditorialClient:
         *,
         instructions: str,
         input_text: str,
+        model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
     ) -> str:
         if self.settings.api_style == "chat_completions":
-            return self._create_chat_completion(instructions=instructions, input_text=input_text)
+            return self._create_chat_completion(
+                instructions=instructions,
+                input_text=input_text,
+                model=model or self.settings.editorial_model,
+            )
         return self._create_responses_completion(
             instructions=instructions,
             input_text=input_text,
+            model=model or self.settings.editorial_model,
             tools=tools,
             include=include,
         )
@@ -541,11 +550,12 @@ class OpenAIEditorialClient:
         *,
         instructions: str,
         input_text: str,
+        model: str,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
     ) -> str:
         payload_body: dict[str, Any] = {
-            "model": self.settings.model,
+            "model": model,
             "instructions": instructions,
             "input": input_text,
         }
@@ -596,10 +606,10 @@ class OpenAIEditorialClient:
         }
         return [tool]
 
-    def _create_chat_completion(self, *, instructions: str, input_text: str) -> str:
+    def _create_chat_completion(self, *, instructions: str, input_text: str, model: str) -> str:
         request_body = json.dumps(
             {
-                "model": self.settings.model,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": instructions},
                     {"role": "user", "content": input_text},

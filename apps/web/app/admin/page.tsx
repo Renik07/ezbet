@@ -10,12 +10,10 @@ import {
   deleteSourceNow,
   ingestRssTestBatchNow,
   probeNewSourceNow,
-  probeSourceNow,
   resetDatabaseNow,
   runContentPlannerNow,
   runEditorialNow,
-  savePromptVersion,
-  updateSourceNow
+  savePromptVersion
 } from "./actions";
 
 type AdminSearchParams = {
@@ -25,10 +23,16 @@ type AdminSearchParams = {
   sourceTitle?: string;
   sourceUrl?: string;
   sourceType?: string;
+  resolvedSourceType?: string;
+  resolvedSourceUrl?: string;
   sourceNotes?: string;
   probeOk?: string;
   probeReadiness?: string;
   probeCount?: string;
+  supportsRss?: string;
+  supportsNewsSitemap?: string;
+  supportsSitemap?: string;
+  supportsScraping?: string;
   probeFullTextOk?: string;
   probeLeadOk?: string;
   probeTagsCount?: string;
@@ -46,8 +50,8 @@ export default async function AdminPage({
   const sourceDraft = {
     key: params.sourceKey ?? "",
     title: params.sourceTitle ?? "",
-    url: params.sourceUrl ?? "",
-    type: params.sourceType ?? "rss",
+    url: params.resolvedSourceUrl ?? params.sourceUrl ?? "",
+    type: params.resolvedSourceType ?? params.sourceType ?? "auto",
     notes: params.sourceNotes ?? "",
   };
   const draftProbe =
@@ -56,6 +60,10 @@ export default async function AdminPage({
           ok: params.probeOk === "true",
           readiness: params.probeReadiness ?? "unknown",
           count: params.probeCount ?? "0",
+          supportsRss: params.supportsRss === "true",
+          supportsNewsSitemap: params.supportsNewsSitemap === "true",
+          supportsSitemap: params.supportsSitemap === "true",
+          supportsScraping: params.supportsScraping === "true",
           fullTextOk: params.probeFullTextOk === "true",
           leadOk: params.probeLeadOk === "true",
           tagsCount: params.probeTagsCount ?? "0",
@@ -67,6 +75,7 @@ export default async function AdminPage({
     await getEditorialStudioData();
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
+  const activeSources = sources.filter((source) => source.status === "active");
 
   return (
     <main className="page-shell">
@@ -147,6 +156,10 @@ export default async function AdminPage({
             <span>текущая модель writer/editor</span>
           </div>
           <div className="stat">
+            <strong>{editorialStatus.openaiSearchModel}</strong>
+            <span>текущая модель search/extraction fallback</span>
+          </div>
+          <div className="stat">
             <strong>{editorialStatus.webSearchEnabled ? "On" : "Off"}</strong>
             <span>web search для extraction fallback</span>
           </div>
@@ -166,10 +179,8 @@ export default async function AdminPage({
           <div>
             <h2>Source registry</h2>
             <p>
-              Здесь управляется список источников. Для текущего MVP в статус <strong>active</strong> можно переводить
-              поддерживаемые adapter&apos;ы: сейчас это <strong>rss</strong>, <strong>scraping</strong> и{" "}
-              <strong>AI search</strong>. Для <strong>scraping</strong> и <strong>AI search</strong> перед активацией
-              нужен успешный preflight.
+              Здесь управляется список рабочих источников. Сначала источник проходит проверку, и только после
+              успешного результата его можно добавить. В списке ниже показываются только активные источники.
             </p>
           </div>
         </div>
@@ -190,18 +201,26 @@ export default async function AdminPage({
                 <span>URL</span>
                 <input name="url" placeholder="https://example.com/feed.xml" defaultValue={sourceDraft.url} required />
               </label>
+              <input type="hidden" name="probeOk" value={draftProbe?.ok ? "true" : "false"} />
+              <input type="hidden" name="probedKey" value={sourceDraft.key} />
+              <input type="hidden" name="probedUrl" value={sourceDraft.url} />
+              <input type="hidden" name="resolvedSourceType" value={sourceDraft.type} />
               <div className="source-inline-fields">
                 <label className="field field-compact">
                   <span>Type</span>
                   <select name="sourceType" defaultValue={sourceDraft.type}>
+                    <option value="auto">auto detect</option>
                     <option value="rss">rss</option>
+                    <option value="news_sitemap">news sitemap</option>
+                    <option value="sitemap">sitemap</option>
                     <option value="scraping">scraping</option>
                     <option value="ai_research">ai search</option>
                   </select>
                 </label>
               </div>
               <p className="footer-note">
-                AI search-источник после добавления сразу становится active и участвует в загрузке новостей.
+                Сначала проверьте источник. Если проверка успешна, кнопка добавления станет доступна и источник
+                сохранится сразу как <strong>active</strong>.
               </p>
               <label className="field field-compact">
                 <span>Source hints</span>
@@ -217,6 +236,10 @@ export default async function AdminPage({
                   <strong>Проверка:</strong> {draftProbe.readiness} · элементов: {draftProbe.count} · full text:{" "}
                   {draftProbe.fullTextOk ? "ok" : "нет"} · lead: {draftProbe.leadOk ? "ok" : "нет"} · tags:{" "}
                   {draftProbe.tagsCount}
+                  <br />
+                  Capability profile: rss {draftProbe.supportsRss ? "yes" : "no"} · news sitemap{" "}
+                  {draftProbe.supportsNewsSitemap ? "yes" : "no"} · sitemap{" "}
+                  {draftProbe.supportsSitemap ? "yes" : "no"} · scraping {draftProbe.supportsScraping ? "yes" : "no"}
                   {draftProbe.sampleTitle ? (
                     <>
                       <br />
@@ -236,21 +259,22 @@ export default async function AdminPage({
               <div className="source-button-row">
                 <PendingSubmitButton
                   className="button-secondary"
-                  idleLabel="Проверить источник"
-                  pendingLabel="Проверяем..."
                   formAction={probeNewSourceNow}
+                  idleLabel="Проверить"
+                  pendingLabel="Проверяем..."
                 />
                 <PendingSubmitButton
                   className="button-primary"
-                  idleLabel="Добавить источник"
-                  pendingLabel="Сохраняем источник..."
+                  idleLabel="Добавить"
+                  pendingLabel="Добавляем..."
+                  disabled={!draftProbe?.ok}
                 />
               </div>
             </form>
           </article>
         </div>
         <div className="source-grid">
-          {sources.map((source) => {
+          {activeSources.map((source) => {
             const state = sourceStateMap.get(source.key);
             const lamp = getSourceLamp(state?.lastStatus, state?.lastProbeReadiness);
             const readiness = getReadinessBadge(state?.lastProbeReadiness);
@@ -259,72 +283,18 @@ export default async function AdminPage({
             <article key={source.key} className="news-card source-card">
               <div className="source-card-top">
                 <div className="source-status-wrap">
-                  <span className={`source-lamp source-lamp-${lamp.tone}`} />
+                <span className={`source-lamp source-lamp-${lamp.tone}`} />
                   <span>{lamp.label}</span>
                 </div>
                 <span>
-                  {formatSourceType(source.sourceType)} · {source.status}
+                  {formatSourceType(source.sourceType)} · active
                 </span>
               </div>
               <h3>{source.title}</h3>
               <p className="source-card-url">{source.url}</p>
-              <form action={updateSourceNow} className="prompt-form">
-                <input type="hidden" name="sourceKey" value={source.key} />
-                <label className="field field-compact">
-                  <span>Key</span>
-                  <input value={source.key} disabled readOnly />
-                </label>
-                <label className="field field-compact">
-                  <span>Title</span>
-                  <input name="title" defaultValue={source.title} required />
-                </label>
-                <label className="field field-compact">
-                  <span>URL</span>
-                  <input name="url" defaultValue={source.url} required />
-                </label>
-                <div className="source-inline-fields">
-                  <label className="field field-compact">
-                    <span>Type</span>
-                    <select name="sourceType" defaultValue={source.sourceType}>
-                      <option value="rss">rss</option>
-                      <option value="scraping">scraping</option>
-                      <option value="ai_research">ai search</option>
-                    </select>
-                  </label>
-                  <label className="field field-compact">
-                    <span>Status</span>
-                    <select name="status" defaultValue={source.status}>
-                      <option value="draft">draft</option>
-                      <option value="active">active</option>
-                      <option value="archived">archived</option>
-                    </select>
-                  </label>
-                </div>
-                <label className="field field-compact">
-                  <span>{source.sourceType === "ai_research" ? "Source hints" : "Notes"}</span>
-                  <textarea
-                    name="notes"
-                    rows={source.sourceType === "ai_research" ? 3 : 2}
-                    defaultValue={source.notes}
-                  />
-                </label>
-                <div className="button-row">
-                  <PendingSubmitButton
-                    className="button-secondary"
-                    idleLabel="Сохранить"
-                    pendingLabel="Сохраняем..."
-                  />
-                </div>
-              </form>
+              <p className="footer-note">Key: {source.key}</p>
+              {source.notes ? <p className="footer-note">{source.notes}</p> : null}
               <div className="source-button-row">
-                <form action={probeSourceNow}>
-                  <input type="hidden" name="sourceKey" value={source.key} />
-                  <PendingSubmitButton
-                    className="button-secondary"
-                    idleLabel="Проверить"
-                    pendingLabel="Проверяем..."
-                  />
-                </form>
                 <form action={deleteSourceNow}>
                   <input type="hidden" name="sourceKey" value={source.key} />
                   <PendingSubmitButton
@@ -342,6 +312,16 @@ export default async function AdminPage({
                 {state?.lastProbeFullTextOk ? "ok" : "нет"} · lead: {state?.lastProbeLeadOk ? "ok" : "нет"} · tags:{" "}
                 {state?.lastProbeTagsCount ?? 0}
               </p>
+              <p className="footer-note">
+                Capability profile: preferred {formatSourceType(state?.preferredAdapter ?? "unknown")} · rss{" "}
+                {state?.supportsRss ? "yes" : "no"} · news sitemap {state?.supportsNewsSitemap ? "yes" : "no"} · sitemap{" "}
+                {state?.supportsSitemap ? "yes" : "no"} · scraping {state?.supportsScraping ? "yes" : "no"}
+              </p>
+              {state?.preferredAdapterUrl ? (
+                <p className="footer-note">
+                  Preferred URL: <a href={state.preferredAdapterUrl} target="_blank" rel="noreferrer">{state.preferredAdapterUrl}</a>
+                </p>
+              ) : null}
               {state?.lastProbeSampleTitle ? (
                 <p className="footer-note">
                   Sample: {state.lastProbeSampleTitle}
@@ -366,12 +346,13 @@ export default async function AdminPage({
               <p className="footer-note">
                 Последний batch: {state?.lastItemCount ?? 0} · failures подряд: {state?.consecutiveFailures ?? 0}
               </p>
-              {(source.sourceType === "scraping" || source.sourceType === "ai_research") &&
+              {(source.sourceType === "scraping" || source.sourceType === "news_sitemap" || source.sourceType === "sitemap") &&
               source.status !== "draft" &&
-              state?.lastProbeReadiness !== "ready" &&
-              state?.lastProbeReadiness !== "ready_ai" ? (
+              (state?.lastProbeReadiness === "unknown" ||
+                state?.lastProbeReadiness === "empty" ||
+                state?.lastProbeReadiness === "fetch_error") ? (
                 <p className="source-card-error">
-                  Для этого источника перед статусом active нужен preflight со статусом ready или ready_ai.
+                  Для этого источника нужен успешный preflight, который подтверждает, что сайт действительно отдает новости.
                 </p>
               ) : null}
               {state?.lastError ? <p className="source-card-error">{state.lastError}</p> : null}
@@ -578,9 +559,7 @@ function getNoticeMessage(notice?: string, detail?: string) {
     case "sources-ingest-error":
       return detail ? `Загрузка источников не удалась: ${detail}` : "Загрузка источников не удалась.";
     case "source-created":
-      return "Новый источник сохранён.";
-    case "source-updated":
-      return "Источник обновлён.";
+      return "Новый источник добавлен и сразу активирован.";
     case "source-deleted":
       return "Источник удалён.";
     case "source-delete-error":
@@ -590,13 +569,13 @@ function getNoticeMessage(notice?: string, detail?: string) {
     case "source-probe-error":
       return detail ? `Проверка источника не удалась: ${detail}` : "Проверка источника не удалась.";
     case "source-draft-probed":
-      return detail ? `Проверка нового источника завершена: ${detail}` : "Проверка нового источника завершена.";
+      return detail ? `Проверка нового источника завершена: ${detail}` : "Проверка нового источника прошла успешно.";
     case "source-draft-probe-error":
       return detail
         ? `Проверка нового источника не удалась: ${detail}`
         : "Проверка нового источника не удалась.";
     case "source-activation-blocked":
-      return "Источник не переведён в active: сначала нужен успешный preflight-check для scraping или AI search.";
+      return "Источник не переведён в active: сначала нужен успешный preflight-check для news sitemap, sitemap или scraping.";
     case "source-save-error":
       return detail
         ? `Источник не сохранён: ${detail}`
@@ -639,6 +618,12 @@ function formatDateTime(value?: string) {
 
 function formatSourceType(value: string) {
   switch (value) {
+    case "auto":
+      return "auto detect";
+    case "news_sitemap":
+      return "news sitemap";
+    case "sitemap":
+      return "sitemap";
     case "ai_research":
     case "ai_search":
       return "ai search";

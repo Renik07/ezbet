@@ -4,14 +4,16 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
+import psycopg
 
 from .ai_client import OpenAIEditorialClient
 from .config import get_openai_settings
-from .editorial import default_prompt_configs, run_editorial_cycle
+from .editorial import default_prompt_configs, enrich_raw_item_if_needed, run_editorial_cycle
 from .ingestion import (
     fetch_remote_document,
     ingest_sources as collect_source_items,
     ingest_sources_with_results,
+    probe_source_auto,
     probe_source,
     raw_items_to_news,
 )
@@ -30,6 +32,7 @@ from .models import (
     PromptStatusUpdateRequest,
     RawItemListResponse,
     RawItemPreviewListResponse,
+    RawItem,
     ResetResponse,
     SourceCreateRequest,
     SourceListResponse,
@@ -63,6 +66,17 @@ app = FastAPI(
 repository = NewsRepository()
 
 
+def _raise_source_http_error(exc: Exception) -> None:
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, LookupError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, psycopg.Error):
+        detail = getattr(exc.diag, "message_primary", None) or str(exc)
+        raise HTTPException(status_code=400, detail=detail) from exc
+    raise exc
+
+
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
@@ -73,7 +87,8 @@ def editorial_status() -> EditorialStatusResponse:
     settings = get_openai_settings()
     return EditorialStatusResponse(
         openai_enabled=settings.enabled,
-        openai_model=settings.model,
+        openai_model=settings.editorial_model,
+        openai_search_model=settings.search_model,
         fallback_mode=not settings.enabled,
         provider_label=settings.provider_label,
         api_style=settings.api_style,
@@ -116,8 +131,8 @@ def create_source(payload: SourceCreateRequest) -> SourceListResponse:
                 notes=payload.notes,
             )
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_source_http_error(exc)
     return SourceListResponse(items=repository.list_source_configs())
 
 
@@ -135,14 +150,17 @@ def update_source(source_key: str, payload: SourceUpdateRequest) -> SourceListRe
                 notes=payload.notes,
             )
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_source_http_error(exc)
     return SourceListResponse(items=repository.list_source_configs())
 
 
 @app.post("/api/v1/sources/{source_key}/delete", response_model=SourceListResponse)
 def delete_source(source_key: str) -> SourceListResponse:
-    repository.delete_source_config(source_key)
+    try:
+        repository.delete_source_config(source_key)
+    except Exception as exc:
+        _raise_source_http_error(exc)
     return SourceListResponse(items=repository.list_source_configs())
 
 
@@ -157,17 +175,21 @@ def probe_source_draft(payload: SourceCreateRequest) -> SourceProbeResponse:
         status="draft",
         notes=payload.notes,
     )
-    return _probe_source_item(source, persist=False)
+    return _probe_source_item(source, persist=False, auto_detect=payload.source_type == "auto")
 
 
 @app.post("/api/v1/sources/{source_key}/probe", response_model=SourceProbeResponse)
 def probe_source_config(source_key: str) -> SourceProbeResponse:
-    source = repository.get_source_config(source_key)
-    return _probe_source_item(source, persist=True)
+    try:
+        source = repository.get_source_config(source_key)
+        return _probe_source_item(source, persist=True)
+    except Exception as exc:
+        _raise_source_http_error(exc)
 
 
-def _probe_source_item(source: SourceItem, *, persist: bool) -> SourceProbeResponse:
-    result = probe_source(source)
+def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool = False) -> SourceProbeResponse:
+    result = probe_source_auto(source) if auto_detect else probe_source(source)
+    resolved_source = source.model_copy(update={"source_type": result.resolved_source_type or source.source_type})
     if (
         result.ok
         and result.readiness not in {"ready", "ready_ai"}
@@ -175,7 +197,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool) -> SourceProbeRespo
         ai_client = OpenAIEditorialClient()
         if ai_client.enabled:
             probe_candidates = [
-                item for item in collect_source_items([source], limit=5) if item.url
+                item for item in collect_source_items([resolved_source], limit=5) if item.url
             ][:5]
             for candidate in probe_candidates:
                 html = fetch_remote_document(candidate.url, timeout=10)
@@ -219,6 +241,12 @@ def _probe_source_item(source: SourceItem, *, persist: bool) -> SourceProbeRespo
             item_count=result.item_count,
             message=result.message,
             readiness=result.readiness,
+            preferred_adapter=result.resolved_source_type,
+            preferred_adapter_url=result.resolved_source_url,
+            supports_rss=result.supports_rss,
+            supports_news_sitemap=result.supports_news_sitemap,
+            supports_sitemap=result.supports_sitemap,
+            supports_scraping=result.supports_scraping,
             full_text_ok=result.full_text_ok,
             lead_ok=result.lead_ok,
             tags_count=result.tags_count,
@@ -231,6 +259,12 @@ def _probe_source_item(source: SourceItem, *, persist: bool) -> SourceProbeRespo
         item_count=result.item_count,
         message=result.message,
         readiness=result.readiness,
+        resolved_source_type=result.resolved_source_type,
+        resolved_source_url=result.resolved_source_url,
+        supports_rss=result.supports_rss,
+        supports_news_sitemap=result.supports_news_sitemap,
+        supports_sitemap=result.supports_sitemap,
+        supports_scraping=result.supports_scraping,
         full_text_ok=result.full_text_ok,
         lead_ok=result.lead_ok,
         tags_count=result.tags_count,
@@ -350,6 +384,7 @@ def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> 
         ai_search_prompt=ai_search_prompt,
     )
     inserted_raw_items = repository.insert_raw_items(raw_items)
+    _run_ingestion_enrichment(raw_items)
     for result in source_results:
         source_items = [item for item in raw_items if item.source_key == result.source.key]
         repository.update_source_sync_state(
@@ -368,6 +403,14 @@ def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> 
         items=published,
         raw_items=inserted_raw_items,
     )
+
+
+def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
+    for item in raw_items:
+        raw_item = repository.get_raw_item(item.id)
+        if raw_item is None or raw_item.is_duplicate:
+            continue
+        enrich_raw_item_if_needed(repository, raw_item)
 
 
 @app.post("/api/v1/dev/reset", response_model=ResetResponse)

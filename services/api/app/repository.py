@@ -210,6 +210,12 @@ class NewsRepository:
                         last_probe_at TIMESTAMPTZ,
                         last_probe_count INTEGER NOT NULL DEFAULT 0,
                         last_probe_readiness TEXT NOT NULL DEFAULT 'unknown',
+                        preferred_adapter TEXT,
+                        preferred_adapter_url TEXT,
+                        supports_rss BOOLEAN NOT NULL DEFAULT FALSE,
+                        supports_news_sitemap BOOLEAN NOT NULL DEFAULT FALSE,
+                        supports_sitemap BOOLEAN NOT NULL DEFAULT FALSE,
+                        supports_scraping BOOLEAN NOT NULL DEFAULT FALSE,
                         last_probe_full_text_ok BOOLEAN NOT NULL DEFAULT FALSE,
                         last_probe_lead_ok BOOLEAN NOT NULL DEFAULT FALSE,
                         last_probe_authors_count INTEGER NOT NULL DEFAULT 0,
@@ -266,6 +272,24 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS last_probe_readiness TEXT NOT NULL DEFAULT 'unknown'"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS preferred_adapter TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS preferred_adapter_url TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS supports_rss BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS supports_news_sitemap BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS supports_sitemap BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS supports_scraping BOOLEAN NOT NULL DEFAULT FALSE"
                 )
                 cursor.execute(
                     "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS last_probe_full_text_ok BOOLEAN NOT NULL DEFAULT FALSE"
@@ -462,40 +486,53 @@ class NewsRepository:
         source = self._normalize_source_config(source)
         self._validate_source_config(source)
         self._validate_source_activation_readiness(source)
-        with psycopg.connect(self.database_url) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO source_configs (
-                        key,
-                        title,
-                        url,
-                        category,
-                        source_type,
-                        status,
-                        notes
+        try:
+            with psycopg.connect(self.database_url) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO source_configs (
+                            key,
+                            title,
+                            url,
+                            category,
+                            source_type,
+                            status,
+                            notes
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            source.key,
+                            source.title,
+                            source.url,
+                            source.category,
+                            source.source_type,
+                            source.status,
+                            source.notes,
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        source.key,
-                        source.title,
-                        source.url,
-                        source.category,
-                        source.source_type,
-                        source.status,
-                        source.notes,
-                    ),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO source_sync_state (source_key, source_title, last_status)
-                    VALUES (%s, %s, 'idle')
-                    ON CONFLICT (source_key) DO NOTHING
-                    """,
-                    (source.key, source.title),
-                )
-            connection.commit()
+                    cursor.execute(
+                        """
+                        INSERT INTO source_sync_state (source_key, source_title, last_status)
+                        VALUES (%s, %s, 'idle')
+                        ON CONFLICT (source_key) DO NOTHING
+                        """,
+                        (source.key, source.title),
+                    )
+                connection.commit()
+        except psycopg.errors.UniqueViolation as exc:
+            try:
+                existing = self.get_source_config(source.key)
+            except LookupError:
+                raise ValueError("Источник с таким key уже существует.") from exc
+
+            if existing.status == "draft":
+                return self.update_source_config(source)
+
+            raise ValueError(
+                "Источник с таким key уже существует. Удалите текущий источник или используйте другой key."
+            ) from exc
         return self.get_source_config(source.key)
 
     def update_source_config(self, source: SourceItem) -> SourceItem:
@@ -846,6 +883,12 @@ class NewsRepository:
                 last_probe_at,
                 last_probe_count,
                 last_probe_readiness,
+                preferred_adapter,
+                preferred_adapter_url,
+                supports_rss,
+                supports_news_sitemap,
+                supports_sitemap,
+                supports_scraping,
                 last_probe_full_text_ok,
                 last_probe_lead_ok,
                 last_probe_tags_count,
@@ -970,6 +1013,12 @@ class NewsRepository:
         item_count: int,
         message: str,
         readiness: str = "unknown",
+        preferred_adapter: str | None = None,
+        preferred_adapter_url: str | None = None,
+        supports_rss: bool = False,
+        supports_news_sitemap: bool = False,
+        supports_sitemap: bool = False,
+        supports_scraping: bool = False,
         full_text_ok: bool = False,
         lead_ok: bool = False,
         tags_count: int = 0,
@@ -986,6 +1035,12 @@ class NewsRepository:
                         last_probe_at,
                         last_probe_count,
                         last_probe_readiness,
+                        preferred_adapter,
+                        preferred_adapter_url,
+                        supports_rss,
+                        supports_news_sitemap,
+                        supports_sitemap,
+                        supports_scraping,
                         last_probe_full_text_ok,
                         last_probe_lead_ok,
                         last_probe_tags_count,
@@ -994,12 +1049,18 @@ class NewsRepository:
                         last_status,
                         last_error
                     )
-                    VALUES (%s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (source_key) DO UPDATE SET
                         source_title = EXCLUDED.source_title,
                         last_probe_at = EXCLUDED.last_probe_at,
                         last_probe_count = EXCLUDED.last_probe_count,
                         last_probe_readiness = EXCLUDED.last_probe_readiness,
+                        preferred_adapter = EXCLUDED.preferred_adapter,
+                        preferred_adapter_url = EXCLUDED.preferred_adapter_url,
+                        supports_rss = EXCLUDED.supports_rss,
+                        supports_news_sitemap = EXCLUDED.supports_news_sitemap,
+                        supports_sitemap = EXCLUDED.supports_sitemap,
+                        supports_scraping = EXCLUDED.supports_scraping,
                         last_probe_full_text_ok = EXCLUDED.last_probe_full_text_ok,
                         last_probe_lead_ok = EXCLUDED.last_probe_lead_ok,
                         last_probe_tags_count = EXCLUDED.last_probe_tags_count,
@@ -1014,6 +1075,12 @@ class NewsRepository:
                         source.title,
                         item_count,
                         readiness,
+                        preferred_adapter,
+                        preferred_adapter_url,
+                        supports_rss,
+                        supports_news_sitemap,
+                        supports_sitemap,
+                        supports_scraping,
                         full_text_ok,
                         lead_ok,
                         tags_count,
@@ -2106,6 +2173,10 @@ class NewsRepository:
         normalized = value.strip().lower()
         if normalized == "ai_search":
             return "ai_research"
+        if normalized in {"news-sitemap", "newssitemap"}:
+            return "news_sitemap"
+        if normalized == "site_map":
+            return "sitemap"
         return normalized
 
     @classmethod
@@ -2154,7 +2225,7 @@ class NewsRepository:
             raise ValueError("Source key is required.")
         if not url.startswith(("http://", "https://")):
             raise ValueError("Source URL must start with http:// or https://")
-        if source.source_type not in {"rss", "scraping", "ai_research"}:
+        if source.source_type not in {"rss", "news_sitemap", "sitemap", "scraping", "ai_research"}:
             raise ValueError("Unsupported source type.")
         if source.status not in {"draft", "active", "archived"}:
             raise ValueError("Unsupported source status.")
@@ -2165,17 +2236,20 @@ class NewsRepository:
             )
 
     def _validate_source_activation_readiness(self, source: SourceItem) -> None:
-        if source.status != "active" or source.source_type != "scraping":
+        if source.status != "active" or source.source_type not in {"scraping", "news_sitemap", "sitemap"}:
             return
 
         state = self.get_source_sync_state_map().get(source.key)
         if state is None or state.last_probe_at is None:
             raise ValueError("Перед активацией источника сначала запустите Проверить.")
-        if state.last_probe_readiness not in {"ready", "ready_ai"}:
-            source_label = "Scraping" if source.source_type == "scraping" else "AI search"
+        if state.last_probe_readiness in {"unknown", "empty", "fetch_error"}:
+            source_label = {
+                "news_sitemap": "News sitemap",
+                "sitemap": "Sitemap",
+            }.get(source.source_type, "Scraping")
             raise ValueError(
-                f"{source_label}-источник можно переводить в active только после preflight со статусом ready "
-                "или ready_ai (успешный full text extraction у sample-новости)."
+                f"{source_label}-источник можно переводить в active только после успешного preflight, "
+                "когда источник действительно возвращает новости."
             )
 
     @staticmethod
@@ -2297,14 +2371,20 @@ class NewsRepository:
             last_probe_at=row[14],
             last_probe_count=int(row[15] or 0),
             last_probe_readiness=str(row[16] or "unknown"),
-            last_probe_full_text_ok=bool(row[17]),
-            last_probe_lead_ok=bool(row[18]),
-            last_probe_tags_count=int(row[19] or 0),
-            last_probe_sample_title=row[20],
-            last_probe_sample_url=row[21],
-            last_status=str(row[22]),
-            last_error=row[23],
-            updated_at=row[24],
+            preferred_adapter=row[17],
+            preferred_adapter_url=row[18],
+            supports_rss=bool(row[19]),
+            supports_news_sitemap=bool(row[20]),
+            supports_sitemap=bool(row[21]),
+            supports_scraping=bool(row[22]),
+            last_probe_full_text_ok=bool(row[23]),
+            last_probe_lead_ok=bool(row[24]),
+            last_probe_tags_count=int(row[25] or 0),
+            last_probe_sample_title=row[26],
+            last_probe_sample_url=row[27],
+            last_status=str(row[28]),
+            last_error=row[29],
+            updated_at=row[30],
         )
 
     @staticmethod

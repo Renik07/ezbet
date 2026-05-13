@@ -245,6 +245,12 @@ class SourceSyncState(BaseModel):
     last_probe_at: Optional[datetime] = Field(default=None, serialization_alias="lastProbeAt")
     last_probe_count: int = Field(default=0, serialization_alias="lastProbeCount")
     last_probe_readiness: str = Field(default="unknown", serialization_alias="lastProbeReadiness")
+    preferred_adapter: Optional[str] = Field(default=None, serialization_alias="preferredAdapter")
+    preferred_adapter_url: Optional[str] = Field(default=None, serialization_alias="preferredAdapterUrl")
+    supports_rss: bool = Field(default=False, serialization_alias="supportsRss")
+    supports_news_sitemap: bool = Field(default=False, serialization_alias="supportsNewsSitemap")
+    supports_sitemap: bool = Field(default=False, serialization_alias="supportsSitemap")
+    supports_scraping: bool = Field(default=False, serialization_alias="supportsScraping")
     last_probe_full_text_ok: bool = Field(default=False, serialization_alias="lastProbeFullTextOk")
     last_probe_lead_ok: bool = Field(default=False, serialization_alias="lastProbeLeadOk")
     last_probe_tags_count: int = Field(default=0, serialization_alias="lastProbeTagsCount")
@@ -264,6 +270,12 @@ class SourceProbeResponse(BaseModel):
     item_count: int = Field(serialization_alias="itemCount")
     message: str
     readiness: str
+    resolved_source_type: Optional[str] = Field(default=None, serialization_alias="resolvedSourceType")
+    resolved_source_url: Optional[str] = Field(default=None, serialization_alias="resolvedSourceUrl")
+    supports_rss: bool = Field(default=False, serialization_alias="supportsRss")
+    supports_news_sitemap: bool = Field(default=False, serialization_alias="supportsNewsSitemap")
+    supports_sitemap: bool = Field(default=False, serialization_alias="supportsSitemap")
+    supports_scraping: bool = Field(default=False, serialization_alias="supportsScraping")
     full_text_ok: bool = Field(serialization_alias="fullTextOk")
     lead_ok: bool = Field(serialization_alias="leadOk")
     tags_count: int = Field(serialization_alias="tagsCount")
@@ -319,6 +331,7 @@ class ContentPlanRunResponse(BaseModel):
 class EditorialStatusResponse(BaseModel):
     openai_enabled: bool = Field(serialization_alias="openaiEnabled")
     openai_model: str = Field(serialization_alias="openaiModel")
+    openai_search_model: str = Field(serialization_alias="openaiSearchModel")
     fallback_mode: bool = Field(serialization_alias="fallbackMode")
     provider_label: str = Field(serialization_alias="providerLabel")
     api_style: str = Field(serialization_alias="apiStyle")

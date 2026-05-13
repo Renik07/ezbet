@@ -90,9 +90,15 @@
 
 Что он делает:
 
-- запускает проверку источников каждые N минут
+- запускает проверку источников по фиксированным окнам времени
 - запускает утреннюю сборку контент-плана
 - инициирует генерацию черновиков и публикационные задачи
+
+Базовый режим для MVP:
+
+- `4` запуска ingestion в день, например `09:00`, `12:00`, `15:00`, `18:00`
+- каждый следующий запуск забирает только новые материалы после предыдущего успешного прохода
+- для этого по каждому источнику хранится watermark: `last_published_at` и `last_external_id`
 
 Практический смысл:
 
@@ -149,14 +155,39 @@
 
 Правильное разделение ролей:
 
-- `RSS / Atom / API / scraping` = сбор сигналов
-- `AI` = анализ, приоритизация, дедупликация, планирование и генерация
+- `RSS / Atom / news sitemap / sitemap / scraping / API` = сбор сигналов и первичных данных
+- `deterministic extraction` = попытка достать `title`, `summary`, `published_at`, `canonical URL`, `lead`, `full_text`
+- `AI` = анализ, приоритизация, редактура и только точечный fallback там, где обычный код не справился
 
 Рекомендация:
 
 - если у источника есть `RSS` или `Atom`, использовать их в первую очередь
+- если есть `news sitemap` или обычный `sitemap`, использовать их до AI-поиска
 - если нет, подключать `HTML scraping`, API, Telegram и другие каналы
 - AI включать после ingestion-слоя
+- `web_search` не использовать как основной discovery-движок для всего потока новостей
+
+Для production-режима целевая UX-модель такая:
+
+- админ добавляет не технический adapter, а просто сайт или раздел новостей
+- система сама делает `source probe`
+- система определяет, какие discovery- и enrichment-способы доступны для этого домена
+- дальше scheduler использует лучший доступный путь автоматически
+
+Важно:
+
+- не заставлять администратора разбираться в `rss`, `sitemap`, `scraping`, `ai_research`
+- ручной `source_type` допустим как MVP-режим, но не как целевая продуктовая модель
+
+Практический ingestion-priority:
+
+1. `RSS / Atom`
+2. `news sitemap`
+3. `sitemap`
+4. `listing page scraping`
+5. deterministic article extraction
+6. `AI extraction fallback`
+7. `AI + web_search` только для сложных страниц и редких проблемных кейсов
 
 ## 5. AI-агенты
 
@@ -165,6 +196,7 @@
 Собирает новые материалы из:
 
 - RSS / Atom
+- news sitemap / sitemap
 - открытых API
 - HTML-страниц
 - Telegram и других каналов, если это нужно на следующих этапах
@@ -175,6 +207,92 @@
 - забирать только новые элементы после последнего успешного прохода
 - не тянуть повторно весь исторический хвост при каждом запуске
 - поддерживать гибко настраиваемый список источников без правок кода
+- не ходить в дорогой AI-поиск, если новость можно получить детерминированно
+
+### 5.1.0 Source Capability Probe
+
+Это слой автоопределения возможностей источника.
+
+Что он делает при добавлении нового сайта:
+
+- проверяет наличие `news sitemap`
+- проверяет наличие `rss / atom`
+- проверяет наличие обычного `sitemap`
+- проверяет, можно ли получить кандидатов со страницы раздела через `listing scrape`
+- проверяет, удается ли затем добрать `full_text` у sample-статей
+
+Что должно сохраняться в БД:
+
+- `supports_news_sitemap`
+- `supports_rss`
+- `supports_sitemap`
+- `supports_listing_scrape`
+- `supports_direct_article_extraction`
+- `needs_ai_fallback_for_full_text`
+- `preferred_discovery_adapter`
+- `fallback_adapter_chain`
+
+Принцип:
+
+- админ добавляет URL сайта или раздела
+- probe сам строит capability profile
+- дальше scheduler и ingestion опираются на этот profile, а не на ручной выбор adapter'а
+
+### 5.1.1 Extraction / Enrichment Layer
+
+Это отдельный слой между source discovery и editorial.
+
+Что он делает:
+
+- скачивает HTML статьи по `url`
+- пытается детерминированно извлечь `full_text`, `lead`, `tags`, `published_at`
+- сохраняет в `raw_items` уже извлеченные данные, а не только короткий RSS summary
+- передает в AI уже известный контекст: `url`, `title`, `summary`, HTML
+
+Порядок работы:
+
+1. сначала обычный parser / extractor
+2. если `full_text` слабый или пустой, `AI extraction fallback` по уже скачанному HTML
+3. если HTML слабый, обрезанный или не содержит тело статьи, только тогда `AI + web_search`
+
+Принцип:
+
+- `AI search` это не основной способ поиска новостей
+- `AI search` это rescue-layer для extraction и редких проблемных сайтов
+
+### 5.1.2 Discovery vs Enrichment
+
+Это два разных контура, их нельзя смешивать в одну грубую цепочку.
+
+`Discovery` отвечает за поиск candidate news items:
+
+- `news sitemap`
+- `rss / atom`
+- `sitemap`
+- `listing scrape`
+- в конце, если нужно, `AI/web search`
+
+`Enrichment` отвечает за заполнение полей уже найденной новости:
+
+- `canonical_url`
+- `published_at`
+- `title`
+- `summary`
+- `lead`
+- `full_text`
+- `tags`
+
+Правильный flow:
+
+1. собрать candidates несколькими discovery-адаптерами
+2. дедуплицировать candidates
+3. для каждого item запустить enrichment pipeline
+4. прекращать pipeline, как только обязательные поля заполнены
+
+То есть не "одна и та же новость идет по всем source adapters подряд", а:
+
+- discovery дает список новостей
+- enrichment добирает недостающие поля у каждой новости до нужного quality threshold
 
 ### 5.2 Dedup / Canonicalizer
 
@@ -373,6 +491,13 @@
 - HTML / XML snapshots
 - экспортные файлы
 
+Практическая рекомендация по хранению source-артефактов:
+
+- не хранить HTML всех статей бессрочно в `PostgreSQL`
+- сохранять в БД извлеченные поля: `full_text`, `lead`, `tags`
+- HTML держать как short-lived cache или как отладочный snapshot только для проблемных кейсов
+- избегать повторного скачивания одной и той же статьи без необходимости
+
 ### CDN
 
 Не входит в обязательный стартовый этап.
@@ -387,6 +512,7 @@
 Минимальный набор таблиц:
 
 - `sources`
+- `source_capabilities`
 - `raw_items`
 - `canonical_events`
 - `event_clusters`
@@ -435,13 +561,15 @@
 Упрощенный MVP flow:
 
 1. scheduler запускает сбор новостей
-2. ingestion-сервис забирает новые материалы из RSS / API / scraping
+2. ingestion-сервис по watermark забирает только новые материалы из `RSS / sitemap / scraping / API`
 3. сырой поток сохраняется в `raw_items`
-4. raw-записям назначаются dedupe key, category и базовая importance score
-5. из `raw_items` формируются публикационные `news_items`
-6. создается черновик статьи
-7. AI делает первичную редактуру, чистит стиль и структуру
-8. статья публикуется на сайте
+4. для каждой статьи deterministic extractor пытается достать `full_text` и метаданные страницы
+5. если extractor не справился, включается `AI extraction fallback`; `web_search` разрешается только как запасной вариант
+6. raw-записям назначаются dedupe key, category и базовая importance score
+7. из `raw_items` формируются публикационные `news_items`
+8. создается черновик статьи
+9. AI делает первичную редактуру, чистит стиль и структуру
+10. статья публикуется на сайте
 
 Что уже заложено в стартовом каркасе репозитория:
 
@@ -498,41 +626,58 @@
 Это следующий рабочий блок перед полноценной автопубликацией. Его цель:
 
 - довести ingestion до production-уровня
-- перестать зависеть только от короткого RSS summary
+- перестать зависеть только от короткого RSS summary и дорогого AI-discovery
 - унифицировать заполнение `raw_items` для разных типов источников
 - сократить долю `template fallback` и дать AI больше исходных данных
+- сделать deterministic-first pipeline, где AI включается только на узких местах
+- уйти от ручного выбора adapter'а админом к auto-probe и capability-based orchestration
 
 Порядок реализации:
 
 1. Вынести ingestion в отдельные adapter'ы по `source_type`
-2. Подключить `scraping` как второй реальный adapter после `rss`
-3. Перевести активацию источников на правило "можно активировать только поддерживаемые adapter'ы"
-4. Добавить enrichment-слой для `full_text` и метаданных страницы
-5. Добавить AI extraction fallback для страниц, где deterministic extractor не справился
-6. Улучшить source-state: retries, last successful parse, error counters
-7. Пересобрать importance scoring и triage
-8. Усилить dedup до near-duplicate detection на недавнем окне
-9. Свести `template fallback` к аварийному контуру
+2. Подключить `news sitemap` / `rss` / `sitemap` как discovery-слой первого приоритета
+3. Подключить `scraping` для listing pages и источников без RSS
+4. Добавить `source capability probe` и сохранять capability profile в БД
+5. Перевести ingestion с ручного `source_type` на capability-based adapter selection
+6. Добавить item-level enrichment pipeline для `full_text` и метаданных страницы
+7. Добавить `AI extraction fallback` по уже скачанному HTML для страниц, где deterministic extractor не справился
+8. Разрешать `AI + web_search` только если HTML слабый или article body не найден
+9. Улучшить source-state: retries, last successful parse, error counters
+10. Добавить scheduler с фиксированными окнами запуска и инкрементальным добором новостей
+11. Пересобрать importance scoring и triage
+12. Усилить dedup до near-duplicate detection на недавнем окне
+13. Свести `template fallback` к аварийному контуру
 
 Почему именно так:
 
-- сначала нужно сделать надежный ingestion для разных типов источников
+- сначала нужно сделать дешевый и надежный ingestion для разных типов источников
 - потом дать writer/editor больше исходных данных
 - и только после этого усиливать scoring, dedup и качество публикации
+- дорогой AI-поиск должен остаться редким fallback, а не основой архитектуры
 
 Сделать:
 
 - [x] рабочий `rss` adapter как базовый production-safe источник
+- [x] `news sitemap` adapter как следующий приоритетный discovery-слой
+- [x] базовый `sitemap` adapter первой версии для сайтов без нормального RSS
 - [x] `scraping` adapter первой версии для источников без RSS
-- [x] `ai_research` adapter первой версии через OpenAI `web_search`
+- [x] `ai_research` adapter первой версии через OpenAI `web_search` как временный fallback
+- [ ] вывести `ai_research` из основного happy path ingestion
+- [x] базовый `source capability probe` для auto-detection `rss / news sitemap / sitemap / scraping`
+- [ ] таблица или сущность `source_capabilities`
+- [ ] capability-based adapter selection вместо обязательного ручного `source_type`
 - [x] единый нормализованный `RawItem` flow для `rss`, `scraping` и `ai_research`
 - [x] хранение и использование полного текста страницы-источника поверх короткого RSS summary
 - [x] отдельный enrichment-слой для `full_text`, `lead`, `tags`, если их удается извлечь
 - [x] базовый `AI extraction fallback` для article pages, где deterministic extractor не вытягивает `full_text`
+- [ ] сначала пробовать AI extraction по уже скачанному HTML без `web_search`
+- [ ] item-level enrichment pipeline: добирать только недостающие поля, а не перезапускать весь source flow
+- [ ] ограничить `web_search` budget rules: только top-priority материалы и только после провала обычного extraction
 - [x] усиленный `AI preflight fallback`: проверка нескольких sample-новостей и `ready_ai`, если хотя бы одна статья даёт пригодный `full_text`
 - [ ] единая валидация источников в админке в зависимости от `source_type`
 - [x] безопасная активация новых источников: только поддерживаемые adapter'ы могут уходить в `active`
 - [x] улучшенное состояние обхода источников: last successful fetch, last successful parse, error counters, retry policy
+- [ ] scheduler с фиксированными окнами, например `09:00 / 12:00 / 15:00 / 18:00`
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
@@ -541,7 +686,6 @@
 Что уже считаем честно рабочим:
 
 - `rss` -> `raw_items` -> `planner` -> `editorial` -> `articles`
-- `ai_research` -> `raw_items` -> `planner` -> `editorial` -> `articles`
 - watermark / `last_seen` логика по активным RSS-источникам
 - ручной тестовый цикл через `/admin`
 - on-demand `full_text` enrichment перед editorial run для источников, у которых доступна страница статьи
@@ -550,6 +694,11 @@
 Что пока еще MVP-заглушка или упрощение:
 
 - `scraping` и `ai_research` уже реализованы как adapters первой версии, но еще требуют site-specific tuning
+- `news sitemap` уже добавлен, но capability-based orchestration еще не построен
+- `sitemap` adapter уже есть в базовой версии, но его еще нужно прогнать на реальных сайтах и подкрутить эвристики
+- базовый `source capability probe` уже есть, но capability profile пока хранится в `source_sync_state`, а не в отдельной сущности
+- админка уже работает по сценарию `Проверить -> Добавить -> active`, но пока еще сохраняет явный `source_type`, а не полностью скрывает adapter-слой
+- scheduler как реальный автозапуск по времени еще не доведен до production-режима
 - importance score пока rule-based и базовый
 - planner пока детерминированный, а не AI-assisted
 - RSS чаще всего дает краткий summary, а не полный текст статьи
@@ -745,10 +894,12 @@ npm run dev
 
 - скопировать `.env.example` в `.env`
 - задать `OPENAI_API_KEY`
-- при необходимости задать `OPENAI_MODEL`
+- при необходимости задать `OPENAI_MODEL` как общий fallback
+- при необходимости задать `OPENAI_EDITORIAL_MODEL` и `OPENAI_SEARCH_MODEL` отдельно
 - при необходимости задать `OPENAI_BASE_URL`, `OPENAI_API_STYLE` и `OPENAI_PROVIDER_LABEL`
 - при необходимости включить `OPENAI_WEB_SEARCH_ENABLED=true`
-- по умолчанию проект использует `gpt-5`, `responses` и `web_search` для extraction fallback
+- `web_search` имеет смысл держать выключенным по умолчанию и включать только для точечного extraction fallback
+- для discovery новостей не стоит строить основную архитектуру вокруг `web_search`
 - если ключ не задан или API недоступен, система падает обратно в template fallback
 - стартовый шаблон переменных лежит в `.env.example`
 
@@ -757,6 +908,8 @@ npm run dev
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5
+OPENAI_EDITORIAL_MODEL=gpt-5
+OPENAI_SEARCH_MODEL=gpt-5-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_STYLE=responses
 OPENAI_PROVIDER_LABEL=OpenAI
@@ -770,6 +923,8 @@ OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=deepseek-v4-flash
+OPENAI_EDITORIAL_MODEL=deepseek-v4-flash
+OPENAI_SEARCH_MODEL=deepseek-v4-flash
 OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_API_STYLE=chat_completions
 OPENAI_PROVIDER_LABEL=DeepSeek
@@ -827,8 +982,9 @@ npm run dev:web
 ## 14. Ближайшие следующие шаги
 
 1. Утвердить этот план как базовый архитектурный документ
-2. Определить список стартовых источников для этапа автосбора
-3. Спроектировать схему `PostgreSQL`
-4. Создать монорепозиторий и базовую структуру сервисов
-5. Настроить `Docker`, `GitHub`, `GitHub Actions` и базовый deploy pipeline
-6. Начать с `Этапа 1. MVP ядра`
+2. Доделать `sitemap` adapter
+3. Добавить `source capability probe` и хранение capability profile
+4. Перевести админку с ручного выбора adapter'а на сценарий "добавить сайт"
+5. Собрать capability-based discovery pipeline
+6. Добавить item-level enrichment pipeline до заполнения обязательных полей
+7. Настроить scheduler и провести первый сквозной тест: добавить сайт -> забрать новости -> добрать `full_text` -> опубликовать

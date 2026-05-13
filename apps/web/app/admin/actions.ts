@@ -33,6 +33,8 @@ async function apiPost(path: string, body: Record<string, unknown>) {
   return response;
 }
 
+const PRECHECK_SOURCE_TYPES = new Set(["news_sitemap", "sitemap", "scraping"]);
+
 function extractApiErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
     try {
@@ -152,17 +154,62 @@ export async function ingestRssTestBatchNow() {
 }
 
 export async function createSourceNow(formData: FormData) {
-  const sourceType = String(formData.get("sourceType") ?? "rss");
+  const requestedSourceType = String(formData.get("resolvedSourceType") ?? formData.get("sourceType") ?? "auto");
+  const sourceKey = String(formData.get("key") ?? "");
+  const title = String(formData.get("title") ?? "");
+  const url = String(formData.get("url") ?? "");
+  const category = String(formData.get("category") ?? "");
+  const notes = String(formData.get("notes") ?? "");
+  const probeOk = String(formData.get("probeOk") ?? "") === "true";
+  const probedKey = String(formData.get("probedKey") ?? "");
+  const probedUrl = String(formData.get("probedUrl") ?? "");
+  const probedSourceType = String(formData.get("resolvedSourceType") ?? "");
+
   try {
+    if (!probeOk) {
+      throw new Error("Сначала выполните успешную проверку источника.");
+    }
+    if (sourceKey !== probedKey || url !== probedUrl || requestedSourceType !== probedSourceType) {
+      throw new Error("После изменения key, URL или type сначала выполните проверку заново.");
+    }
+    const sourceType = requestedSourceType;
+    if (!sourceType || sourceType === "auto") {
+      throw new Error("Проверка не подтвердила подходящий тип источника. Сначала проверьте источник.");
+    }
+    const requiresPrecheck = PRECHECK_SOURCE_TYPES.has(sourceType);
+
     await apiPost("/api/v1/sources", {
-      key: String(formData.get("key") ?? ""),
-      title: String(formData.get("title") ?? ""),
-      url: String(formData.get("url") ?? ""),
-      category: String(formData.get("category") ?? ""),
+      key: sourceKey,
+      title,
+      url,
+      category,
       source_type: sourceType,
-      status: sourceType === "ai_research" ? "active" : "draft",
-      notes: String(formData.get("notes") ?? "")
+      status: requiresPrecheck ? "draft" : "active",
+      notes
     });
+
+    if (requiresPrecheck) {
+      try {
+        const probeResponse = await apiPost(`/api/v1/sources/${sourceKey}/probe`, {});
+        const probeResult = await probeResponse.json();
+        if (!probeResult.ok) {
+          throw new Error("Preflight не подтвердил рабочий поток новостей.");
+        }
+        await apiPost(`/api/v1/sources/${sourceKey}`, {
+          title,
+          url,
+          category,
+          source_type: sourceType,
+          status: "active",
+          notes
+        });
+      } catch (error) {
+        try {
+          await apiPost(`/api/v1/sources/${sourceKey}/delete`, {});
+        } catch {}
+        throw error;
+      }
+    }
   } catch (error) {
     redirect(`/admin?notice=source-save-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`);
   }
@@ -175,7 +222,7 @@ export async function probeNewSourceNow(formData: FormData) {
   const sourceKey = String(formData.get("key") ?? "");
   const title = String(formData.get("title") ?? "");
   const url = String(formData.get("url") ?? "");
-  const sourceType = String(formData.get("sourceType") ?? "rss");
+  const sourceType = String(formData.get("sourceType") ?? "auto");
   const notes = String(formData.get("notes") ?? "");
   const params = new URLSearchParams({
     sourceKey,
@@ -199,6 +246,16 @@ export async function probeNewSourceNow(formData: FormData) {
     params.set("notice", "source-draft-probed");
     params.set("probeOk", String(Boolean(result.ok)));
     params.set("probeReadiness", String(result.readiness ?? "unknown"));
+    params.set("supportsRss", String(Boolean(result.supportsRss)));
+    params.set("supportsNewsSitemap", String(Boolean(result.supportsNewsSitemap)));
+    params.set("supportsSitemap", String(Boolean(result.supportsSitemap)));
+    params.set("supportsScraping", String(Boolean(result.supportsScraping)));
+    if (result.resolvedSourceType) {
+      params.set("resolvedSourceType", String(result.resolvedSourceType));
+    }
+    if (result.resolvedSourceUrl) {
+      params.set("resolvedSourceUrl", String(result.resolvedSourceUrl));
+    }
     params.set("probeCount", String(result.itemCount ?? 0));
     params.set("probeFullTextOk", String(Boolean(result.fullTextOk)));
     params.set("probeLeadOk", String(Boolean(result.leadOk)));

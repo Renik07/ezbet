@@ -84,6 +84,7 @@ export type ContentPlanItem = {
 export type EditorialStatus = {
   openaiEnabled: boolean;
   openaiModel: string;
+  openaiSearchModel: string;
   fallbackMode: boolean;
   providerLabel: string;
   apiStyle: string;
@@ -108,6 +109,12 @@ export type SourceSyncState = {
   lastProbeAt?: string;
   lastProbeCount: number;
   lastProbeReadiness: string;
+  preferredAdapter?: string;
+  preferredAdapterUrl?: string;
+  supportsRss: boolean;
+  supportsNewsSitemap: boolean;
+  supportsSitemap: boolean;
+  supportsScraping: boolean;
   lastProbeFullTextOk: boolean;
   lastProbeLeadOk: boolean;
   lastProbeTagsCount: number;
@@ -256,6 +263,7 @@ const fallbackContentPlan: ContentPlanItem[] = [
 const fallbackEditorialStatus: EditorialStatus = {
   openaiEnabled: false,
   openaiModel: "gpt-5",
+  openaiSearchModel: "gpt-5-mini",
   fallbackMode: true,
   providerLabel: "OpenAI",
   apiStyle: "responses",
@@ -281,6 +289,12 @@ const fallbackSourceStates: SourceSyncState[] = [
     lastProbeAt: "2026-05-05T10:01:00.000Z",
     lastProbeCount: 24,
     lastProbeReadiness: "ready",
+    preferredAdapter: "rss",
+    preferredAdapterUrl: "https://www.sports.ru/rss/topnews.xml",
+    supportsRss: true,
+    supportsNewsSitemap: false,
+    supportsSitemap: false,
+    supportsScraping: false,
     lastProbeFullTextOk: true,
     lastProbeLeadOk: true,
     lastProbeTagsCount: 3,
@@ -307,6 +321,12 @@ const fallbackSourceStates: SourceSyncState[] = [
     lastProbeAt: "2026-05-05T10:01:00.000Z",
     lastProbeCount: 31,
     lastProbeReadiness: "ready",
+    preferredAdapter: "scraping",
+    preferredAdapterUrl: "https://www.sport-express.ru/services/materials/news/se/",
+    supportsRss: false,
+    supportsNewsSitemap: false,
+    supportsSitemap: false,
+    supportsScraping: true,
     lastProbeFullTextOk: true,
     lastProbeLeadOk: true,
     lastProbeTagsCount: 2,

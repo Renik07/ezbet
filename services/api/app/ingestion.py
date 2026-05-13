@@ -16,7 +16,7 @@ from xml.etree import ElementTree
 from .ai_client import OpenAIEditorialClient
 from .models import NewsItem, PromptConfig, RawItem, SourceItem, SourceSyncState
 
-SUPPORTED_ACTIVE_SOURCE_TYPES = {"rss", "scraping", "ai_research"}
+SUPPORTED_ACTIVE_SOURCE_TYPES = {"rss", "news_sitemap", "sitemap", "scraping", "ai_research"}
 
 POSITIVE_CONTAINER_TERMS = (
     "news",
@@ -176,6 +176,12 @@ class SourceProbeResult:
     item_count: int
     message: str
     readiness: str
+    resolved_source_type: str | None
+    resolved_source_url: str | None
+    supports_rss: bool
+    supports_news_sitemap: bool
+    supports_sitemap: bool
+    supports_scraping: bool
     full_text_ok: bool
     lead_ok: bool
     tags_count: int
@@ -303,14 +309,59 @@ def raw_items_to_news(raw_items: Iterable[RawItem]) -> list[NewsItem]:
 
 
 def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
+    supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping = _probe_support_flags(
+        source.source_type,
+        ok=False,
+        item_count=0,
+    )
     try:
         items = _collect_source_items(source, timeout=timeout)
     except SourceFetchError as exc:
-        return SourceProbeResult(False, 0, str(exc), "fetch_error", False, False, 0, None, None)
+        return SourceProbeResult(
+            False,
+            0,
+            str(exc),
+            "fetch_error",
+            source.source_type,
+            source.url,
+            supports_rss,
+            supports_news_sitemap,
+            supports_sitemap,
+            supports_scraping,
+            False,
+            False,
+            0,
+            None,
+            None,
+        )
     if not items:
+        if source.source_type in {"news_sitemap", "sitemap"}:
+            return SourceProbeResult(
+                False,
+                0,
+                "Sitemap не прочитан или не вернул пригодных article URL.",
+                "empty",
+                source.source_type,
+                source.url,
+                supports_rss,
+                supports_news_sitemap,
+                supports_sitemap,
+                supports_scraping,
+                False,
+                False,
+                0,
+                None,
+                None,
+            )
         if source.source_type == "scraping":
-            return SourceProbeResult(False, 0, "Страница не прочитана или scraping-адаптер не нашел кандидатов.", "empty", False, False, 0, None, None)
-        return SourceProbeResult(False, 0, "Фид не прочитан или не вернул элементов.", "empty", False, False, 0, None, None)
+            return SourceProbeResult(False, 0, "Страница не прочитана или scraping-адаптер не нашел кандидатов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, False, 0, None, None)
+        return SourceProbeResult(False, 0, "Фид не прочитан или не вернул элементов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, False, 0, None, None)
+
+    supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping = _probe_support_flags(
+        source.source_type,
+        ok=True,
+        item_count=len(items),
+    )
 
     if source.source_type == "ai_research":
         sample = next((item for item in items if item.url), items[0])
@@ -336,6 +387,12 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
             len(items),
             message,
             readiness,
+            source.source_type,
+            source.url,
+            supports_rss,
+            supports_news_sitemap,
+            supports_sitemap,
+            supports_scraping,
             full_text_ok,
             lead_ok,
             tags_count,
@@ -391,11 +448,68 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
         len(items),
         message,
         readiness,
+        source.source_type,
+        source.url,
+        supports_rss,
+        supports_news_sitemap,
+        supports_sitemap,
+        supports_scraping,
         full_text_ok,
         lead_ok,
         tags_count,
         sample.title,
         sample.url,
+    )
+
+
+def probe_source_auto(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
+    candidates = _build_auto_probe_candidates(source)
+    best_result: SourceProbeResult | None = None
+    supports = {
+        "rss": False,
+        "news_sitemap": False,
+        "sitemap": False,
+        "scraping": False,
+    }
+
+    for candidate in candidates:
+        result = probe_source(candidate, timeout=timeout)
+        supports["rss"] = supports["rss"] or result.supports_rss
+        supports["news_sitemap"] = supports["news_sitemap"] or result.supports_news_sitemap
+        supports["sitemap"] = supports["sitemap"] or result.supports_sitemap
+        supports["scraping"] = supports["scraping"] or result.supports_scraping
+        if best_result is None or _score_probe_result(result) > _score_probe_result(best_result):
+            best_result = result
+        if result.ok and result.readiness in {"ready", "ready_ai"}:
+            result.supports_rss = supports["rss"]
+            result.supports_news_sitemap = supports["news_sitemap"]
+            result.supports_sitemap = supports["sitemap"]
+            result.supports_scraping = supports["scraping"]
+            return result
+
+    if best_result is not None:
+        best_result.supports_rss = supports["rss"]
+        best_result.supports_news_sitemap = supports["news_sitemap"]
+        best_result.supports_sitemap = supports["sitemap"]
+        best_result.supports_scraping = supports["scraping"]
+        return best_result
+
+    return SourceProbeResult(
+        False,
+        0,
+        "Автоопределение не нашло подходящий adapter для этого URL.",
+        "empty",
+        None,
+        None,
+        supports["rss"],
+        supports["news_sitemap"],
+        supports["sitemap"],
+        supports["scraping"],
+        False,
+        False,
+        0,
+        None,
+        None,
     )
 
 
@@ -465,6 +579,10 @@ def _collect_source_items(
 ) -> list[RawItem]:
     if source.source_type == "rss":
         return _parse_feed(source, timeout=timeout)
+    if source.source_type == "news_sitemap":
+        return _parse_news_sitemap_source(source, timeout=timeout)
+    if source.source_type == "sitemap":
+        return _parse_sitemap_source(source, timeout=timeout)
     if source.source_type == "scraping":
         return _parse_scraping_source(source, timeout=timeout)
     if source.source_type == "ai_research":
@@ -485,6 +603,101 @@ def _parse_feed(source: SourceItem, timeout: int) -> list[RawItem]:
         return _parse_atom(root, source, payload)
 
     return _parse_rss(root, source, payload)
+
+
+def _parse_news_sitemap_source(source: SourceItem, timeout: int) -> list[RawItem]:
+    payload = _fetch_remote_document(source.url, timeout)
+
+    encoded_payload = payload.encode("utf-8", errors="ignore")
+    try:
+        root = ElementTree.fromstring(encoded_payload)
+    except ElementTree.ParseError:
+        return []
+
+    discovered = _parse_news_sitemap_document(
+        root,
+        source=source,
+        timeout=timeout,
+        max_child_sitemaps=6,
+    )
+    if not discovered:
+        return []
+
+    fetched_at = datetime.now(timezone.utc)
+    payload_summary = _serialize_sitemap_payload(source, "news_sitemap", len(discovered))
+    items: list[RawItem] = []
+
+    for index, entry in enumerate(discovered):
+        published = entry["published_at"] or (fetched_at - timedelta(seconds=index))
+        title = entry["title"] or entry["url"]
+        tags = entry["tags"]
+        summary = entry["summary"] or (", ".join(tags[:3]) if tags else title)
+        items.append(
+            _build_raw_item(
+                source=source,
+                payload=payload_summary,
+                fetched_at=fetched_at,
+                external_id=entry["url"],
+                title=title,
+                summary=summary,
+                lead=summary,
+                source_title=entry["source_title"],
+                source_url=entry["url"],
+                url=entry["url"],
+                published=published,
+                tags=tags,
+            )
+        )
+
+    items.sort(key=lambda item: (item.published_at, item.importance_score), reverse=True)
+    return items
+
+
+def _parse_sitemap_source(source: SourceItem, timeout: int) -> list[RawItem]:
+    payload = _fetch_remote_document(source.url, timeout)
+
+    encoded_payload = payload.encode("utf-8", errors="ignore")
+    try:
+        root = ElementTree.fromstring(encoded_payload)
+    except ElementTree.ParseError:
+        return []
+
+    discovered = _parse_generic_sitemap_document(
+        root,
+        source=source,
+        timeout=timeout,
+        max_child_sitemaps=8,
+    )
+    if not discovered:
+        return []
+
+    fetched_at = datetime.now(timezone.utc)
+    payload_summary = _serialize_sitemap_payload(source, "sitemap", len(discovered))
+    items: list[RawItem] = []
+
+    for index, entry in enumerate(discovered):
+        published = entry["published_at"] or (fetched_at - timedelta(seconds=index))
+        title = entry["title"] or entry["url"]
+        summary = entry["summary"] or title
+        items.append(
+            _build_raw_item(
+                source=source,
+                payload=payload_summary,
+                fetched_at=fetched_at,
+                external_id=entry["url"],
+                title=title,
+                summary=summary,
+                lead=summary,
+                source_title=entry["source_title"],
+                source_url=entry["url"],
+                url=entry["url"],
+                published=published,
+                tags=entry["tags"],
+            )
+        )
+
+    items.sort(key=lambda item: (item.published_at, item.importance_score), reverse=True)
+    return items
 
 
 def _parse_scraping_source(source: SourceItem, timeout: int) -> list[RawItem]:
@@ -586,6 +799,157 @@ def _parse_ai_research_source(
 
     items.sort(key=lambda item: (item.published_at, item.importance_score), reverse=True)
     return items
+
+
+def _parse_news_sitemap_document(
+    root: ElementTree.Element,
+    *,
+    source: SourceItem,
+    timeout: int,
+    max_child_sitemaps: int,
+) -> list[dict[str, object]]:
+    root_name = _xml_local_name(root.tag)
+    if root_name == "sitemapindex":
+        nested_entries: list[dict[str, object]] = []
+        seen_urls: set[str] = set()
+        for node in root:
+            if _xml_local_name(node.tag) != "sitemap":
+                continue
+            loc = _find_child_text(node, {"loc"})
+            if not loc or loc in seen_urls:
+                continue
+            seen_urls.add(loc)
+            try:
+                nested_payload = _fetch_remote_document(loc, timeout)
+                nested_root = ElementTree.fromstring(nested_payload.encode("utf-8", errors="ignore"))
+            except (SourceFetchError, ElementTree.ParseError):
+                continue
+            nested_entries.extend(
+                _parse_news_sitemap_document(
+                    nested_root,
+                    source=source,
+                    timeout=timeout,
+                    max_child_sitemaps=0,
+                )
+            )
+            if len(seen_urls) >= max_child_sitemaps:
+                break
+        return nested_entries
+
+    if root_name != "urlset":
+        return []
+
+    entries: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+
+    for node in root:
+        if _xml_local_name(node.tag) != "url":
+            continue
+
+        loc = _find_child_text(node, {"loc"})
+        normalized_url = _normalize_url(loc) if loc else None
+        if not normalized_url or normalized_url in seen_urls:
+            continue
+
+        news_node = _find_child(node, {"news"})
+        title = _find_child_text(news_node, {"title"}) if news_node is not None else None
+        published_at = _try_parse_datetime(_find_child_text(news_node, {"publication_date"}) or "")
+        if published_at is None:
+            published_at = _try_parse_datetime(_find_child_text(node, {"lastmod"}) or "")
+
+        publication_node = _find_child(news_node, {"publication"}) if news_node is not None else None
+        publication_name = _find_child_text(publication_node, {"name"}) if publication_node is not None else None
+
+        keywords = _find_child_text(news_node, {"keywords"}) if news_node is not None else None
+        tags = _split_meta_values(keywords or "")
+        summary = title or (", ".join(tags[:3]) if tags else normalized_url)
+
+        seen_urls.add(normalized_url)
+        entries.append(
+            {
+                "url": normalized_url,
+                "title": _normalize_whitespace(title or ""),
+                "summary": _normalize_whitespace(summary),
+                "published_at": published_at,
+                "source_title": _normalize_whitespace(publication_name or source.title) or source.title,
+                "tags": tags,
+            }
+        )
+
+    return entries
+
+
+def _parse_generic_sitemap_document(
+    root: ElementTree.Element,
+    *,
+    source: SourceItem,
+    timeout: int,
+    max_child_sitemaps: int,
+) -> list[dict[str, object]]:
+    root_name = _xml_local_name(root.tag)
+    if root_name == "sitemapindex":
+        nested_entries: list[dict[str, object]] = []
+        seen_sitemaps: set[str] = set()
+        for node in root:
+            if _xml_local_name(node.tag) != "sitemap":
+                continue
+            loc = _find_child_text(node, {"loc"})
+            normalized_loc = _normalize_url(loc) if loc else None
+            if not normalized_loc or normalized_loc in seen_sitemaps:
+                continue
+            seen_sitemaps.add(normalized_loc)
+            try:
+                nested_payload = _fetch_remote_document(normalized_loc, timeout)
+                nested_root = ElementTree.fromstring(nested_payload.encode("utf-8", errors="ignore"))
+            except (SourceFetchError, ElementTree.ParseError):
+                continue
+            nested_entries.extend(
+                _parse_generic_sitemap_document(
+                    nested_root,
+                    source=source,
+                    timeout=timeout,
+                    max_child_sitemaps=0,
+                )
+            )
+            if len(seen_sitemaps) >= max_child_sitemaps:
+                break
+        return nested_entries
+
+    if root_name != "urlset":
+        return []
+
+    entries: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+
+    for node in root:
+        if _xml_local_name(node.tag) != "url":
+            continue
+
+        loc = _find_child_text(node, {"loc"})
+        normalized_url = _normalize_url(loc) if loc else None
+        if not normalized_url or normalized_url in seen_urls:
+            continue
+        if not _looks_like_news_url(normalized_url):
+            continue
+
+        lastmod = _find_child_text(node, {"lastmod"})
+        published_at = _try_parse_datetime(lastmod or "")
+        title = _title_from_url(normalized_url)
+        summary = title or normalized_url
+
+        seen_urls.add(normalized_url)
+        entries.append(
+            {
+                "url": normalized_url,
+                "title": title,
+                "summary": summary,
+                "published_at": published_at,
+                "source_title": source.title,
+                "tags": [],
+            }
+        )
+
+    return entries
 
 
 def _extract_ai_research_article_enrichment(
@@ -1256,6 +1620,250 @@ def _looks_like_story_title(value: str) -> bool:
     return not any(term in lowered for term in blocked_terms)
 
 
+def _title_from_url(url: str) -> str:
+    path = urlsplit(url).path.strip("/")
+    if not path:
+        return url
+    slug = path.split("/")[-1]
+    slug = re.sub(r"\.(html|htm|php|aspx?)$", "", slug, flags=re.IGNORECASE)
+    slug = slug.replace("-", " ").replace("_", " ").strip()
+    slug = re.sub(r"\s+", " ", slug)
+    if not slug:
+        return url
+    return slug[:1].upper() + slug[1:]
+
+
+def _score_probe_result(result: SourceProbeResult) -> tuple[int, int, int, int]:
+    readiness_rank = {
+        "ready_ai": 4,
+        "ready": 3,
+        "partial": 2,
+        "feed_only": 1,
+        "empty": 0,
+        "fetch_error": -1,
+    }.get(result.readiness, 0)
+    adapter_rank = {
+        "news_sitemap": 4,
+        "rss": 3,
+        "sitemap": 2,
+        "scraping": 1,
+        "ai_research": 0,
+    }.get(result.resolved_source_type or "", 0)
+    return (
+        1 if result.ok else 0,
+        readiness_rank,
+        adapter_rank,
+        result.item_count,
+    )
+
+
+def _probe_support_flags(source_type: str, *, ok: bool, item_count: int) -> tuple[bool, bool, bool, bool]:
+    supported = ok and item_count > 0
+    return (
+        source_type == "rss" and supported,
+        source_type == "news_sitemap" and supported,
+        source_type == "sitemap" and supported,
+        source_type == "scraping" and supported,
+    )
+
+
+def _build_auto_probe_candidates(source: SourceItem) -> list[SourceItem]:
+    seen: set[tuple[str, str]] = set()
+    candidates: list[SourceItem] = []
+
+    def add_candidate(source_type: str, url: str) -> None:
+        normalized_url = url.strip()
+        if not normalized_url.startswith(("http://", "https://")):
+            return
+        key = (source_type, normalized_url)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(
+            SourceItem(
+                key=source.key,
+                title=source.title,
+                url=normalized_url,
+                category=source.category,
+                source_type=source_type,
+                status="draft",
+                notes=source.notes,
+            )
+        )
+
+    for candidate_url in _candidate_urls_for_news_sitemap(source.url):
+        add_candidate("news_sitemap", candidate_url)
+    for candidate_url in _candidate_urls_for_rss(source.url):
+        add_candidate("rss", candidate_url)
+    for candidate_url in _candidate_urls_for_sitemap(source.url):
+        add_candidate("sitemap", candidate_url)
+    add_candidate("scraping", source.url)
+
+    return candidates
+
+
+def _candidate_urls_for_news_sitemap(url: str) -> list[str]:
+    candidates = _build_candidate_urls(
+        url,
+        (
+            "news-sitemap.xml",
+            "news_sitemap.xml",
+            "sitemap-news.xml",
+            "sitemap_news.xml",
+            "sitemap/news.xml",
+            "sitemap/news/index.xml",
+            "news.xml",
+        ),
+    )
+    for item in _extract_sitemap_urls_from_robots(url):
+        lowered = item.lower()
+        if "news" in lowered and item not in candidates:
+            candidates.insert(0, item)
+    return candidates
+
+
+def _candidate_urls_for_sitemap(url: str) -> list[str]:
+    candidates = _build_candidate_urls(
+        url,
+        (
+            "sitemap.xml",
+            "sitemap_index.xml",
+            "sitemap/news.xml",
+            "post-sitemap.xml",
+            "news.xml",
+        ),
+    )
+    for item in _extract_sitemap_urls_from_robots(url):
+        if item not in candidates:
+            candidates.insert(0, item)
+    return candidates
+
+
+def _candidate_urls_for_rss(url: str) -> list[str]:
+    candidates = _build_candidate_urls(
+        url,
+        (
+            "rss",
+            "rss.xml",
+            "feed",
+            "feed.xml",
+            "news/rss",
+            "rss/news",
+            "feeds/news.xml",
+        ),
+    )
+    html = fetch_remote_document(url, timeout=6)
+    if html:
+        autodiscovered = _extract_feed_links_from_html(url, html)
+        for item in autodiscovered:
+            if item not in candidates:
+                candidates.insert(0, item)
+    return candidates
+
+
+def _build_candidate_urls(url: str, suffixes: tuple[str, ...]) -> list[str]:
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return [url.strip()]
+    candidates: list[str] = []
+    for base_url in _auto_probe_base_urls(url):
+        candidates.append(base_url)
+        base_parts = urlsplit(base_url)
+        base_root = urlunsplit((base_parts.scheme, base_parts.netloc, "", "", ""))
+        base_path = base_parts.path.strip("/")
+        for suffix in suffixes:
+            candidates.append(f"{base_root}/{suffix}")
+            if base_path:
+                candidates.append(f"{base_root}/{base_path.rstrip('/')}/{suffix}")
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.rstrip("/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(candidate)
+    return unique
+
+
+def _auto_probe_base_urls(url: str) -> list[str]:
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return [url.strip()]
+
+    bases: list[str] = []
+
+    def add_base(path: str) -> None:
+        candidate = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+        if candidate not in bases:
+            bases.append(candidate)
+
+    normalized_path = parts.path or "/"
+    add_base(normalized_path)
+
+    section_path = _section_probe_path(normalized_path)
+    if section_path != normalized_path:
+        add_base(section_path)
+
+    add_base("/")
+    return bases
+
+
+def _section_probe_path(path: str) -> str:
+    cleaned = path or "/"
+    if cleaned.endswith(".xml"):
+        return cleaned
+
+    stripped = cleaned.rstrip("/")
+    if not stripped:
+        return "/"
+
+    article_like = (
+        stripped.endswith(".html")
+        or stripped.endswith(".htm")
+        or stripped.split("/")[-1].isdigit()
+        or "/news/" in stripped
+    )
+    if article_like and "/" in stripped:
+        parent = stripped.rsplit("/", 1)[0]
+        return parent if parent.startswith("/") else f"/{parent}"
+    return cleaned
+
+
+def _extract_sitemap_urls_from_robots(url: str) -> list[str]:
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return []
+
+    robots_url = urlunsplit((parts.scheme, parts.netloc, "/robots.txt", "", ""))
+    robots = fetch_remote_document(robots_url, timeout=6)
+    if not robots:
+        return []
+
+    matches = re.findall(r"(?im)^sitemap:\s*(https?://\S+)\s*$", robots)
+    urls: list[str] = []
+    for item in matches:
+        normalized = item.strip()
+        if normalized and normalized not in urls:
+            urls.append(normalized)
+    return urls
+
+
+def _extract_feed_links_from_html(base_url: str, html: str) -> list[str]:
+    matches = re.findall(
+        r'<link[^>]+type=["\']application/(?:rss|atom)\+xml["\'][^>]+href=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    )
+    urls: list[str] = []
+    for href in matches:
+        normalized = _normalize_candidate_url(base_url, href)
+        if normalized and normalized not in urls:
+            urls.append(normalized)
+    return urls
+
+
 def _normalize_whitespace(value: str) -> str:
     return " ".join(unescape(value).split())
 
@@ -1358,6 +1966,17 @@ def _serialize_ai_discovery_payload(source: SourceItem, discovered_items: list[o
     )
 
 
+def _serialize_sitemap_payload(source: SourceItem, source_type: str, item_count: int) -> str:
+    return (
+        "{"
+        f'"source_type":{json.dumps(source_type)},'
+        f'"source_key":{json.dumps(source.key)},'
+        f'"source_url":{json.dumps(source.url)},'
+        f'"item_count":{item_count}'
+        "}"
+    )
+
+
 def _fetch_remote_document(url: str, timeout: int) -> str:
     try:
         with urlopen(url, timeout=timeout) as response:
@@ -1370,6 +1989,25 @@ def _fetch_remote_document(url: str, timeout: int) -> str:
         raise SourceFetchError(f"Fetch failed for {url}: {exc.reason if hasattr(exc, 'reason') else exc}") from exc
 
     return payload.decode("utf-8", errors="ignore")
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].lower()
+
+
+def _find_child(node: ElementTree.Element | None, names: set[str]) -> ElementTree.Element | None:
+    if node is None:
+        return None
+    wanted = {name.lower() for name in names}
+    for child in node:
+        if _xml_local_name(child.tag) in wanted:
+            return child
+    return None
+
+
+def _find_child_text(node: ElementTree.Element | None, names: set[str]) -> str | None:
+    child = _find_child(node, names)
+    return _node_text(child)
 
 
 def _extract_time_hint(attr_map: dict[str, str]) -> datetime | None:
