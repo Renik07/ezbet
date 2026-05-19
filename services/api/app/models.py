@@ -64,6 +64,12 @@ class RawItem(BaseModel):
     is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
     duplicate_of: Optional[str] = Field(default=None, serialization_alias="duplicateOf")
     full_text: Optional[str] = Field(default=None, serialization_alias="fullText")
+    full_text_source_url: Optional[str] = Field(default=None, serialization_alias="fullTextSourceUrl")
+    full_text_source_title: Optional[str] = Field(default=None, serialization_alias="fullTextSourceTitle")
+    reference_urls: list[str] = Field(default_factory=list, serialization_alias="referenceUrls")
+    extraction_mode: Optional[str] = Field(default=None, serialization_alias="extractionMode")
+    enrichment_status: Optional[str] = Field(default=None, serialization_alias="enrichmentStatus")
+    enrichment_error: Optional[str] = Field(default=None, serialization_alias="enrichmentError")
     tags: list[str] = Field(default_factory=list)
     payload: str
 
@@ -84,6 +90,12 @@ class RawItemPreview(BaseModel):
     triage_label: str = Field(serialization_alias="triageLabel")
     is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
     full_text: Optional[str] = Field(default=None, serialization_alias="fullText")
+    full_text_source_url: Optional[str] = Field(default=None, serialization_alias="fullTextSourceUrl")
+    full_text_source_title: Optional[str] = Field(default=None, serialization_alias="fullTextSourceTitle")
+    reference_urls: list[str] = Field(default_factory=list, serialization_alias="referenceUrls")
+    extraction_mode: Optional[str] = Field(default=None, serialization_alias="extractionMode")
+    enrichment_status: Optional[str] = Field(default=None, serialization_alias="enrichmentStatus")
+    enrichment_error: Optional[str] = Field(default=None, serialization_alias="enrichmentError")
     tags: list[str] = Field(default_factory=list)
 
 
@@ -285,6 +297,45 @@ class SourceProbeResponse(BaseModel):
 
 class SourceSyncStateListResponse(BaseModel):
     items: list[SourceSyncState]
+
+
+class SchedulerSettings(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(default=60, serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, serialization_alias="batchSize")
+    run_enrichment: bool = Field(default=False, serialization_alias="runEnrichment")
+    last_run_at: Optional[datetime] = Field(default=None, serialization_alias="lastRunAt")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+    last_status: str = Field(default="idle", serialization_alias="lastStatus")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    last_found_count: int = Field(default=0, serialization_alias="lastFoundCount")
+    last_saved_count: int = Field(default=0, serialization_alias="lastSavedCount")
+    last_published_count: int = Field(default=0, serialization_alias="lastPublishedCount")
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class SchedulerSettingsUpdateRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int = Field(ge=5, le=1440, alias="intervalMinutes", serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, ge=1, le=20, alias="batchSize", serialization_alias="batchSize")
+    run_enrichment: bool = Field(default=False, alias="runEnrichment", serialization_alias="runEnrichment")
+
+
+class SchedulerRunResponse(BaseModel):
+    ran: bool
+    reason: str
+    ingested: int = 0
+    published: int = 0
+    raw_items: int = Field(default=0, serialization_alias="rawItems")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+
+
+class EnrichmentRunResponse(BaseModel):
+    processed: int
+    enriched: int
 
 
 class PromptConfigListResponse(BaseModel):

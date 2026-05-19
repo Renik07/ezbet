@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import urlopen
@@ -15,6 +15,9 @@ from xml.etree import ElementTree
 
 from .ai_client import OpenAIEditorialClient
 from .models import NewsItem, PromptConfig, RawItem, SourceItem, SourceSyncState
+
+if TYPE_CHECKING:
+    from .repository import NewsRepository
 
 SUPPORTED_ACTIVE_SOURCE_TYPES = {"rss", "news_sitemap", "sitemap", "scraping", "ai_research"}
 
@@ -306,6 +309,72 @@ def raw_items_to_news(raw_items: Iterable[RawItem]) -> list[NewsItem]:
         )
 
     return items
+
+
+def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> RawItem:
+    existing_full_text = (raw_item.full_text or "").strip()
+    has_usable_full_text = _is_usable_full_text(existing_full_text, raw_item.summary)
+    if (
+        has_usable_full_text
+        and ((raw_item.lead or "").strip() or raw_item.tags)
+    ) or not raw_item.url:
+        return raw_item
+
+    enrichment = extract_article_enrichment(raw_item.url, timeout=10)
+    if enrichment is not None and (
+        enrichment.full_text or enrichment.lead or enrichment.tags
+    ):
+        return (
+            repository.update_raw_item_enrichment(
+                raw_item.id,
+                full_text=enrichment.full_text,
+                lead=enrichment.lead,
+                full_text_source_url=raw_item.url,
+                full_text_source_title=raw_item.source_title,
+                reference_urls=[],
+                extraction_mode="direct_html",
+                enrichment_status="direct_html_ok",
+                tags=enrichment.tags,
+            )
+            or raw_item
+        )
+
+    ai_client = OpenAIEditorialClient()
+    if not ai_client.enabled:
+        return raw_item
+
+    ai_search_enrichment = ai_client.extract_article_enrichment_via_search(
+        url=raw_item.url,
+        source_title=raw_item.source_title,
+        raw_title=raw_item.title,
+        raw_summary=raw_item.summary,
+    )
+    if ai_search_enrichment is None:
+        return (
+            repository.update_raw_item_enrichment(
+                raw_item.id,
+                enrichment_status="search_no_match",
+                enrichment_error="Ни direct HTML extraction, ни web_search fallback не дали пригодный текст этой новости.",
+            )
+            or raw_item
+        )
+
+    return (
+        repository.update_raw_item_enrichment(
+            raw_item.id,
+            full_text=ai_search_enrichment.full_text,
+            lead=ai_search_enrichment.lead,
+            full_text_source_url=ai_search_enrichment.source_url,
+            full_text_source_title=ai_search_enrichment.source_title,
+            reference_urls=ai_search_enrichment.reference_urls,
+            extraction_mode=ai_search_enrichment.generation_mode,
+            enrichment_status=(
+                "web_search_brief_ok" if ai_search_enrichment.full_text else "search_partial_only"
+            ),
+            tags=ai_search_enrichment.tags,
+        )
+        or raw_item
+    )
 
 
 def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
@@ -950,28 +1019,6 @@ def _parse_generic_sitemap_document(
         )
 
     return entries
-
-
-def _extract_ai_research_article_enrichment(
-    *,
-    ai_client: OpenAIEditorialClient,
-    url: str,
-    source_title: str,
-    raw_title: str,
-    raw_summary: str,
-    timeout: int,
-):
-    html = fetch_remote_document(url, timeout=timeout)
-    if not html:
-        return None
-    return ai_client.extract_article_enrichment(
-        url=url,
-        source_title=source_title,
-        raw_title=raw_title,
-        raw_summary=raw_summary,
-        html=html,
-    )
-
 
 def _discover_ai_research_candidates_from_listing(
     source: SourceItem,

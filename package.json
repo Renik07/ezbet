@@ -10,6 +10,8 @@
     "dev:infra": "docker compose -f docker-compose.local.yml up -d postgres redis",
     "dev:api": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} python3 -m uvicorn services.api.app.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:web": "npm run dev --workspace web",
+    "scheduler:tick": "sh ./scripts/scheduler-tick.sh",
+    "scheduler:loop": "sh ./scripts/scheduler-loop.sh",
     "build:web": "npm run build --workspace web",
     "lint:web": "npm run lint --workspace web"
   }

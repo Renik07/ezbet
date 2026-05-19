@@ -18,6 +18,7 @@ from .models import (
     PromptConfig,
     RawItem,
     RawItemPreview,
+    SchedulerSettings,
     SourceItem,
     SourceSyncState,
 )
@@ -93,6 +94,12 @@ class NewsRepository:
                         is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
                         duplicate_of TEXT,
                         full_text TEXT,
+                        full_text_source_url TEXT,
+                        full_text_source_title TEXT,
+                        reference_urls TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+                        extraction_mode TEXT,
+                        enrichment_status TEXT,
+                        enrichment_error TEXT,
                         authors TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
                         tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
                         payload TEXT NOT NULL,
@@ -229,6 +236,40 @@ class NewsRepository:
                     """
                 )
                 cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS scheduler_settings (
+                        id TEXT PRIMARY KEY,
+                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        interval_minutes INTEGER NOT NULL DEFAULT 60,
+                        batch_size INTEGER NOT NULL DEFAULT 5,
+                        run_enrichment BOOLEAN NOT NULL DEFAULT FALSE,
+                        last_run_at TIMESTAMPTZ,
+                        next_run_at TIMESTAMPTZ,
+                        last_status TEXT NOT NULL DEFAULT 'idle',
+                        last_error TEXT,
+                        last_found_count INTEGER NOT NULL DEFAULT 0,
+                        last_saved_count INTEGER NOT NULL DEFAULT 0,
+                        last_published_count INTEGER NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 5"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS run_enrichment BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS last_found_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS last_saved_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS last_published_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
                     "ALTER TABLE source_configs ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'rss'"
                 )
                 cursor.execute(
@@ -331,6 +372,24 @@ class NewsRepository:
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS full_text TEXT"
                 )
                 cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS full_text_source_url TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS full_text_source_title TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS reference_urls TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS extraction_mode TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS enrichment_status TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS enrichment_error TEXT"
+                )
+                cursor.execute(
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS lead TEXT"
                 )
                 cursor.execute(
@@ -347,6 +406,13 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE articles ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO scheduler_settings (id, enabled, interval_minutes, last_status)
+                    VALUES ('default', FALSE, 60, 'idle')
+                    ON CONFLICT (id) DO NOTHING
+                    """
                 )
             connection.commit()
 
@@ -698,6 +764,12 @@ class NewsRepository:
                 is_duplicate,
                 duplicate_of,
                 full_text,
+                full_text_source_url,
+                full_text_source_title,
+                reference_urls,
+                extraction_mode,
+                enrichment_status,
+                enrichment_error,
                 tags,
                 payload
             FROM raw_items
@@ -730,6 +802,12 @@ class NewsRepository:
                 r.triage_label,
                 r.is_duplicate,
                 r.full_text,
+                r.full_text_source_url,
+                r.full_text_source_title,
+                r.reference_urls,
+                r.extraction_mode,
+                r.enrichment_status,
+                r.enrichment_error,
                 r.tags
             FROM raw_items r
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
@@ -746,6 +824,57 @@ class NewsRepository:
                 rows = cursor.fetchall()
 
         return [self._map_raw_preview_row(row) for row in rows]
+
+    def list_pending_enrichment_raw_items(self, limit: int = 20) -> list[RawItem]:
+        statement = """
+            SELECT
+                id,
+                source_key,
+                source_title,
+                source_url,
+                category,
+                normalized_category,
+                external_id,
+                dedupe_key,
+                title,
+                summary,
+                lead,
+                url,
+                published_at,
+                fetched_at,
+                importance_score,
+                triage_label,
+                is_duplicate,
+                duplicate_of,
+                full_text,
+                full_text_source_url,
+                full_text_source_title,
+                reference_urls,
+                extraction_mode,
+                enrichment_status,
+                enrichment_error,
+                tags,
+                payload
+            FROM raw_items
+            WHERE is_duplicate = FALSE
+              AND url IS NOT NULL
+              AND (
+                full_text IS NULL
+                OR BTRIM(full_text) = ''
+                OR lead IS NULL
+                OR BTRIM(lead) = ''
+                OR COALESCE(array_length(tags, 1), 0) = 0
+              )
+            ORDER BY fetched_at DESC, published_at DESC
+            LIMIT %s
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+        return [self._map_raw_row(row) for row in rows]
 
     def get_article_by_slug(self, slug: str) -> Article | None:
         statement = """
@@ -910,6 +1039,141 @@ class NewsRepository:
 
     def get_source_sync_state_map(self) -> dict[str, SourceSyncState]:
         return {item.source_key: item for item in self.list_source_sync_states()}
+
+    def get_scheduler_settings(self) -> SchedulerSettings:
+        statement = """
+            SELECT
+                enabled,
+                interval_minutes,
+                batch_size,
+                run_enrichment,
+                last_run_at,
+                next_run_at,
+                last_status,
+                last_error,
+                last_found_count,
+                last_saved_count,
+                last_published_count,
+                updated_at
+            FROM scheduler_settings
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        if row is None:
+            return SchedulerSettings()
+
+        return self._map_scheduler_settings_row(row)
+
+    def update_scheduler_settings(
+        self,
+        *,
+        enabled: bool,
+        interval_minutes: int,
+        batch_size: int,
+        run_enrichment: bool,
+    ) -> SchedulerSettings:
+        now = datetime.now(timezone.utc)
+        next_run_at = now + timedelta(minutes=interval_minutes) if enabled else None
+
+        statement = """
+            INSERT INTO scheduler_settings (
+                id,
+                enabled,
+                interval_minutes,
+                batch_size,
+                run_enrichment,
+                next_run_at,
+                last_status,
+                updated_at
+            )
+            VALUES ('default', %s, %s, %s, %s, %s, COALESCE((SELECT last_status FROM scheduler_settings WHERE id = 'default'), 'idle'), NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET enabled = EXCLUDED.enabled,
+                interval_minutes = EXCLUDED.interval_minutes,
+                batch_size = EXCLUDED.batch_size,
+                run_enrichment = EXCLUDED.run_enrichment,
+                next_run_at = EXCLUDED.next_run_at,
+                updated_at = NOW()
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (enabled, interval_minutes, batch_size, run_enrichment, next_run_at))
+            connection.commit()
+
+        return self.get_scheduler_settings()
+
+    def mark_scheduler_run(
+        self,
+        *,
+        ran_at: datetime,
+        next_run_at: datetime | None,
+        status: str,
+        error: str | None = None,
+        found_count: int = 0,
+        saved_count: int = 0,
+        published_count: int = 0,
+    ) -> SchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET last_run_at = %s,
+                next_run_at = %s,
+                last_status = %s,
+                last_error = %s,
+                last_found_count = %s,
+                last_saved_count = %s,
+                last_published_count = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    statement,
+                    (
+                        ran_at,
+                        next_run_at,
+                        status,
+                        error,
+                        found_count,
+                        saved_count,
+                        published_count,
+                    ),
+                )
+            connection.commit()
+
+        return self.get_scheduler_settings()
+
+    def set_scheduler_status(self, *, status: str, error: str | None = None) -> SchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET last_status = %s,
+                last_error = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (status, error))
+            connection.commit()
+
+        return self.get_scheduler_settings()
+
+    def recover_scheduler_if_stale(self) -> SchedulerSettings:
+        settings = self.get_scheduler_settings()
+        if settings.last_status != "running":
+            return settings
+        return self.set_scheduler_status(
+            status="idle",
+            error="Recovered stale running status after API restart.",
+        )
 
     def update_source_sync_state(
         self,
@@ -1431,6 +1695,12 @@ class NewsRepository:
                 r.is_duplicate,
                 r.duplicate_of,
                 r.full_text,
+                r.full_text_source_url,
+                r.full_text_source_title,
+                r.reference_urls,
+                r.extraction_mode,
+                r.enrichment_status,
+                r.enrichment_error,
                 r.tags,
                 r.payload
             FROM raw_items r
@@ -1471,6 +1741,12 @@ class NewsRepository:
                 r.is_duplicate,
                 r.duplicate_of,
                 r.full_text,
+                r.full_text_source_url,
+                r.full_text_source_title,
+                r.reference_urls,
+                r.extraction_mode,
+                r.enrichment_status,
+                r.enrichment_error,
                 r.tags,
                 r.payload
             FROM content_plan_items cp
@@ -1511,6 +1787,12 @@ class NewsRepository:
                 is_duplicate,
                 duplicate_of,
                 full_text,
+                full_text_source_url,
+                full_text_source_title,
+                reference_urls,
+                extraction_mode,
+                enrichment_status,
+                enrichment_error,
                 tags,
                 payload
             FROM raw_items
@@ -1822,10 +2104,16 @@ class NewsRepository:
                             is_duplicate,
                             duplicate_of,
                             full_text,
+                            full_text_source_url,
+                            full_text_source_title,
+                            reference_urls,
+                            extraction_mode,
+                            enrichment_status,
+                            enrichment_error,
                             tags,
                             payload
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                         RETURNING id
                         """,
@@ -1849,6 +2137,12 @@ class NewsRepository:
                             item.is_duplicate,
                             item.duplicate_of,
                             item.full_text,
+                            item.full_text_source_url,
+                            item.full_text_source_title,
+                            item.reference_urls,
+                            item.extraction_mode,
+                            item.enrichment_status,
+                            item.enrichment_error,
                             item.tags,
                             item.payload,
                         ),
@@ -1874,13 +2168,35 @@ class NewsRepository:
         *,
         full_text: str | None = None,
         lead: str | None = None,
+        full_text_source_url: str | None = None,
+        full_text_source_title: str | None = None,
+        reference_urls: list[str] | None = None,
+        extraction_mode: str | None = None,
+        enrichment_status: str | None = None,
+        enrichment_error: str | None = None,
         tags: list[str] | None = None,
     ) -> RawItem | None:
         cleaned_full_text = (full_text or "").strip() or None
         cleaned_lead = (lead or "").strip() or None
+        cleaned_full_text_source_url = (full_text_source_url or "").strip() or None
+        cleaned_full_text_source_title = (full_text_source_title or "").strip() or None
+        cleaned_reference_urls = [value.strip() for value in (reference_urls or []) if value.strip()]
+        cleaned_extraction_mode = (extraction_mode or "").strip() or None
+        cleaned_enrichment_status = (enrichment_status or "").strip() or None
+        cleaned_enrichment_error = (enrichment_error or "").strip() or None
         cleaned_tags = [value.strip() for value in (tags or []) if value.strip()]
 
-        if cleaned_full_text is None and cleaned_lead is None and not cleaned_tags:
+        if (
+            cleaned_full_text is None
+            and cleaned_lead is None
+            and cleaned_full_text_source_url is None
+            and cleaned_full_text_source_title is None
+            and not cleaned_reference_urls
+            and cleaned_extraction_mode is None
+            and cleaned_enrichment_status is None
+            and cleaned_enrichment_error is None
+            and not cleaned_tags
+        ):
             return self.get_raw_item(raw_item_id)
 
         with psycopg.connect(self.database_url) as connection:
@@ -1890,12 +2206,25 @@ class NewsRepository:
                     UPDATE raw_items
                     SET full_text = COALESCE(%s, full_text),
                         lead = COALESCE(%s, lead),
+                        full_text_source_url = COALESCE(%s, full_text_source_url),
+                        full_text_source_title = COALESCE(%s, full_text_source_title),
+                        reference_urls = CASE WHEN %s::TEXT[] <> ARRAY[]::TEXT[] THEN %s ELSE reference_urls END,
+                        extraction_mode = COALESCE(%s, extraction_mode),
+                        enrichment_status = COALESCE(%s, enrichment_status),
+                        enrichment_error = COALESCE(%s, enrichment_error),
                         tags = CASE WHEN %s::TEXT[] <> ARRAY[]::TEXT[] THEN %s ELSE tags END
                     WHERE id = %s
                     """,
                     (
                         cleaned_full_text,
                         cleaned_lead,
+                        cleaned_full_text_source_url,
+                        cleaned_full_text_source_title,
+                        cleaned_reference_urls,
+                        cleaned_reference_urls,
+                        cleaned_extraction_mode,
+                        cleaned_enrichment_status,
+                        cleaned_enrichment_error,
                         cleaned_tags,
                         cleaned_tags,
                         raw_item_id,
@@ -2310,8 +2639,14 @@ class NewsRepository:
             is_duplicate=bool(row[16]),
             duplicate_of=row[17],
             full_text=row[18],
-            tags=list(row[19] or []),
-            payload=str(row[20]),
+            full_text_source_url=row[19],
+            full_text_source_title=row[20],
+            reference_urls=list(row[21] or []),
+            extraction_mode=row[22],
+            enrichment_status=row[23],
+            enrichment_error=row[24],
+            tags=list(row[25] or []),
+            payload=str(row[26]),
         )
 
     @staticmethod
@@ -2332,7 +2667,13 @@ class NewsRepository:
             triage_label=str(row[12]),
             is_duplicate=bool(row[13]),
             full_text=row[14],
-            tags=list(row[15] or []),
+            full_text_source_url=row[15],
+            full_text_source_title=row[16],
+            reference_urls=list(row[17] or []),
+            extraction_mode=row[18],
+            enrichment_status=row[19],
+            enrichment_error=row[20],
+            tags=list(row[21] or []),
         )
 
     @staticmethod
@@ -2385,6 +2726,23 @@ class NewsRepository:
             last_status=str(row[28]),
             last_error=row[29],
             updated_at=row[30],
+        )
+
+    @staticmethod
+    def _map_scheduler_settings_row(row: tuple[object, ...]) -> SchedulerSettings:
+        return SchedulerSettings(
+            enabled=bool(row[0]),
+            interval_minutes=int(row[1] or 60),
+            batch_size=int(row[2] or 5),
+            run_enrichment=bool(row[3]),
+            last_run_at=row[4],
+            next_run_at=row[5],
+            last_status=str(row[6] or "idle"),
+            last_error=row[7],
+            last_found_count=int(row[8] or 0),
+            last_saved_count=int(row[9] or 0),
+            last_published_count=int(row[10] or 0),
+            updated_at=row[11],
         )
 
     @staticmethod

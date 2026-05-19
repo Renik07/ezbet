@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import re
 
 from .ai_client import OpenAIEditorialClient
-from .ingestion import extract_article_enrichment, fetch_remote_document
+from .ingestion import enrich_raw_item_content
 from .models import Article, DraftArticle, EditorReview, PromptConfig, RawItem
 from .repository import NewsRepository
 
@@ -220,54 +220,7 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
 
 
 def enrich_raw_item_if_needed(repository: NewsRepository, raw_item: RawItem) -> RawItem:
-    existing_full_text = (raw_item.full_text or "").strip()
-    if (
-        existing_full_text
-        and ((raw_item.lead or "").strip() or raw_item.tags)
-    ) or not raw_item.url:
-        return raw_item
-
-    enrichment = extract_article_enrichment(raw_item.url, timeout=10)
-    if enrichment is not None and (
-        enrichment.full_text or enrichment.lead or enrichment.tags
-    ):
-        return (
-            repository.update_raw_item_enrichment(
-                raw_item.id,
-                full_text=enrichment.full_text,
-                lead=enrichment.lead,
-                tags=enrichment.tags,
-            )
-            or raw_item
-        )
-
-    ai_client = OpenAIEditorialClient()
-    if not ai_client.enabled:
-        return raw_item
-
-    html = fetch_remote_document(raw_item.url, timeout=10)
-    if not html:
-        return raw_item
-
-    ai_enrichment = ai_client.extract_article_enrichment(
-        url=raw_item.url,
-        source_title=raw_item.source_title,
-        raw_title=raw_item.title,
-        raw_summary=raw_item.summary,
-        html=html,
-    )
-    if ai_enrichment is None:
-        return raw_item
-
-    return (
-        repository.update_raw_item_enrichment(
-            raw_item.id,
-            full_text=ai_enrichment.full_text,
-            lead=ai_enrichment.lead,
-            tags=ai_enrichment.tags,
-        )
-        or raw_item
-    )
+    return enrich_raw_item_content(repository, raw_item)
 
 
 def generate_draft(

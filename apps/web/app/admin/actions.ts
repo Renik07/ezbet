@@ -153,6 +153,60 @@ export async function ingestRssTestBatchNow() {
   redirect("/admin?notice=sources-ingested");
 }
 
+export async function saveSchedulerSettingsNow(formData: FormData) {
+  const enabled = String(formData.get("enabled") ?? "") === "on";
+  const intervalMinutes = Number(formData.get("intervalMinutes") ?? 60);
+  const batchSize = Number(formData.get("batchSize") ?? 5);
+  const runEnrichment = String(formData.get("runEnrichment") ?? "") === "on";
+
+  try {
+    await apiPost("/api/v1/scheduler", {
+      enabled,
+      intervalMinutes,
+      batchSize,
+      runEnrichment
+    });
+  } catch (error) {
+    redirectWithError("scheduler-save-error", error);
+  }
+
+  revalidatePath("/admin");
+  redirect("/admin?notice=scheduler-saved");
+}
+
+export async function runSchedulerNow() {
+  try {
+    const response = await apiPost("/api/v1/scheduler/run", {});
+    const payload = (await response.json()) as { ran?: boolean; reason?: string };
+    if (!payload.ran) {
+      throw new Error(`Scheduler не запустился: ${payload.reason ?? "unknown"}`);
+    }
+  } catch (error) {
+    redirectWithError("scheduler-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect("/admin?notice=scheduler-run");
+}
+
+export async function runEnrichmentNow() {
+  try {
+    const response = await apiPost("/api/v1/enrichment/run?limit=10", {});
+    const payload = (await response.json()) as { processed?: number; enriched?: number };
+    const detail = `Обработано ${payload.processed ?? 0}, реально обогащено ${payload.enriched ?? 0}.`;
+    revalidatePath("/admin");
+    revalidatePath("/studio");
+    revalidatePath("/news");
+    revalidatePath("/");
+    redirect(`/admin?notice=enrichment-run&detail=${encodeURIComponent(detail)}`);
+  } catch (error) {
+    redirectWithError("enrichment-run-error", error);
+  }
+}
+
 export async function createSourceNow(formData: FormData) {
   const requestedSourceType = String(formData.get("resolvedSourceType") ?? formData.get("sourceType") ?? "auto");
   const sourceKey = String(formData.get("key") ?? "");

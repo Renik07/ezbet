@@ -252,13 +252,27 @@
 Порядок работы:
 
 1. сначала обычный parser / extractor
-2. если `full_text` слабый или пустой, `AI extraction fallback` по уже скачанному HTML
+2. если `full_text` слабый или пустой, `AI extraction` по уже скачанному HTML без `web_search`
 3. если HTML слабый, обрезанный или не содержит тело статьи, только тогда `AI + web_search`
+
+Продуктовый приоритет для `full_text`:
+
+- главное получить содержательный текст той же новости, даже если он взят не с исходного домена
+- если оригинальная статья не читается, допустимо брать `full_text` с другого надежного источника по тому же инфоповоду
+- для этого нужно сохранять provenance: откуда именно был взят итоговый `full_text`
+
+Практический provenance для `full_text`:
+
+- `source_url` хранит исходный URL новости из `rss / sitemap / scraping`
+- `full_text_source_url` хранит URL страницы, откуда реально взят `full_text`
+- `full_text_source_title` хранит источник, откуда реально взят `full_text`
+- `extraction_mode` показывает путь: `direct_html`, `llm_*_html_extraction` или `llm_*_web_search_extraction`
 
 Принцип:
 
 - `AI search` это не основной способ поиска новостей
 - `AI search` это rescue-layer для extraction и редких проблемных сайтов
+- для `full_text` приоритет у полноты фактуры по тому же инфоповоду, а не у совпадения исходного домена
 
 ### 5.1.2 Discovery vs Enrichment
 
@@ -670,6 +684,7 @@
 - [x] хранение и использование полного текста страницы-источника поверх короткого RSS summary
 - [x] отдельный enrichment-слой для `full_text`, `lead`, `tags`, если их удается извлечь
 - [x] базовый `AI extraction fallback` для article pages, где deterministic extractor не вытягивает `full_text`
+- [ ] усилить `web_search` fallback: несколько search-стратегий и разрешение брать `full_text` с любого надежного источника по тому же инфоповоду
 - [ ] сначала пробовать AI extraction по уже скачанному HTML без `web_search`
 - [ ] item-level enrichment pipeline: добирать только недостающие поля, а не перезапускать весь source flow
 - [ ] ограничить `web_search` budget rules: только top-priority материалы и только после провала обычного extraction
@@ -678,6 +693,14 @@
 - [x] безопасная активация новых источников: только поддерживаемые adapter'ы могут уходить в `active`
 - [x] улучшенное состояние обхода источников: last successful fetch, last successful parse, error counters, retry policy
 - [ ] scheduler с фиксированными окнами, например `09:00 / 12:00 / 15:00 / 18:00`
+- [x] конфигурируемый ingest scheduler: `enabled`, `interval_minutes`, `last_run_at`, `next_run_at`
+- [x] настраиваемый scheduler batch-size на источник
+- [x] первый шаг к разделению быстрого ingest и enrichment: scheduler умеет запускаться без inline enrichment
+- [x] отдельный ручной enrichment run для добора `full_text`, `lead`, `tags` по уже собранным `raw_items`
+- [x] отдельный безопасный scheduler trigger endpoint / job runner для автосбора всех active-источников
+- [x] кнопка и форма в `/admin` для ручной настройки интервала автозагрузки новостей
+- [x] защита от двойного запуска scheduler: advisory lock / job lock и проверка `is_due`
+- [x] scheduler должен брать только новые новости относительно `source_sync_state`, а не перечитывать весь часовой диапазон по wall-clock
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
@@ -688,7 +711,7 @@
 - `rss` -> `raw_items` -> `planner` -> `editorial` -> `articles`
 - watermark / `last_seen` логика по активным RSS-источникам
 - ручной тестовый цикл через `/admin`
-- on-demand `full_text` enrichment перед editorial run для источников, у которых доступна страница статьи
+- `full_text` enrichment сразу после ingestion для источников, у которых доступна страница статьи
 - AI fallback extraction для проблемных страниц статьи, если deterministic parser не справился с `full_text`
 
 Что пока еще MVP-заглушка или упрощение:
@@ -699,6 +722,17 @@
 - базовый `source capability probe` уже есть, но capability profile пока хранится в `source_sync_state`, а не в отдельной сущности
 - админка уже работает по сценарию `Проверить -> Добавить -> active`, но пока еще сохраняет явный `source_type`, а не полностью скрывает adapter-слой
 - scheduler как реальный автозапуск по времени еще не доведен до production-режима
+- текущий sync ingestion уже умеет сразу добирать `full_text`, но для production его нужно развести на быстрый ingest и отдельный background enrichment, чтобы длинние прогоны не падали по времени
+- для production scheduler лучше делать не как вечный таймер внутри web API процесса, а как внешний cron / job trigger, который вызывает ingestion-runner по расписанию
+- watermark-инвариант: запуск в `08:00` не должен повторно тянуть то, что уже было успешно обработано в `07:00`; ориентиром служит `last_published_at / last_external_id`, а не просто текущее время
+
+Локальный dev-тест scheduler:
+
+- включить scheduler и задать интервал в `/admin`
+- разово дернуть scheduler: `npm run scheduler:tick`
+- крутить локальный цикл, имитирующий внешний cron: `npm run scheduler:loop`
+- при необходимости форсировать запуск в обход `is_due`: `SCHEDULER_MODE=run npm run scheduler:tick`
+- при необходимости поменять API URL: `EZBET_API_BASE_URL=http://localhost:8000 npm run scheduler:tick`
 - importance score пока rule-based и базовый
 - planner пока детерминированный, а не AI-assisted
 - RSS чаще всего дает краткий summary, а не полный текст статьи
@@ -987,4 +1021,21 @@ npm run dev:web
 4. Перевести админку с ручного выбора adapter'а на сценарий "добавить сайт"
 5. Собрать capability-based discovery pipeline
 6. Добавить item-level enrichment pipeline до заполнения обязательных полей
-7. Настроить scheduler и провести первый сквозной тест: добавить сайт -> забрать новости -> добрать `full_text` -> опубликовать
+7. Развести production pipeline на быстрый ingest и отдельный background enrichment, чтобы длинняя загрузка новостей не падала
+8. Усилить `web_search` fallback для `full_text`: искать по `title + summary` и разрешать брать текст с любого надежного источника того же инфоповода
+9. Настроить scheduler и провести первый сквозной тест: добавить сайт -> забрать новости -> добрать `full_text` -> опубликовать
+
+# Источники
+1. https://www.sport-express.ru/services/materials/news/se - RSS
+2. https://www.championat.com/sitemap/news.xml - news sitemap
+
+# Убить процесс
+1. lsof -i :8000
+2. kill -9 <PID>
+
+# Commands
+npm run dev:infra
+
+npm run dev:api
+npm run dev:web
+npm run scheduler:tick (npm run scheduler:loop)

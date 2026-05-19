@@ -11,8 +11,11 @@ import {
   ingestRssTestBatchNow,
   probeNewSourceNow,
   resetDatabaseNow,
+  runEnrichmentNow,
+  runSchedulerNow,
   runContentPlannerNow,
   runEditorialNow,
+  saveSchedulerSettingsNow,
   savePromptVersion
 } from "./actions";
 
@@ -71,7 +74,7 @@ export default async function AdminPage({
           sampleUrl: params.probeSampleUrl
         }
       : null;
-  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, isLive, liveError } =
+  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, scheduler, isLive, liveError } =
     await getEditorialStudioData();
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
@@ -110,6 +113,14 @@ export default async function AdminPage({
               className="button-secondary"
               idleLabel="Обновить content plan"
               pendingLabel="Планировщик работает..."
+              disabled={!isLive}
+            />
+          </form>
+          <form action={runEnrichmentNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Добрать full text"
+              pendingLabel="Enrichment работает..."
               disabled={!isLive}
             />
           </form>
@@ -171,6 +182,102 @@ export default async function AdminPage({
             <strong>{drafts.filter((draft) => draft.status === "fallback_only").length}</strong>
             <span>template fallback-only, внутренние и непубликуемые</span>
           </div>
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Ingest scheduler</h2>
+            <p>
+              Автосбор должен запускать ingestion только по расписанию и забирать только новые новости относительно
+              текущего source-state, а не всю ленту заново.
+            </p>
+          </div>
+        </div>
+        <div className="admin-grid" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)" }}>
+          <article className="news-card">
+            <span>scheduler config</span>
+            <h3>Автозагрузка новостей</h3>
+            <form action={saveSchedulerSettingsNow} className="prompt-form">
+              <label className="checkbox-row">
+                <input name="enabled" type="checkbox" defaultChecked={scheduler.enabled} />
+                <span>Включить автоматический сбор новостей</span>
+              </label>
+              <label className="field field-compact">
+                <span>Интервал в минутах</span>
+                <select name="intervalMinutes" defaultValue={String(scheduler.intervalMinutes)}>
+                  <option value="5">5 минут</option>
+                  <option value="15">15 минут</option>
+                  <option value="30">30 минут</option>
+                  <option value="60">60 минут</option>
+                  <option value="120">120 минут</option>
+                  <option value="180">180 минут</option>
+                  <option value="360">360 минут</option>
+                </select>
+              </label>
+              <label className="field field-compact">
+                <span>Размер пачки на источник</span>
+                <select name="batchSize" defaultValue={String(scheduler.batchSize)}>
+                  <option value="3">3 новости</option>
+                  <option value="5">5 новостей</option>
+                  <option value="10">10 новостей</option>
+                  <option value="15">15 новостей</option>
+                  <option value="20">20 новостей</option>
+                </select>
+              </label>
+              <label className="checkbox-row">
+                <input name="runEnrichment" type="checkbox" defaultChecked={scheduler.runEnrichment} />
+                <span>Сразу добирать full text и enrichment в автозапуске</span>
+              </label>
+              <p className="footer-note">
+                В production внешний cron/job должен периодически дёргать scheduler tick, а backend сам решает,
+                пора ли реально запускать ingestion.
+              </p>
+              <p className="footer-note">
+                Если enrichment выключен, автозапуск работает быстрее и стабильнее, а тяжелое добирание текста можно
+                выносить в отдельный фоновый шаг.
+              </p>
+              <div className="source-button-row">
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Сохранить scheduler"
+                  pendingLabel="Сохраняем scheduler..."
+                  disabled={!isLive}
+                />
+                <PendingSubmitButton
+                  className="button-secondary"
+                  formAction={runSchedulerNow}
+                  idleLabel="Запустить сейчас"
+                  pendingLabel="Запускаем scheduler..."
+                  disabled={!isLive}
+                />
+                <PendingSubmitButton
+                  className="button-secondary"
+                  formAction={runEnrichmentNow}
+                  idleLabel="Запустить enrichment"
+                  pendingLabel="Запускаем enrichment..."
+                  disabled={!isLive}
+                />
+              </div>
+            </form>
+          </article>
+          <article className="news-card">
+            <span>scheduler state</span>
+            <h3>{scheduler.enabled ? "Scheduler включён" : "Scheduler выключен"}</h3>
+            <p className="footer-note">Интервал: {scheduler.intervalMinutes} мин.</p>
+            <p className="footer-note">Размер пачки: {scheduler.batchSize} новостей на источник</p>
+            <p className="footer-note">
+              Enrichment в автозапуске: {scheduler.runEnrichment ? "включён" : "выключен"}
+            </p>
+            <p className="footer-note">Последний запуск: {formatDateTime(scheduler.lastRunAt)}</p>
+            <p className="footer-note">Следующий запуск: {formatDateTime(scheduler.nextRunAt)}</p>
+            <p className="footer-note">Последний статус: {scheduler.lastStatus}</p>
+            <p className="footer-note">Найдено новых новостей: {scheduler.lastFoundCount}</p>
+            <p className="footer-note">Сохранено в сырой поток: {scheduler.lastSavedCount}</p>
+            <p className="footer-note">Добавлено в ленту: {scheduler.lastPublishedCount}</p>
+            {scheduler.lastError ? <p className="source-card-error">{scheduler.lastError}</p> : null}
+          </article>
         </div>
       </section>
 
@@ -558,6 +665,18 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return "Тестовая пачка новостей из активных источников загружена в систему.";
     case "sources-ingest-error":
       return detail ? `Загрузка источников не удалась: ${detail}` : "Загрузка источников не удалась.";
+    case "scheduler-saved":
+      return "Настройки автозагрузки новостей сохранены.";
+    case "scheduler-save-error":
+      return detail ? `Scheduler не сохранён: ${detail}` : "Scheduler не сохранён.";
+    case "scheduler-run":
+      return "Scheduler запущен вручную.";
+    case "scheduler-run-error":
+      return detail ? `Scheduler не выполнен: ${detail}` : "Scheduler не выполнен.";
+    case "enrichment-run":
+      return detail ? `Отдельный enrichment завершён: ${detail}` : "Отдельный enrichment завершён.";
+    case "enrichment-run-error":
+      return detail ? `Enrichment не выполнен: ${detail}` : "Enrichment не выполнен.";
     case "source-created":
       return "Новый источник добавлен и сразу активирован.";
     case "source-deleted":
@@ -658,7 +777,7 @@ function getSourceLamp(status?: string, readiness?: string) {
     return { tone: "green", label: "ready" };
   }
   if (readiness === "ready_ai") {
-    return { tone: "green", label: "ready_ai" };
+    return { tone: "green", label: "ready_search" };
   }
   if (readiness === "partial" || readiness === "feed_only") {
     return { tone: "amber", label: readiness };
@@ -679,7 +798,7 @@ function getReadinessBadge(readiness?: string) {
     case "ready":
       return { label: "ready" };
     case "ready_ai":
-      return { label: "ready via AI" };
+      return { label: "ready via web search" };
     case "partial":
       return { label: "partial" };
     case "feed_only":

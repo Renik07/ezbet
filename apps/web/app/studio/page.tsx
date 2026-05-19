@@ -2,6 +2,45 @@ import Link from "next/link";
 
 import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
+function formatExtractionMode(mode?: string) {
+  switch (mode) {
+    case "direct_html":
+      return "direct parser";
+    case "llm_responses_web_search_brief":
+    case "llm_chat_completions_web_search_brief":
+      return "web search brief";
+    case "llm_responses_html_extraction":
+    case "llm_chat_completions_html_extraction":
+      return "legacy ai html";
+    case "llm_responses_web_search_extraction":
+    case "llm_chat_completions_web_search_extraction":
+      return "legacy web search extraction";
+    default:
+      return mode ?? "ещё не извлечён";
+  }
+}
+
+function formatEnrichmentStatus(status?: string) {
+  switch (status) {
+    case "direct_html_ok":
+      return "direct parser ok";
+    case "web_search_brief_ok":
+      return "web search brief ok";
+    case "search_partial_only":
+      return "web search partial";
+    case "search_no_match":
+      return "web search no match";
+    case "enrichment_error":
+      return "enrichment error";
+    case "ai_html_ok":
+      return "legacy ai html ok";
+    case "ai_html_partial_only":
+      return "legacy ai html partial";
+    default:
+      return status ?? "ещё не запускался или не сохранил статус";
+  }
+}
+
 export default async function StudioPage() {
   const data = await getEditorialStudioData();
   const { prompts, drafts, reviews, contentPlan, editorialStatus, isLive } = data;
@@ -102,7 +141,7 @@ export default async function StudioPage() {
                   </p>
                 </div>
                 <div className="compare-block">
-                  <strong>Original full text</strong>
+                  <strong>Original full text / search brief</strong>
                   <div className="compare-text-surface">
                     {rawItem.fullText ? (
                       rawItem.fullText
@@ -110,9 +149,49 @@ export default async function StudioPage() {
                         .filter(Boolean)
                         .map((paragraph, index) => <p key={`${rawItem.id}-full-${index}`}>{paragraph}</p>)
                     ) : (
-                      <p>Полный текст для этой новости пока не извлечён.</p>
+                      <p>Текст для этой новости пока не извлечён.</p>
                     )}
                   </div>
+                </div>
+                <div className="compare-block">
+                  <strong>Full text provenance</strong>
+                  <p>
+                    Способ:{" "}
+                    <strong>{formatExtractionMode(rawItem.extractionMode)}</strong>
+                  </p>
+                  <p>
+                    Статус enrichment:{" "}
+                    <strong>{formatEnrichmentStatus(rawItem.enrichmentStatus)}</strong>
+                  </p>
+                  <p>
+                    Источник текста:{" "}
+                    <strong>{rawItem.fullTextSourceTitle ?? rawItem.sourceTitle}</strong>
+                  </p>
+                  <p>
+                    URL текста:{" "}
+                    {rawItem.fullTextSourceUrl ? (
+                      <a href={rawItem.fullTextSourceUrl} target="_blank" rel="noreferrer">
+                        открыть основной источник текста
+                      </a>
+                    ) : rawItem.fullText ? (
+                      "не сохранён"
+                    ) : (
+                      "ещё не определён"
+                    )}
+                  </p>
+                  {rawItem.referenceUrls.length ? (
+                    <div>
+                      <p>Источники web search:</p>
+                      {rawItem.referenceUrls.map((url) => (
+                        <p key={`${rawItem.id}-${url}`}>
+                          <a href={url} target="_blank" rel="noreferrer">
+                            {url}
+                          </a>
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {rawItem.enrichmentError ? <p>Причина: {rawItem.enrichmentError}</p> : null}
                 </div>
                 <p className="footer-note">
                   {rawItem.sourceTitle} · {rawItem.triageLabel} · score {rawItem.importanceScore}

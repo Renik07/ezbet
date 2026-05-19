@@ -4,12 +4,19 @@ export type RawItem = {
   id: string;
   sourceKey: string;
   sourceTitle: string;
+  sourceUrl: string;
   category: string;
   normalizedCategory: string;
   title: string;
   summary: string;
   lead?: string;
   fullText?: string;
+  fullTextSourceUrl?: string;
+  fullTextSourceTitle?: string;
+  referenceUrls: string[];
+  extractionMode?: string;
+  enrichmentStatus?: string;
+  enrichmentError?: string;
   tags: string[];
   url?: string;
   publishedAt: string;
@@ -135,6 +142,21 @@ export type SourceConfig = {
   notes: string;
 };
 
+export type SchedulerSettings = {
+  enabled: boolean;
+  intervalMinutes: number;
+  batchSize: number;
+  runEnrichment: boolean;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: string;
+  lastError?: string;
+  lastFoundCount: number;
+  lastSavedCount: number;
+  lastPublishedCount: number;
+  updatedAt: string;
+};
+
 export type EditorialStudioData = {
   prompts: PromptConfig[];
   rawItems: RawItem[];
@@ -144,6 +166,7 @@ export type EditorialStudioData = {
   editorialStatus: EditorialStatus;
   sourceStates: SourceSyncState[];
   sources: SourceConfig[];
+  scheduler: SchedulerSettings;
   isLive: boolean;
   liveError?: string;
 };
@@ -358,6 +381,18 @@ const fallbackSources: SourceConfig[] = [
   }
 ];
 
+const fallbackScheduler: SchedulerSettings = {
+  enabled: false,
+  intervalMinutes: 60,
+  batchSize: 5,
+  runEnrichment: false,
+  lastStatus: "idle",
+  lastFoundCount: 0,
+  lastSavedCount: 0,
+  lastPublishedCount: 0,
+  updatedAt: "2026-05-05T10:00:00.000Z"
+};
+
 export async function getEditorialStudioData(): Promise<EditorialStudioData> {
   const baseUrl = resolveApiBaseUrl();
 
@@ -371,6 +406,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialStatus: fallbackEditorialStatus,
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
+      scheduler: fallbackScheduler,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
     };
@@ -385,7 +421,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       contentPlanResponse,
       statusResponse,
       sourceStatesResponse,
-      sourcesResponse
+      sourcesResponse,
+      schedulerResponse
     ] =
       await Promise.all([
       fetch(new URL("/api/v1/prompts", baseUrl).toString(), { next: { revalidate: 30 } }),
@@ -395,7 +432,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       fetch(new URL("/api/v1/content-plan", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/editorial/status", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/source-states", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/sources", baseUrl).toString(), { next: { revalidate: 30 } })
+      fetch(new URL("/api/v1/sources", baseUrl).toString(), { next: { revalidate: 30 } }),
+      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { next: { revalidate: 30 } })
     ]);
 
     if (
@@ -406,7 +444,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       !contentPlanResponse.ok ||
       !statusResponse.ok ||
       !sourceStatesResponse.ok ||
-      !sourcesResponse.ok
+      !sourcesResponse.ok ||
+      !schedulerResponse.ok
     ) {
       const responses: Array<[string, number]> = [
         ["prompts", promptsResponse.status],
@@ -416,7 +455,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
         ["content-plan", contentPlanResponse.status],
         ["status", statusResponse.status],
         ["source-states", sourceStatesResponse.status],
-        ["sources", sourcesResponse.status]
+        ["sources", sourcesResponse.status],
+        ["scheduler", schedulerResponse.status]
       ];
       const failedStatuses = responses
         .filter(([, status]) => status >= 400)
@@ -433,6 +473,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     const statusPayload = (await statusResponse.json()) as EditorialStatus;
     const sourceStatesPayload = (await sourceStatesResponse.json()) as { items: SourceSyncState[] };
     const sourcesPayload = (await sourcesResponse.json()) as { items: SourceConfig[] };
+    const schedulerPayload = (await schedulerResponse.json()) as SchedulerSettings;
 
     return {
       prompts: promptsPayload.items,
@@ -443,6 +484,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialStatus: statusPayload,
       sourceStates: sourceStatesPayload.items,
       sources: sourcesPayload.items,
+      scheduler: schedulerPayload,
       isLive: true
     };
   } catch (error) {
@@ -455,6 +497,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialStatus: fallbackEditorialStatus,
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
+      scheduler: fallbackScheduler,
       isLive: false,
       liveError: error instanceof Error ? error.message : "Unknown API error."
     };

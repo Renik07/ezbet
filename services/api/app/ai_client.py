@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from socket import timeout as SocketTimeout
 from typing import Any
@@ -60,6 +61,10 @@ class ArticleExtractionResult:
     full_text: str | None
     lead: str | None
     tags: list[str]
+    source_url: str | None
+    source_title: str | None
+    reference_urls: list[str]
+    used_web_search: bool
     model: str
     generation_mode: str
 
@@ -459,6 +464,7 @@ class OpenAIEditorialClient:
         raw_title: str,
         raw_summary: str,
         html: str,
+        allow_web_search: bool = False,
     ) -> ArticleExtractionResult | None:
         if not self.enabled:
             return None
@@ -470,20 +476,25 @@ class OpenAIEditorialClient:
             limit=28000,
         )
         input_text = (
-            "Return only valid JSON with keys full_text, lead, tags.\n"
+            "Return only valid JSON with keys full_text, lead, tags, source_url, source_title, source_urls, used_web_search.\n"
             f"url: {url}\n"
             f"source_title: {source_title}\n"
             f"raw_title: {raw_title}\n"
             f"raw_summary: {raw_summary}\n"
             "Rules:\n"
-            "- full_text: extract the main article text only, not a rewrite\n"
+            "- if you can reliably use the provided HTML alone, full_text must be the main article text only, not a rewrite\n"
+            "- if HTML is weak and you use web search, full_text must instead be a concise Russian news brief in 2-4 paragraphs based on the found sources\n"
             "- lead: extract a short intro or lead if it is clearly present\n"
             "- tags: return a short array of topical tags in Russian\n"
+            "- source_url: return the URL of the page whose article text you actually used\n"
+            "- source_title: return the publication/site title whose article text you actually used\n"
+            "- source_urls: return a short array of 1-5 source URLs you actually used when web search was needed; otherwise []\n"
+            "- used_web_search: true only if HTML alone was insufficient and you used web search\n"
             "- ignore menus, promos, related blocks, comments and footer text\n"
             "- if the article text is inside JSON/script data, extract only the article text\n"
-            "- if provided HTML is weak or incomplete, use web search results to find the exact article by URL/title and extract it\n"
-            "- preserve the original wording of the article as much as possible; normalize whitespace only\n"
-            "- do not paraphrase, shorten, rewrite or summarize the article body\n"
+            f"- {'if provided HTML is weak or incomplete, you may use web search results to find the same news and extract it' if allow_web_search else 'do not use web search; work only with the provided HTML'}\n"
+            "- if you used only HTML, preserve the original wording of the article as much as possible; normalize whitespace only\n"
+            "- if you used web search, do not copy a third-party article verbatim; produce a factual Russian brief instead\n"
             "- do not invent facts\n\n"
             f"HTML:\n{prepared_html}"
         )
@@ -496,16 +507,24 @@ class OpenAIEditorialClient:
             payload = self._create_response(
                 instructions=instructions,
                 input_text=input_text,
-                tools=self._build_web_search_tools(url),
+                tools=self._build_web_search_tools(url, restrict_to_source_domain=False) if allow_web_search else None,
                 model=self.settings.search_model,
-                include=["web_search_call.action.sources"] if self._should_enable_web_search_for_request() else None,
+                include=["web_search_call.action.sources"] if allow_web_search and self._should_enable_web_search_for_request() else None,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
-        full_text = _clean_text(data.get("full_text")) or None
-        lead = _clean_text(data.get("lead")) or None
+        full_text = _clean_article_text(data.get("full_text"))
+        lead = _clean_lead_text(data.get("lead"))
+        source_url = _clean_text(data.get("source_url")) or url
+        source_title_value = _clean_text(data.get("source_title")) or source_title
+        reference_urls = _clean_url_list(data.get("source_urls"))
+        used_web_search = bool(data.get("used_web_search")) if allow_web_search else False
+        if used_web_search and full_text is not None and not _is_mostly_russian_text(full_text):
+            full_text = None
+        if lead is not None and not _is_mostly_russian_text(lead):
+            lead = None
         tags_value = data.get("tags")
         tags: list[str] = []
         if isinstance(tags_value, list):
@@ -514,13 +533,132 @@ class OpenAIEditorialClient:
         if full_text is None and lead is None and not tags:
             return None
 
+        if used_web_search and not reference_urls and source_url:
+            reference_urls = [source_url]
+
         return ArticleExtractionResult(
             full_text=full_text,
             lead=lead,
             tags=tags,
+            source_url=source_url,
+            source_title=source_title_value,
+            reference_urls=reference_urls,
+            used_web_search=used_web_search,
             model=self.settings.search_model,
-            generation_mode=f"llm_{self.settings.api_style}_extraction",
+            generation_mode=(
+                f"llm_{self.settings.api_style}_web_search_brief"
+                if used_web_search
+                else f"llm_{self.settings.api_style}_html_extraction"
+            ),
         )
+
+    def extract_article_enrichment_via_search(
+        self,
+        *,
+        url: str,
+        source_title: str,
+        raw_title: str,
+        raw_summary: str,
+    ) -> ArticleExtractionResult | None:
+        if not self.enabled or not self._should_enable_web_search_for_request():
+            return None
+
+        search_profiles = [
+            {
+                "name": "title_summary",
+                "query_hint": (
+                    f'Find the same news story by title and facts: "{raw_title}". Summary facts: {raw_summary}'
+                ),
+                "restrict_to_source_domain": False,
+            },
+        ]
+
+        instructions = (
+            "Ты extraction-слой ezbet.ru. Если HTML исходной страницы недоступен, найди ту же новость через web search "
+            "и достань основной текст статьи и базовые метаданные. Отвечай только JSON."
+        )
+
+        best_partial: ArticleExtractionResult | None = None
+
+        for profile in search_profiles:
+            input_text = (
+                "Return only valid JSON with keys full_text, lead, tags, source_url, source_title, source_urls, used_web_search.\n"
+                f"url: {url}\n"
+                f"source_title: {source_title}\n"
+                f"raw_title: {raw_title}\n"
+                f"raw_summary: {raw_summary}\n"
+                f"search_strategy: {profile['name']}\n"
+                f"query_hint: {profile['query_hint']}\n"
+                "Rules:\n"
+                "- use web search to find the same news story when direct page HTML is unavailable or unusable\n"
+                "- full_text: write a concise Russian news brief in 2-4 short paragraphs based on the sources you found\n"
+                "- lead: extract a short intro or lead if it is clearly present\n"
+                "- tags: return a short array of topical tags in Russian\n"
+                "- source_url: return the main URL you relied on most\n"
+                "- source_title: return the publication/site title you relied on most\n"
+                "- source_urls: return a short array of 1-5 source URLs you actually used\n"
+                "- used_web_search: always true\n"
+                "- prioritize exact title match and the same factual event\n"
+                "- prefer the same domain first when possible, but if unavailable use another trustworthy source with the same news story\n"
+                "- do not reproduce a third-party article verbatim; synthesize a factual brief in Russian\n"
+                "- keep all essential facts that help later editorial rewriting\n"
+                "- do not invent facts"
+            )
+
+            try:
+                payload = self._create_response(
+                    instructions=instructions,
+                    input_text=input_text,
+                    tools=self._build_web_search_tools(
+                        url,
+                        restrict_to_source_domain=bool(profile["restrict_to_source_domain"]),
+                    ),
+                    model=self.settings.search_model,
+                    include=["web_search_call.action.sources"],
+                )
+                data = json.loads(payload)
+            except LLM_REQUEST_EXCEPTIONS:
+                continue
+
+            full_text = _clean_article_text(data.get("full_text"))
+            lead = _clean_lead_text(data.get("lead"))
+            source_url = _clean_text(data.get("source_url")) or url
+            source_title_value = _clean_text(data.get("source_title")) or source_title
+            reference_urls = _clean_url_list(data.get("source_urls"))
+            if full_text is not None and not _is_mostly_russian_text(full_text):
+                full_text = None
+            if lead is not None and not _is_mostly_russian_text(lead):
+                lead = None
+            tags_value = data.get("tags")
+            tags: list[str] = []
+            if isinstance(tags_value, list):
+                tags = [tag for tag in (_clean_text(item) for item in tags_value) if tag]
+
+            if full_text is None and lead is None and not tags:
+                continue
+
+            if not reference_urls and source_url:
+                reference_urls = [source_url]
+
+            candidate = ArticleExtractionResult(
+                full_text=full_text,
+                lead=lead,
+                tags=tags,
+                source_url=source_url,
+                source_title=source_title_value,
+                reference_urls=reference_urls,
+                used_web_search=True,
+                model=self.settings.search_model,
+                generation_mode=f"llm_{self.settings.api_style}_web_search_brief",
+            )
+
+            if full_text is not None:
+                return candidate
+
+            if best_partial is None and (lead is not None or tags):
+                best_partial = candidate
+
+        return best_partial
 
     def _create_response(
         self,
@@ -588,7 +726,7 @@ class OpenAIEditorialClient:
             and "openai.com" in self.settings.base_url
         )
 
-    def _build_web_search_tools(self, url: str) -> list[dict[str, Any]] | None:
+    def _build_web_search_tools(self, url: str, restrict_to_source_domain: bool = True) -> list[dict[str, Any]] | None:
         if not self._should_enable_web_search_for_request():
             return None
 
@@ -599,11 +737,12 @@ class OpenAIEditorialClient:
         tool: dict[str, Any] = {
             "type": "web_search",
             "external_web_access": self.settings.web_search_live,
-            "filters": {
-                "allowed_domains": [host],
-            },
             "search_context_size": self.settings.web_search_context_size,
         }
+        if restrict_to_source_domain and host:
+            tool["filters"] = {
+                "allowed_domains": [host],
+            }
         return [tool]
 
     def _create_chat_completion(self, *, instructions: str, input_text: str, model: str) -> str:
@@ -656,6 +795,71 @@ def _normalize_source_discovery_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if not parts.scheme or not parts.netloc:
         return url.strip()
+
+
+def _clean_article_text(value: Any) -> str | None:
+    cleaned = _clean_text(value) or None
+    if cleaned is None:
+        return None
+
+    normalized = cleaned.lower()
+    refusal_markers = (
+        "не удалось получить html",
+        "не найдено копий этой новости",
+        "не могу предоставить текст статьи",
+        "я ограничен результатами",
+        "html исходной страницы недоступен",
+        "i can't provide the article text",
+        "could not retrieve html",
+    )
+    if any(marker in normalized for marker in refusal_markers):
+        return None
+    return cleaned
+
+
+def _clean_lead_text(value: Any) -> str | None:
+    cleaned = _clean_text(value) or None
+    if cleaned is None:
+        return None
+
+    normalized = cleaned.lower()
+    refusal_markers = (
+        "извините",
+        "не могу предоставить",
+        "не удалось получить",
+        "не найдено копий",
+        "краткое содержание",
+        "summary:",
+        "i can't provide",
+        "sorry",
+    )
+    if any(marker in normalized for marker in refusal_markers):
+        return None
+    return cleaned
+
+
+def _clean_url_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        url = _clean_text(item)
+        if not url or not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        cleaned.append(url)
+    return cleaned[:5]
+
+
+def _is_mostly_russian_text(value: str) -> bool:
+    cyrillic_count = len(re.findall(r"[А-Яа-яЁё]", value))
+    latin_count = len(re.findall(r"[A-Za-z]", value))
+    if cyrillic_count == 0:
+        return False
+    if latin_count == 0:
+        return True
+    return cyrillic_count >= latin_count * 1.5
 
     path = parts.path or "/"
 

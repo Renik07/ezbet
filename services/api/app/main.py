@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+import logging
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -8,9 +11,9 @@ import psycopg
 
 from .ai_client import OpenAIEditorialClient
 from .config import get_openai_settings
-from .editorial import default_prompt_configs, enrich_raw_item_if_needed, run_editorial_cycle
+from .editorial import default_prompt_configs, run_editorial_cycle
 from .ingestion import (
-    fetch_remote_document,
+    enrich_raw_item_content,
     ingest_sources as collect_source_items,
     ingest_sources_with_results,
     probe_source_auto,
@@ -22,6 +25,7 @@ from .models import (
     ContentPlanListResponse,
     ContentPlanRunResponse,
     DraftArticleListResponse,
+    EnrichmentRunResponse,
     EditorialStatusResponse,
     EditorialRunResponse,
     EditorReviewListResponse,
@@ -34,6 +38,9 @@ from .models import (
     RawItemPreviewListResponse,
     RawItem,
     ResetResponse,
+    SchedulerRunResponse,
+    SchedulerSettings,
+    SchedulerSettingsUpdateRequest,
     SourceCreateRequest,
     SourceListResponse,
     SourceProbeResponse,
@@ -48,6 +55,7 @@ from .repository import NewsRepository
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     repository.ensure_schema()
+    repository.recover_scheduler_if_stale()
     repository.ensure_prompt_defaults(default_prompt_configs())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v3")
     repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v3")
@@ -64,6 +72,9 @@ app = FastAPI(
 )
 
 repository = NewsRepository()
+SCHEDULER_LOCK_KEY = 4815162342
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 
 def _raise_source_http_error(exc: Exception) -> None:
@@ -200,15 +211,11 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
                 item for item in collect_source_items([resolved_source], limit=5) if item.url
             ][:5]
             for candidate in probe_candidates:
-                html = fetch_remote_document(candidate.url, timeout=10)
-                if not html:
-                    continue
-                ai_enrichment = ai_client.extract_article_enrichment(
+                ai_enrichment = ai_client.extract_article_enrichment_via_search(
                     url=candidate.url,
                     source_title=source.title,
                     raw_title=candidate.title or result.sample_title or source.title,
                     raw_summary=candidate.summary,
-                    html=html,
                 )
                 if ai_enrichment is None:
                     continue
@@ -221,7 +228,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
                     result.sample_url = candidate.url
                     result.message = (
                         f"Найдено {result.item_count} элементов. Deterministic extraction слабый, "
-                        "но AI fallback успешно извлёк full text у одной из sample-новостей."
+                        "но web_search fallback успешно собрал текст у одной из sample-новостей."
                     )
                     break
                 if ai_enrichment.lead or ai_enrichment.tags:
@@ -232,7 +239,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
                     result.sample_url = candidate.url
                     result.message = (
                         f"Найдено {result.item_count} элементов. Deterministic extraction слабый, "
-                        "AI fallback смог поднять только часть enrichment-данных."
+                        "но web_search fallback смог поднять только часть enrichment-данных."
                     )
     if persist:
         repository.record_source_probe(
@@ -276,6 +283,38 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
 @app.get("/api/v1/source-states", response_model=SourceSyncStateListResponse)
 def list_source_states() -> SourceSyncStateListResponse:
     return SourceSyncStateListResponse(items=repository.list_source_sync_states())
+
+
+@app.get("/api/v1/scheduler", response_model=SchedulerSettings)
+def get_scheduler_settings() -> SchedulerSettings:
+    return repository.get_scheduler_settings()
+
+
+@app.post("/api/v1/scheduler", response_model=SchedulerSettings)
+def update_scheduler_settings(payload: SchedulerSettingsUpdateRequest) -> SchedulerSettings:
+    return repository.update_scheduler_settings(
+        enabled=payload.enabled,
+        interval_minutes=payload.interval_minutes,
+        batch_size=payload.batch_size,
+        run_enrichment=payload.run_enrichment,
+    )
+
+
+@app.post("/api/v1/scheduler/tick", response_model=SchedulerRunResponse)
+def run_scheduler_tick() -> SchedulerRunResponse:
+    return _run_scheduler(force=False)
+
+
+@app.post("/api/v1/scheduler/run", response_model=SchedulerRunResponse)
+def run_scheduler_now() -> SchedulerRunResponse:
+    return _run_scheduler(force=True)
+
+
+@app.post("/api/v1/enrichment/run", response_model=EnrichmentRunResponse)
+def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRunResponse:
+    raw_items = repository.list_pending_enrichment_raw_items(limit=limit)
+    processed, enriched = _run_enrichment_for_raw_items(raw_items)
+    return EnrichmentRunResponse(processed=processed, enriched=enriched)
 
 
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
@@ -373,8 +412,20 @@ def ingest_sources(
     return _run_source_ingestion(limit, per_source=per_source)
 
 
-def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> IngestResponse:
+def _run_source_ingestion(
+    limit: Optional[int],
+    *,
+    per_source: bool = False,
+    run_enrichment: bool = True,
+) -> IngestResponse:
     sources = repository.list_active_sources()
+    logger.info(
+        "Ingestion started: active_sources=%s limit=%s per_source=%s run_enrichment=%s",
+        len(sources),
+        limit,
+        per_source,
+        run_enrichment,
+    )
     ai_search_prompt = repository.get_active_prompt("ai_search")
     raw_items, source_results = ingest_sources_with_results(
         sources,
@@ -383,10 +434,29 @@ def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> 
         limit_per_source=per_source,
         ai_search_prompt=ai_search_prompt,
     )
+    logger.info(
+        "Ingestion collected raw items: total=%s source_results=%s",
+        len(raw_items),
+        len(source_results),
+    )
     inserted_raw_items = repository.insert_raw_items(raw_items)
-    _run_ingestion_enrichment(raw_items)
+    logger.info("Ingestion inserted raw items: inserted=%s", inserted_raw_items)
+    if run_enrichment:
+        _run_ingestion_enrichment(raw_items)
+        logger.info("Ingestion enrichment finished for batch: candidate_items=%s", len(raw_items))
+    else:
+        logger.info("Ingestion enrichment skipped for this run")
     for result in source_results:
         source_items = [item for item in raw_items if item.source_key == result.source.key]
+        logger.info(
+            "Source result: key=%s fetch=%s parse=%s items=%s retry=%s error=%s",
+            result.source.key,
+            result.fetch_status,
+            result.parse_status,
+            len(source_items),
+            result.retry_count,
+            result.error or "-",
+        )
         repository.update_source_sync_state(
             result.source,
             source_items,
@@ -397,6 +467,12 @@ def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> 
         )
     published = repository.upsert_many(raw_items_to_news(raw_items))
     repository.sync_news_ai_review_flags()
+    logger.info(
+        "Ingestion finished: raw_items=%s inserted=%s published=%s",
+        len(raw_items),
+        inserted_raw_items,
+        len(published),
+    )
     return IngestResponse(
         ingested=len(raw_items),
         published=len(published),
@@ -405,12 +481,156 @@ def _run_source_ingestion(limit: Optional[int], *, per_source: bool = False) -> 
     )
 
 
+def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
+    settings = repository.get_scheduler_settings()
+    now = datetime.now(timezone.utc)
+    logger.info(
+        "Scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
+        force,
+        settings.enabled,
+        settings.last_status,
+        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    )
+
+    if not force and not settings.enabled:
+        logger.info("Scheduler skipped: disabled")
+        return SchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
+
+    if not force and settings.next_run_at and settings.next_run_at > now:
+        logger.info(
+            "Scheduler skipped: not due yet now=%s next_run_at=%s",
+            now.isoformat(),
+            settings.next_run_at.isoformat(),
+        )
+        return SchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
+
+    with psycopg.connect(repository.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (SCHEDULER_LOCK_KEY,))
+            row = cursor.fetchone()
+            locked = bool(row and row[0])
+
+        if not locked:
+            logger.info("Scheduler skipped: advisory lock is already held")
+            return SchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
+
+        try:
+            repository.set_scheduler_status(status="running", error=None)
+            logger.info("Scheduler run started")
+            scheduler_batch_size = max(1, settings.batch_size)
+            logger.info(
+                "Scheduler run ingestion mode: limit=%s per_source=%s run_enrichment=%s",
+                scheduler_batch_size,
+                True,
+                settings.run_enrichment,
+            )
+            ingest_response = _run_source_ingestion(
+                limit=scheduler_batch_size,
+                per_source=True,
+                run_enrichment=settings.run_enrichment,
+            )
+            latest_settings = repository.get_scheduler_settings()
+            next_run_at = (
+                now + timedelta(minutes=latest_settings.interval_minutes)
+                if latest_settings.enabled
+                else None
+            )
+            repository.mark_scheduler_run(
+                ran_at=now,
+                next_run_at=next_run_at,
+                status="ok",
+                error=None,
+                found_count=ingest_response.ingested,
+                saved_count=ingest_response.raw_items,
+                published_count=ingest_response.published,
+            )
+            logger.info(
+                "Scheduler run finished: ingested=%s published=%s raw_items=%s next_run_at=%s",
+                ingest_response.ingested,
+                ingest_response.published,
+                ingest_response.raw_items,
+                next_run_at.isoformat() if next_run_at else "-",
+            )
+            return SchedulerRunResponse(
+                ran=True,
+                reason="ok",
+                ingested=ingest_response.ingested,
+                published=ingest_response.published,
+                raw_items=ingest_response.raw_items,
+                next_run_at=next_run_at,
+            )
+        except Exception as exc:
+            latest_settings = repository.get_scheduler_settings()
+            next_run_at = (
+                now + timedelta(minutes=latest_settings.interval_minutes)
+                if latest_settings.enabled
+                else None
+            )
+            repository.mark_scheduler_run(
+                ran_at=now,
+                next_run_at=next_run_at,
+                status="error",
+                error=str(exc),
+            )
+            logger.exception("Scheduler run failed: %s", exc)
+            raise
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEDULER_LOCK_KEY,))
+            logger.info("Scheduler advisory lock released")
+
+
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
-    for item in raw_items:
-        raw_item = repository.get_raw_item(item.id)
+    _run_enrichment_for_raw_items(raw_items)
+
+
+def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
+    candidate_ids = [item.id for item in raw_items if not item.is_duplicate]
+    if not candidate_ids:
+        logger.info("Enrichment skipped: no non-duplicate raw items in batch")
+        return (0, 0)
+    logger.info("Enrichment started: candidates=%s", len(candidate_ids))
+    enriched_count = 0
+
+    def enrich_one(raw_item_id: str) -> None:
+        nonlocal enriched_count
+        raw_item = repository.get_raw_item(raw_item_id)
         if raw_item is None or raw_item.is_duplicate:
-            continue
-        enrich_raw_item_if_needed(repository, raw_item)
+            return
+        before_has_any = bool((raw_item.full_text or "").strip() or (raw_item.lead or "").strip() or raw_item.tags)
+        try:
+            enrich_raw_item_content(repository, raw_item)
+            updated_item = repository.get_raw_item(raw_item_id)
+            after_has_any = bool(
+                updated_item
+                and (
+                    (updated_item.full_text or "").strip()
+                    or (updated_item.lead or "").strip()
+                    or updated_item.tags
+                )
+            )
+            if after_has_any and not before_has_any:
+                enriched_count += 1
+            logger.info("Enrichment finished: raw_item_id=%s source=%s", raw_item_id, raw_item.source_key)
+        except Exception as exc:
+            repository.update_raw_item_enrichment(
+                raw_item_id,
+                enrichment_status="enrichment_error",
+                enrichment_error=f"Enrichment pipeline failed: {exc}",
+            )
+            logger.exception("Enrichment failed: raw_item_id=%s error=%s", raw_item_id, exc)
+
+    max_workers = min(4, len(candidate_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(enrich_one, raw_item_id) for raw_item_id in candidate_ids]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                # Keep source ingestion resilient even if one full-text enrichment path fails.
+                continue
+    logger.info("Enrichment batch completed: candidates=%s", len(candidate_ids))
+    return (len(candidate_ids), enriched_count)
 
 
 @app.post("/api/v1/dev/reset", response_model=ResetResponse)
