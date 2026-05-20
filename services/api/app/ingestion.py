@@ -1072,7 +1072,9 @@ def extract_article_enrichment(url: str | None, timeout: int = 10) -> ArticleEnr
     except ValueError:
         return None
 
-    paragraphs = [paragraph for paragraph in parser.paragraphs if len(paragraph) >= 40]
+    paragraphs = _dedupe_article_paragraphs(
+        [paragraph for paragraph in parser.paragraphs if len(paragraph) >= 40]
+    )
     full_text: str | None = None
     if len(paragraphs) >= 2:
         full_text = "\n\n".join(paragraphs)
@@ -2004,6 +2006,59 @@ def _split_article_text(value: str) -> list[str]:
     if current:
         paragraphs.append(" ".join(current))
     return [paragraph for paragraph in paragraphs if len(paragraph) >= 40]
+
+
+def _dedupe_article_paragraphs(paragraphs: list[str]) -> list[str]:
+    unique: list[str] = []
+    normalized_seen: list[str] = []
+
+    for paragraph in paragraphs:
+        normalized = _normalize_dedupe_text(paragraph)
+        if not normalized:
+            continue
+
+        is_duplicate = False
+        for seen in normalized_seen:
+            if normalized == seen:
+                is_duplicate = True
+                break
+            if normalized in seen and len(normalized) >= int(len(seen) * 0.7):
+                is_duplicate = True
+                break
+            if seen in normalized and len(seen) >= int(len(normalized) * 0.7):
+                is_duplicate = True
+                break
+            if _text_overlap_ratio(normalized, seen) >= 0.9:
+                is_duplicate = True
+                break
+
+        if is_duplicate:
+            continue
+
+        unique.append(paragraph)
+        normalized_seen.append(normalized)
+
+    return unique
+
+
+def _normalize_dedupe_text(value: str) -> str:
+    cleaned = _normalize_whitespace(value).lower()
+    cleaned = cleaned.replace("ё", "е")
+    cleaned = re.sub(r"[^\w\sа-яa-z0-9]", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _text_overlap_ratio(left: str, right: str) -> float:
+    left_tokens = {token for token in left.split() if len(token) > 2}
+    right_tokens = {token for token in right.split() if len(token) > 2}
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    baseline = min(len(left_tokens), len(right_tokens))
+    if baseline == 0:
+        return 0.0
+    return intersection / baseline
 
 
 def _serialize_ai_discovery_payload(source: SourceItem, discovered_items: list[object]) -> str:

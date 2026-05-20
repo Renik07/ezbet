@@ -293,6 +293,62 @@ export async function runEditorialSchedulerNow() {
   redirect(`/admin?notice=editorial-scheduler-run&detail=${encodeURIComponent(detail)}`);
 }
 
+export async function savePublishSchedulerSettingsNow(formData: FormData) {
+  const enabled = String(formData.get("enabled") ?? "") === "on";
+  const intervalMinutes = Number(formData.get("intervalMinutes") ?? 60);
+  const batchSize = Number(formData.get("batchSize") ?? 5);
+
+  try {
+    await apiPost("/api/v1/publish-scheduler", {
+      enabled,
+      intervalMinutes,
+      batchSize
+    });
+  } catch (error) {
+    redirectWithError("publish-scheduler-save-error", error);
+  }
+
+  revalidatePath("/admin");
+  redirect("/admin?notice=publish-scheduler-saved");
+}
+
+export async function runPublishNow() {
+  let detail = "Опубликовано 0.";
+  try {
+    const response = await apiPost("/api/v1/publish/run?limit=10", {});
+    const payload = (await response.json()) as { published?: number };
+    detail = `Опубликовано ${payload.published ?? 0}.`;
+  } catch (error) {
+    redirectWithError("publish-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=publish-run&detail=${encodeURIComponent(detail)}`);
+}
+
+export async function runPublishSchedulerNow() {
+  let detail = "Опубликовано 0.";
+  try {
+    const response = await apiPost("/api/v1/publish-scheduler/run", {});
+    const payload = (await response.json()) as { ran?: boolean; reason?: string; published?: number };
+    if (!payload.ran) {
+      throw new Error(`Publish scheduler не запустился: ${payload.reason ?? "unknown"}`);
+    }
+    detail = `Опубликовано ${payload.published ?? 0}.`;
+  } catch (error) {
+    redirectWithError("publish-scheduler-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=publish-scheduler-run&detail=${encodeURIComponent(detail)}`);
+}
+
 export async function createSourceNow(formData: FormData) {
   const requestedSourceType = String(formData.get("resolvedSourceType") ?? formData.get("sourceType") ?? "auto");
   const sourceKey = String(formData.get("key") ?? "");

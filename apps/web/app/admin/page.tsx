@@ -14,9 +14,12 @@ import {
   runEditorialSchedulerNow,
   runEnrichmentNow,
   runEnrichmentSchedulerNow,
+  runPublishNow,
+  runPublishSchedulerNow,
   runSchedulerNow,
   runContentPlannerNow,
   runEditorialNow,
+  savePublishSchedulerSettingsNow,
   saveEditorialSchedulerSettingsNow,
   saveEnrichmentSchedulerSettingsNow,
   saveSchedulerSettingsNow,
@@ -89,6 +92,7 @@ export default async function AdminPage({
     scheduler,
     enrichmentScheduler,
     editorialScheduler,
+    publishScheduler,
     pipelineRuns,
     isLive,
     liveError
@@ -149,6 +153,14 @@ export default async function AdminPage({
               disabled={!isLive}
             />
           </form>
+          <form action={runPublishNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Опубликовать готовые материалы"
+              pendingLabel="Публикуем материалы..."
+              disabled={!isLive}
+            />
+          </form>
           <Link className="button-secondary" href="/studio">
             Открыть studio
           </Link>
@@ -170,7 +182,10 @@ export default async function AdminPage({
             <p>Последние прогоны ingest, enrichment и editorial, чтобы быстро понимать, что сработало, сколько заняло и где была ошибка.</p>
           </div>
         </div>
-        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
+        <div
+          className="news-grid"
+          style={{ gridTemplateColumns: "1fr", maxHeight: 520, overflowY: "auto", paddingRight: 4 }}
+        >
           {pipelineRuns.length ? (
             pipelineRuns.map((run) => (
               <article key={run.id} className="news-card">
@@ -181,15 +196,7 @@ export default async function AdminPage({
                 <p className="footer-note">
                   Длительность: {formatDuration(run.durationMs)} · завершен: {formatDateTime(run.finishedAt)}
                 </p>
-                <p className="footer-note">
-                  Найдено: {run.foundCount} · сохранено: {run.savedCount} · опубликовано: {run.publishedCount}
-                </p>
-                <p className="footer-note">
-                  Обработано: {run.processedCount} · обогащено: {run.enrichedCount} · planned: {run.plannedCount}
-                </p>
-                <p className="footer-note">
-                  drafts: {run.generatedCount} · reviews: {run.reviewedCount}
-                </p>
+                {renderPipelineRunMetrics(run)}
                 {run.error ? <p className="source-card-error">{run.error}</p> : null}
               </article>
             ))
@@ -465,6 +472,69 @@ export default async function AdminPage({
             <p className="footer-note">Сгенерировано draft: {editorialScheduler.lastGeneratedCount}</p>
             <p className="footer-note">Проверено editor-review: {editorialScheduler.lastReviewedCount}</p>
             {editorialScheduler.lastError ? <p className="source-card-error">{editorialScheduler.lastError}</p> : null}
+          </article>
+        </div>
+        <div className="admin-grid" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)", marginTop: 20 }}>
+          <article className="news-card">
+            <span>publish scheduler config</span>
+            <h3>Автопубликация</h3>
+            <form action={savePublishSchedulerSettingsNow} className="prompt-form">
+              <label className="checkbox-row">
+                <input name="enabled" type="checkbox" defaultChecked={publishScheduler.enabled} />
+                <span>Включить автоматическую публикацию</span>
+              </label>
+              <label className="field field-compact">
+                <span>Интервал в минутах</span>
+                <select name="intervalMinutes" defaultValue={String(publishScheduler.intervalMinutes)}>
+                  <option value="5">5 минут</option>
+                  <option value="15">15 минут</option>
+                  <option value="30">30 минут</option>
+                  <option value="60">60 минут</option>
+                  <option value="120">120 минут</option>
+                  <option value="180">180 минут</option>
+                  <option value="360">360 минут</option>
+                </select>
+              </label>
+              <label className="field field-compact">
+                <span>Размер пачки</span>
+                <select name="batchSize" defaultValue={String(publishScheduler.batchSize)}>
+                  <option value="1">1 материал</option>
+                  <option value="2">2 материала</option>
+                  <option value="5">5 материалов</option>
+                  <option value="10">10 материалов</option>
+                </select>
+              </label>
+              <p className="footer-note">
+                Этот этап публикует только материалы со статусом <strong>ready_for_publish</strong> и
+                <strong> publish decision = publish_auto</strong>. Все `hold` и `skip` остаются вне ленты.
+              </p>
+              <div className="source-button-row">
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Сохранить publish scheduler"
+                  pendingLabel="Сохраняем publish scheduler..."
+                  disabled={!isLive}
+                />
+                <PendingSubmitButton
+                  className="button-secondary"
+                  formAction={runPublishSchedulerNow}
+                  idleLabel="Запустить publish scheduler"
+                  pendingLabel="Запускаем publish scheduler..."
+                  disabled={!isLive}
+                />
+              </div>
+            </form>
+          </article>
+          <article className="news-card">
+            <span>publish scheduler state</span>
+            <h3>{publishScheduler.enabled ? "Publish scheduler включён" : "Publish scheduler выключен"}</h3>
+            <p className="footer-note">Интервал: {publishScheduler.intervalMinutes} мин.</p>
+            <p className="footer-note">Размер пачки: {publishScheduler.batchSize} материалов</p>
+            <p className="footer-note">Последний запуск: {formatDateTime(publishScheduler.lastRunAt)}</p>
+            <p className="footer-note">Следующий запуск: {formatDateTime(publishScheduler.nextRunAt)}</p>
+            <p className="footer-note">Последний статус: {publishScheduler.lastStatus}</p>
+            <p className="footer-note">Опубликовано материалов: {publishScheduler.lastPublishedCount}</p>
+            {publishScheduler.lastError ? <p className="source-card-error">{publishScheduler.lastError}</p> : null}
           </article>
         </div>
       </section>
@@ -907,6 +977,18 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return detail ? `Editorial scheduler выполнен: ${detail}` : "Editorial scheduler выполнен.";
     case "editorial-scheduler-run-error":
       return detail ? `Editorial scheduler не выполнен: ${detail}` : "Editorial scheduler не выполнен.";
+    case "publish-scheduler-saved":
+      return "Настройки publish scheduler сохранены.";
+    case "publish-scheduler-save-error":
+      return detail ? `Publish scheduler не сохранён: ${detail}` : "Publish scheduler не сохранён.";
+    case "publish-scheduler-run":
+      return detail ? `Publish scheduler выполнен: ${detail}` : "Publish scheduler выполнен.";
+    case "publish-scheduler-run-error":
+      return detail ? `Publish scheduler не выполнен: ${detail}` : "Publish scheduler не выполнен.";
+    case "publish-run":
+      return detail ? `Публикация завершена: ${detail}` : "Публикация завершена.";
+    case "publish-run-error":
+      return detail ? `Публикация не выполнена: ${detail}` : "Публикация не выполнена.";
     case "editorial-run":
       return "Editorial run завершён, новые draft-материалы и review-результаты подтянуты.";
     case "editorial-run-error":
@@ -962,6 +1044,8 @@ function formatPipelinePhase(value: string) {
       return "Добор full text";
     case "editorial":
       return "Генерация материалов";
+    case "publish":
+      return "Публикация материалов";
     default:
       return value;
   }
@@ -975,6 +1059,58 @@ function formatPipelineTrigger(value: string) {
       return "ручной запуск";
     default:
       return value;
+  }
+}
+
+function renderPipelineRunMetrics(run: {
+  phase: string;
+  foundCount: number;
+  savedCount: number;
+  publishedCount: number;
+  processedCount: number;
+  enrichedCount: number;
+  plannedCount: number;
+  generatedCount: number;
+  reviewedCount: number;
+}) {
+  switch (run.phase) {
+    case "ingest":
+      return (
+        <p className="footer-note">
+          Найдено: {run.foundCount} · сохранено: {run.savedCount} · добавлено в ленту: {run.publishedCount}
+        </p>
+      );
+    case "enrichment":
+      return (
+        <p className="footer-note">
+          Обработано кандидатов: {run.processedCount} · реально обогащено: {run.enrichedCount}
+        </p>
+      );
+    case "editorial":
+      return (
+        <>
+          <p className="footer-note">
+            Запланировано: {run.plannedCount} · draft-ов создано: {run.generatedCount} · review завершено: {run.reviewedCount}
+          </p>
+          <p className="footer-note">Автоматически опубликовано: {run.publishedCount}</p>
+        </>
+      );
+    case "publish":
+      return <p className="footer-note">Опубликовано материалов: {run.publishedCount}</p>;
+    default:
+      return (
+        <>
+          <p className="footer-note">
+            Найдено: {run.foundCount} · сохранено: {run.savedCount} · опубликовано: {run.publishedCount}
+          </p>
+          <p className="footer-note">
+            Обработано: {run.processedCount} · обогащено: {run.enrichedCount} · planned: {run.plannedCount}
+          </p>
+          <p className="footer-note">
+            drafts: {run.generatedCount} · reviews: {run.reviewedCount}
+          </p>
+        </>
+      );
   }
 }
 

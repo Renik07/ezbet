@@ -141,15 +141,10 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 review_status="reviewed",
                 status="ready_for_publish",
                 review_summary=stored_review.summary,
+                publish_decision="publish_auto",
+                publish_reason=quality_gate.reason,
             )
-            repository.publish_draft_to_news(stored_draft, raw_item)
-            repository.set_draft_review_status(
-                stored_draft.id,
-                review_status="reviewed",
-                status="published",
-                review_summary=stored_review.summary,
-            )
-            repository.set_content_plan_status(raw_item.id, "published")
+            repository.set_content_plan_status(raw_item.id, "ready_to_publish")
         elif quality_gate.decision == "rewrite" and rewrite_enabled:
             rewritten_draft = rewrite_draft(stored_draft, raw_item, writer_prompt, ai_client, quality_gate.reason)
             if rewritten_draft is not None:
@@ -169,21 +164,18 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                         review_status="reviewed",
                         status="ready_for_publish",
                         review_summary=stored_review.summary,
+                        publish_decision="publish_auto",
+                        publish_reason=second_gate.reason,
                     )
-                    repository.publish_draft_to_news(stored_draft, raw_item)
-                    repository.set_draft_review_status(
-                        stored_draft.id,
-                        review_status="reviewed",
-                        status="published",
-                        review_summary=stored_review.summary,
-                    )
-                    repository.set_content_plan_status(raw_item.id, "published")
+                    repository.set_content_plan_status(raw_item.id, "ready_to_publish")
                 else:
                     repository.set_draft_review_status(
                         stored_draft.id,
                         review_status="quality_hold",
                         status="hold",
                         review_summary=second_gate.reason,
+                        publish_decision="publish_hold",
+                        publish_reason=second_gate.reason,
                     )
                     repository.set_content_plan_status(raw_item.id, "hold")
             else:
@@ -192,6 +184,8 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                     review_status="quality_rewrite",
                     status="rewrite_needed",
                     review_summary=quality_gate.reason,
+                    publish_decision="publish_hold",
+                    publish_reason=quality_gate.reason,
                 )
                 repository.set_content_plan_status(raw_item.id, "rewrite_needed")
         elif quality_gate.decision == "rewrite":
@@ -200,6 +194,8 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 review_status="quality_rewrite",
                 status="rewrite_needed",
                 review_summary=quality_gate.reason,
+                publish_decision="publish_hold",
+                publish_reason=quality_gate.reason,
             )
             repository.set_content_plan_status(raw_item.id, "rewrite_needed")
         else:
@@ -209,6 +205,8 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                     review_status="fallback_only",
                     status="fallback_only",
                     review_summary=quality_gate.reason,
+                    publish_decision="publish_skip",
+                    publish_reason=quality_gate.reason,
                 )
                 repository.set_content_plan_status(raw_item.id, "fallback_only")
                 generated.append(repository.get_draft(stored_draft.id) or stored_draft)
@@ -219,6 +217,8 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 review_status="quality_hold",
                 status="hold",
                 review_summary=quality_gate.reason,
+                publish_decision="publish_hold",
+                publish_reason=quality_gate.reason,
             )
             repository.set_content_plan_status(raw_item.id, "hold")
 
@@ -265,6 +265,8 @@ def generate_draft(
         published_at=raw_item.published_at,
         status="draft",
         review_status="pending",
+        publish_decision="publish_pending",
+        publish_reason="Материал еще не прошел editorial quality gate.",
         prompt_config_id=prompt.id,
         prompt_name=prompt.name,
         model=model,
@@ -299,6 +301,8 @@ def rewrite_draft(
         status="draft",
         review_status="pending",
         review_summary=None,
+        publish_decision="publish_pending",
+        publish_reason=reason,
         prompt_config_id=prompt.id,
         prompt_name=prompt.name,
         model=rewritten.model,
@@ -366,7 +370,8 @@ def evaluate_quality_gate(
     body = draft.body.strip()
     summary = raw_item.summary.strip()
     source_title = raw_item.title.strip()
-    source_full_text = " ".join((raw_item.full_text or "").split())
+    source_full_text_paragraphs = unique_paragraphs(raw_item.full_text or "")
+    source_full_text = " ".join(source_full_text_paragraphs)
 
     if not title or not dek or not body:
         return QualityGateResult("hold", "Quality gate: отсутствует обязательная часть материала.")
@@ -384,28 +389,6 @@ def evaluate_quality_gate(
         return QualityGateResult("hold", "Quality gate: обнаружен служебный или шаблонный текст MVP.")
 
     paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
-    if len(paragraphs) < 2:
-        return QualityGateResult("rewrite", "Quality gate: у материала слишком слабая структура, нужен rewrite pass.")
-
-    if normalize_gate_text(title) == normalize_gate_text(source_title):
-        return QualityGateResult("rewrite", "Quality gate: заголовок почти не отличается от source title и требует rewrite pass.")
-
-    min_body_length = max(140, min(len(summary) + 80, 280))
-    if source_full_text:
-        full_text_based_min = max(220, min(int(len(source_full_text) * 0.45), 1100))
-        min_body_length = max(min_body_length, full_text_based_min)
-        if len(source_full_text) >= 550 and len(paragraphs) < 3:
-            return QualityGateResult(
-                "rewrite",
-                "Quality gate: при богатом full_text материал получился слишком сжатым по структуре, нужен rewrite pass.",
-            )
-    if len(body) < min_body_length:
-        if source_full_text:
-            return QualityGateResult(
-                "rewrite",
-                "Quality gate: текст получился слишком коротким относительно полного текста источника.",
-            )
-        return QualityGateResult("rewrite", "Quality gate: текст получился слишком коротким относительно source summary.")
 
     if title == raw_item.title and dek == raw_item.summary and draft.generation_mode == "template":
         return QualityGateResult("rewrite", "Quality gate: материал слишком близок к сырому RSS и требует rewrite pass.")
@@ -413,9 +396,6 @@ def evaluate_quality_gate(
     repeated_paragraphs = len(set(paragraphs)) != len(paragraphs)
     if repeated_paragraphs:
         return QualityGateResult("rewrite", "Quality gate: в тексте обнаружены повторяющиеся абзацы.")
-
-    if "проверить первоисточник" in review.notes.lower() and len(summary) < 120:
-        return QualityGateResult("rewrite", "Quality gate: исходных данных мало, материал лучше переписать или усилить.")
 
     source_similarity = compute_similarity(f"{draft.title} {draft.dek} {body}", f"{raw_item.title} {raw_item.summary}")
     if source_similarity >= 0.82:
@@ -454,6 +434,23 @@ def compute_similarity(left: str, right: str) -> float:
 
 def tokenize_text(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-zA-Zа-яА-Я0-9]+", value.lower()) if len(token) > 2]
+
+
+def unique_paragraphs(value: str) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+
+    for raw_paragraph in value.split("\n\n"):
+        paragraph = " ".join(raw_paragraph.split()).strip()
+        if not paragraph:
+            continue
+        normalized = normalize_gate_text(paragraph)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(paragraph)
+
+    return unique
 
 
 def build_dek(raw_item: RawItem) -> str:

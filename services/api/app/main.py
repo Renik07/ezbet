@@ -37,6 +37,10 @@ from .models import (
     EditorReviewListResponse,
     IngestResponse,
     NewsListResponse,
+    PublishRunResponse,
+    PublishSchedulerRunResponse,
+    PublishSchedulerSettings,
+    PublishSchedulerSettingsUpdateRequest,
     PromptConfigCreateRequest,
     PromptConfigListResponse,
     PromptStatusUpdateRequest,
@@ -65,6 +69,7 @@ async def lifespan(_: FastAPI):
     repository.recover_scheduler_if_stale()
     repository.recover_enrichment_scheduler_if_stale()
     repository.recover_editorial_scheduler_if_stale()
+    repository.recover_publish_scheduler_if_stale()
     repository.ensure_prompt_defaults(default_prompt_configs())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v3")
     repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v3")
@@ -84,6 +89,7 @@ repository = NewsRepository()
 SCHEDULER_LOCK_KEY = 4815162342
 ENRICHMENT_SCHEDULER_LOCK_KEY = 4815162343
 EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
+PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 
@@ -417,6 +423,32 @@ def run_editorial_scheduler_now() -> EditorialSchedulerRunResponse:
     return _run_editorial_scheduler(force=True)
 
 
+@app.get("/api/v1/publish-scheduler", response_model=PublishSchedulerSettings)
+def get_publish_scheduler_settings() -> PublishSchedulerSettings:
+    return repository.get_publish_scheduler_settings()
+
+
+@app.post("/api/v1/publish-scheduler", response_model=PublishSchedulerSettings)
+def update_publish_scheduler_settings(
+    payload: PublishSchedulerSettingsUpdateRequest,
+) -> PublishSchedulerSettings:
+    return repository.update_publish_scheduler_settings(
+        enabled=payload.enabled,
+        interval_minutes=payload.interval_minutes,
+        batch_size=payload.batch_size,
+    )
+
+
+@app.post("/api/v1/publish-scheduler/tick", response_model=PublishSchedulerRunResponse)
+def run_publish_scheduler_tick() -> PublishSchedulerRunResponse:
+    return _run_publish_scheduler(force=False)
+
+
+@app.post("/api/v1/publish-scheduler/run", response_model=PublishSchedulerRunResponse)
+def run_publish_scheduler_now() -> PublishSchedulerRunResponse:
+    return _run_publish_scheduler(force=True)
+
+
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
 def list_raw_items(limit: int = Query(default=50, ge=1, le=200)) -> RawItemListResponse:
     return RawItemListResponse(items=repository.list_raw_items(limit))
@@ -493,6 +525,7 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
     run_id = _run_id("editorial")
     try:
         drafts, reviews = run_editorial_cycle(repository, limit=limit)
+        published_count = len([draft for draft in drafts if draft.status == "published"])
         finished_at = datetime.now(timezone.utc)
         repository.record_pipeline_run(
             run_id=run_id,
@@ -502,6 +535,7 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
             started_at=started_at,
             finished_at=finished_at,
             duration_ms=_duration_ms(started_at, finished_at),
+            published_count=published_count,
             generated_count=len(drafts),
             reviewed_count=len(reviews),
         )
@@ -511,6 +545,39 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
         repository.record_pipeline_run(
             run_id=run_id,
             phase="editorial",
+            trigger="manual",
+            status="error",
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=_duration_ms(started_at, finished_at),
+            error=str(exc),
+        )
+        raise
+
+
+@app.post("/api/v1/publish/run", response_model=PublishRunResponse)
+def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunResponse:
+    started_at = datetime.now(timezone.utc)
+    run_id = _run_id("publish")
+    try:
+        published = _run_publish_for_drafts(limit=limit)
+        finished_at = datetime.now(timezone.utc)
+        repository.record_pipeline_run(
+            run_id=run_id,
+            phase="publish",
+            trigger="manual",
+            status="ok",
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=_duration_ms(started_at, finished_at),
+            published_count=published,
+        )
+        return PublishRunResponse(published=published)
+    except Exception as exc:
+        finished_at = datetime.now(timezone.utc)
+        repository.record_pipeline_run(
+            run_id=run_id,
+            phase="publish",
             trigger="manual",
             status="error",
             started_at=started_at,
@@ -899,6 +966,7 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
             planned_items = run_content_planner(repository, limit=batch_size)
             logger.info("Editorial scheduler planner finished: planned=%s", len(planned_items))
             drafts, reviews = run_editorial_cycle(repository, limit=batch_size)
+            published_count = len([draft for draft in drafts if draft.status == "published"])
             latest_settings = repository.get_editorial_scheduler_settings()
             next_run_at = (
                 now + timedelta(minutes=latest_settings.interval_minutes)
@@ -923,6 +991,7 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
                 started_at=started_at,
                 finished_at=finished_at,
                 duration_ms=_duration_ms(started_at, finished_at),
+                published_count=published_count,
                 planned_count=len(planned_items),
                 generated_count=len(drafts),
                 reviewed_count=len(reviews),
@@ -974,8 +1043,141 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
             logger.info("Editorial scheduler advisory lock released")
 
 
+def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
+    settings = repository.get_publish_scheduler_settings()
+    now = datetime.now(timezone.utc)
+    started_at = datetime.now(timezone.utc)
+    run_id = _run_id("publish")
+    logger.info(
+        "Publish scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
+        force,
+        settings.enabled,
+        settings.last_status,
+        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    )
+
+    if not force and not settings.enabled:
+        logger.info("Publish scheduler skipped: disabled")
+        return PublishSchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
+
+    if not force and settings.next_run_at and settings.next_run_at > now:
+        logger.info(
+            "Publish scheduler skipped: not due yet now=%s next_run_at=%s",
+            now.isoformat(),
+            settings.next_run_at.isoformat(),
+        )
+        return PublishSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
+
+    with psycopg.connect(repository.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (PUBLISH_SCHEDULER_LOCK_KEY,))
+            row = cursor.fetchone()
+            locked = bool(row and row[0])
+
+        if not locked:
+            logger.info("Publish scheduler skipped: advisory lock is already held")
+            return PublishSchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
+
+        try:
+            repository.set_publish_scheduler_status(status="running", error=None)
+            logger.info("Publish scheduler run started")
+            batch_size = max(1, settings.batch_size)
+            published = _run_publish_for_drafts(limit=batch_size)
+            latest_settings = repository.get_publish_scheduler_settings()
+            next_run_at = (
+                now + timedelta(minutes=latest_settings.interval_minutes)
+                if latest_settings.enabled
+                else None
+            )
+            repository.mark_publish_scheduler_run(
+                ran_at=now,
+                next_run_at=next_run_at,
+                status="ok",
+                error=None,
+                published_count=published,
+            )
+            finished_at = datetime.now(timezone.utc)
+            repository.record_pipeline_run(
+                run_id=run_id,
+                phase="publish",
+                trigger="scheduler",
+                status="ok",
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=_duration_ms(started_at, finished_at),
+                published_count=published,
+            )
+            logger.info(
+                "Publish scheduler finished: published=%s next_run_at=%s",
+                published,
+                next_run_at.isoformat() if next_run_at else "-",
+            )
+            return PublishSchedulerRunResponse(
+                ran=True,
+                reason="ok",
+                published=published,
+                next_run_at=next_run_at,
+            )
+        except Exception as exc:
+            latest_settings = repository.get_publish_scheduler_settings()
+            next_run_at = (
+                now + timedelta(minutes=latest_settings.interval_minutes)
+                if latest_settings.enabled
+                else None
+            )
+            repository.mark_publish_scheduler_run(
+                ran_at=now,
+                next_run_at=next_run_at,
+                status="error",
+                error=str(exc),
+            )
+            finished_at = datetime.now(timezone.utc)
+            repository.record_pipeline_run(
+                run_id=run_id,
+                phase="publish",
+                trigger="scheduler",
+                status="error",
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=_duration_ms(started_at, finished_at),
+                error=str(exc),
+            )
+            logger.exception("Publish scheduler failed: %s", exc)
+            raise
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (PUBLISH_SCHEDULER_LOCK_KEY,))
+            logger.info("Publish scheduler advisory lock released")
+
+
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
     _run_enrichment_for_raw_items(raw_items)
+
+
+def _run_publish_for_drafts(*, limit: int) -> int:
+    drafts = repository.list_publishable_drafts(limit=limit)
+    published = 0
+
+    for draft in drafts:
+        raw_item = repository.get_raw_item(draft.raw_item_id)
+        if raw_item is None:
+            continue
+        repository.publish_draft_to_news(draft, raw_item)
+        repository.set_draft_review_status(
+            draft.id,
+            review_status="reviewed",
+            status="published",
+            review_summary=draft.review_summary or "Материал опубликован publish-этапом.",
+            publish_decision="publish_auto",
+            publish_reason="Материал опубликован отдельным publish-этапом.",
+        )
+        repository.set_content_plan_status(raw_item.id, "published")
+        published += 1
+
+    if published:
+        repository.sync_news_ai_review_flags()
+
+    return published
 
 
 def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:

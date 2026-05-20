@@ -709,7 +709,9 @@
 - [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
 - [ ] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`
-- [ ] per-item diagnostics: почему item стал duplicate / не получил `full_text` / не попал в editorial / не был опубликован
+- [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
+- [~] publish rules: базовые `publish_decision / publish_reason` уже есть в editorial-слое; дальше вынести их в отдельный publish scheduler и admin-control
+- [x] publish rules + отдельный publish scheduler: editorial теперь только готовит `ready_for_publish`, а отдельный publish-этап публикует только `publish_auto`
 - [x] базовый блок наблюдаемости в `/admin`: последние прогоны, counters, last successful run, ошибки по этапам
 - [ ] ближайший приоритет: сначала observability и run history для всего pipeline, и только потом publish automation
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода

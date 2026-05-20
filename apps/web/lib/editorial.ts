@@ -24,6 +24,10 @@ export type RawItem = {
   importanceScore: number;
   triageLabel: string;
   isDuplicate: boolean;
+  duplicateOf?: string;
+  contentPlanStatus?: string;
+  contentPlanReason?: string;
+  contentPlanPriorityLabel?: string;
 };
 
 export type PromptConfig = {
@@ -53,6 +57,8 @@ export type DraftArticle = {
   status: string;
   reviewStatus: string;
   reviewSummary?: string;
+  publishDecision: string;
+  publishReason?: string;
   promptConfigId: string;
   promptName: string;
   model: string;
@@ -184,6 +190,18 @@ export type EditorialSchedulerSettings = {
   updatedAt: string;
 };
 
+export type PublishSchedulerSettings = {
+  enabled: boolean;
+  intervalMinutes: number;
+  batchSize: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: string;
+  lastError?: string;
+  lastPublishedCount: number;
+  updatedAt: string;
+};
+
 export type PipelineRun = {
   id: string;
   phase: string;
@@ -215,6 +233,7 @@ export type EditorialStudioData = {
   scheduler: SchedulerSettings;
   enrichmentScheduler: EnrichmentSchedulerSettings;
   editorialScheduler: EditorialSchedulerSettings;
+  publishScheduler: PublishSchedulerSettings;
   pipelineRuns: PipelineRun[];
   isLive: boolean;
   liveError?: string;
@@ -292,6 +311,8 @@ const fallbackDrafts: DraftArticle[] = [
     status: "ready_for_publish",
     reviewStatus: "reviewed",
     reviewSummary: "Структура читается, factual expansion не замечен.",
+    publishDecision: "publish_skip",
+    publishReason: "Fallback preview не публикуется автоматически.",
     promptConfigId: "prompt:writer:v1",
     promptName: "Writer MVP v1",
     model: "local-editor-mvp",
@@ -463,6 +484,15 @@ const fallbackEditorialScheduler: EditorialSchedulerSettings = {
   updatedAt: "2026-05-05T10:00:00.000Z"
 };
 
+const fallbackPublishScheduler: PublishSchedulerSettings = {
+  enabled: false,
+  intervalMinutes: 60,
+  batchSize: 5,
+  lastStatus: "idle",
+  lastPublishedCount: 0,
+  updatedAt: "2026-05-05T10:00:00.000Z"
+};
+
 const fallbackPipelineRuns: PipelineRun[] = [];
 
 export async function getEditorialStudioData(): Promise<EditorialStudioData> {
@@ -481,6 +511,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       scheduler: fallbackScheduler,
       enrichmentScheduler: fallbackEnrichmentScheduler,
       editorialScheduler: fallbackEditorialScheduler,
+      publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
@@ -500,6 +531,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       schedulerResponse,
       enrichmentSchedulerResponse,
       editorialSchedulerResponse,
+      publishSchedulerResponse,
       pipelineRunsResponse
     ] =
       await Promise.all([
@@ -514,6 +546,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/enrichment-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/editorial-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
+      fetch(new URL("/api/v1/publish-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/pipeline-runs?limit=12", baseUrl).toString(), { next: { revalidate: 15 } })
     ]);
 
@@ -529,6 +562,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       !schedulerResponse.ok ||
       !enrichmentSchedulerResponse.ok ||
       !editorialSchedulerResponse.ok ||
+      !publishSchedulerResponse.ok ||
       !pipelineRunsResponse.ok
     ) {
       const responses: Array<[string, number]> = [
@@ -543,6 +577,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
         ["scheduler", schedulerResponse.status],
         ["enrichment-scheduler", enrichmentSchedulerResponse.status],
         ["editorial-scheduler", editorialSchedulerResponse.status],
+        ["publish-scheduler", publishSchedulerResponse.status],
         ["pipeline-runs", pipelineRunsResponse.status]
       ];
       const failedStatuses = responses
@@ -563,6 +598,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     const schedulerPayload = (await schedulerResponse.json()) as SchedulerSettings;
     const enrichmentSchedulerPayload = (await enrichmentSchedulerResponse.json()) as EnrichmentSchedulerSettings;
     const editorialSchedulerPayload = (await editorialSchedulerResponse.json()) as EditorialSchedulerSettings;
+    const publishSchedulerPayload = (await publishSchedulerResponse.json()) as PublishSchedulerSettings;
     const pipelineRunsPayload = (await pipelineRunsResponse.json()) as { items: PipelineRun[] };
 
     return {
@@ -577,6 +613,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       scheduler: schedulerPayload,
       enrichmentScheduler: enrichmentSchedulerPayload,
       editorialScheduler: editorialSchedulerPayload,
+      publishScheduler: publishSchedulerPayload,
       pipelineRuns: pipelineRunsPayload.items,
       isLive: true
     };
@@ -593,6 +630,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       scheduler: fallbackScheduler,
       enrichmentScheduler: fallbackEnrichmentScheduler,
       editorialScheduler: fallbackEditorialScheduler,
+      publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
       isLive: false,
       liveError: error instanceof Error ? error.message : "Unknown API error."

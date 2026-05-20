@@ -41,6 +41,138 @@ function formatEnrichmentStatus(status?: string) {
   }
 }
 
+function formatContentPlanStatus(status?: string) {
+  switch (status) {
+    case "planned":
+      return "запланировано";
+    case "drafted":
+      return "черновик создан";
+    case "ready_to_publish":
+      return "готово к publish-этапу";
+    case "published":
+      return "опубликовано";
+    case "hold":
+      return "остановлено на quality hold";
+    case "rewrite_needed":
+      return "нужен rewrite";
+    case "fallback_only":
+      return "template fallback only";
+    default:
+      return status ?? "ещё не попадало в content plan";
+  }
+}
+
+function formatDraftStatus(status?: string) {
+  switch (status) {
+    case "draft":
+      return "черновик";
+    case "ready_for_publish":
+      return "готово к публикации";
+    case "published":
+      return "опубликовано";
+    case "hold":
+      return "удержано quality gate";
+    case "rewrite_needed":
+      return "ожидает rewrite";
+    case "fallback_only":
+      return "только внутренний fallback";
+    default:
+      return status ?? "черновик ещё не создан";
+  }
+}
+
+function formatReviewStatus(status?: string) {
+  switch (status) {
+    case "pending":
+      return "ещё не проверено";
+    case "reviewed":
+      return "проверено";
+    case "quality_hold":
+      return "quality hold";
+    case "quality_rewrite":
+      return "нужен rewrite по quality gate";
+    case "fallback_only":
+      return "fallback only";
+    default:
+      return status ?? "нет review";
+  }
+}
+
+function formatPublishDecision(decision?: string) {
+  switch (decision) {
+    case "publish_auto":
+      return "автопубликация разрешена";
+    case "publish_hold":
+      return "удержано перед публикацией";
+    case "publish_skip":
+      return "автопубликация запрещена";
+    case "publish_pending":
+      return "решение о публикации еще не принято";
+    default:
+      return decision ?? "нет publish decision";
+  }
+}
+
+function describePipelineState(rawItem: {
+  isDuplicate: boolean;
+  duplicateOf?: string;
+  fullText?: string;
+  contentPlanStatus?: string;
+  contentPlanPriorityLabel?: string;
+  contentPlanReason?: string;
+}) {
+  if (rawItem.isDuplicate) {
+    return `Дубликат: эта новость не пойдет дальше как самостоятельный материал${rawItem.duplicateOf ? `, duplicate_of=${rawItem.duplicateOf}` : ""}.`;
+  }
+  if (!rawItem.fullText) {
+    return "Ожидает enrichment: полный текст еще не получен.";
+  }
+  if (!rawItem.contentPlanStatus) {
+    return "Полный текст уже есть, но новость еще не попала в content plan.";
+  }
+  return `В content plan: ${rawItem.contentPlanStatus}${rawItem.contentPlanPriorityLabel ? ` (${rawItem.contentPlanPriorityLabel})` : ""}.`;
+}
+
+function describeEditorialState(rawItem: {
+  contentPlanStatus?: string;
+  contentPlanReason?: string;
+}, draft?: {
+  status: string;
+  reviewStatus: string;
+  reviewSummary?: string;
+  generationMode: string;
+}) {
+  if (!draft) {
+    if (!rawItem.contentPlanStatus) {
+      return "До editorial-слоя новость еще не дошла: сначала она должна попасть в content plan.";
+    }
+    if (rawItem.contentPlanStatus === "planned") {
+      return "Новость уже в content plan и ждет генерации AI draft.";
+    }
+    return "Draft для этой новости пока не создан.";
+  }
+
+  if (draft.status === "published") {
+    return "Материал прошел editorial-цикл и уже опубликован в ленте.";
+  }
+  if (draft.status === "ready_for_publish") {
+    return "Материал прошел editorial и готов к публикации.";
+  }
+  if (draft.status === "rewrite_needed") {
+    return `Материал остановлен на rewrite: ${draft.reviewSummary ?? "quality gate попросил переписать текст."}`;
+  }
+  if (draft.status === "hold") {
+    return `Материал удержан quality gate: ${draft.reviewSummary ?? "нужна дополнительная проверка."}`;
+  }
+  if (draft.status === "fallback_only" || draft.generationMode === "template") {
+    return `Материал остался во внутреннем fallback-режиме и не должен публиковаться автоматически${draft.reviewSummary ? `: ${draft.reviewSummary}` : "."}`;
+  }
+  if (draft.reviewStatus === "pending") {
+    return "AI draft уже создан, но review-этап еще не завершен.";
+  }
+  return draft.reviewSummary ?? "Материал находится в editorial-пайплайне.";
+}
+
 export default async function StudioPage() {
   const data = await getEditorialStudioData();
   const { prompts, drafts, reviews, contentPlan, editorialStatus, isLive } = data;
@@ -193,6 +325,11 @@ export default async function StudioPage() {
                   ) : null}
                   {rawItem.enrichmentError ? <p>Причина: {rawItem.enrichmentError}</p> : null}
                 </div>
+                <div className="compare-block">
+                  <strong>Pipeline status</strong>
+                  <p>{describePipelineState(rawItem)}</p>
+                  {rawItem.contentPlanReason ? <p>Причина отбора: {rawItem.contentPlanReason}</p> : null}
+                </div>
                 <p className="footer-note">
                   {rawItem.sourceTitle} · {rawItem.triageLabel} · score {rawItem.importanceScore}
                 </p>
@@ -218,6 +355,24 @@ export default async function StudioPage() {
                     Это template fallback. Такой draft не должен автоматически попадать в публикацию.
                   </p>
                 ) : null}
+                <div className="compare-block">
+                  <strong>Editorial status</strong>
+                  <p>
+                    Content plan: <strong>{formatContentPlanStatus(rawItem.contentPlanStatus)}</strong>
+                  </p>
+                  <p>
+                    Draft: <strong>{formatDraftStatus(draft?.status)}</strong>
+                  </p>
+                  <p>
+                    Review: <strong>{formatReviewStatus(draft?.reviewStatus)}</strong>
+                  </p>
+                  <p>
+                    Publish: <strong>{formatPublishDecision(draft?.publishDecision)}</strong>
+                  </p>
+                  <p>{describeEditorialState(rawItem, draft)}</p>
+                  {draft?.reviewSummary ? <p>Причина/итог review: {draft.reviewSummary}</p> : null}
+                  {draft?.publishReason ? <p>Причина publish decision: {draft.publishReason}</p> : null}
+                </div>
                 <div className="compare-block">
                   <strong>AI full text</strong>
                   <div className="compare-text-surface">

@@ -89,6 +89,7 @@ class RawItemPreview(BaseModel):
     importance_score: int = Field(serialization_alias="importanceScore")
     triage_label: str = Field(serialization_alias="triageLabel")
     is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
+    duplicate_of: Optional[str] = Field(default=None, serialization_alias="duplicateOf")
     full_text: Optional[str] = Field(default=None, serialization_alias="fullText")
     full_text_source_url: Optional[str] = Field(default=None, serialization_alias="fullTextSourceUrl")
     full_text_source_title: Optional[str] = Field(default=None, serialization_alias="fullTextSourceTitle")
@@ -96,6 +97,9 @@ class RawItemPreview(BaseModel):
     extraction_mode: Optional[str] = Field(default=None, serialization_alias="extractionMode")
     enrichment_status: Optional[str] = Field(default=None, serialization_alias="enrichmentStatus")
     enrichment_error: Optional[str] = Field(default=None, serialization_alias="enrichmentError")
+    content_plan_status: Optional[str] = Field(default=None, serialization_alias="contentPlanStatus")
+    content_plan_reason: Optional[str] = Field(default=None, serialization_alias="contentPlanReason")
+    content_plan_priority_label: Optional[str] = Field(default=None, serialization_alias="contentPlanPriorityLabel")
     tags: list[str] = Field(default_factory=list)
 
 
@@ -129,6 +133,8 @@ class DraftArticle(BaseModel):
     status: str = "draft"
     review_status: str = Field(default="pending", serialization_alias="reviewStatus")
     review_summary: Optional[str] = Field(default=None, serialization_alias="reviewSummary")
+    publish_decision: str = Field(default="publish_pending", serialization_alias="publishDecision")
+    publish_reason: Optional[str] = Field(default=None, serialization_alias="publishReason")
     prompt_config_id: str = Field(serialization_alias="promptConfigId")
     prompt_name: str = Field(serialization_alias="promptName")
     model: str
@@ -418,9 +424,41 @@ class EditorialSchedulerRunResponse(BaseModel):
     next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
 
 
+class PublishSchedulerSettings(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(default=60, serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, serialization_alias="batchSize")
+    last_run_at: Optional[datetime] = Field(default=None, serialization_alias="lastRunAt")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+    last_status: str = Field(default="idle", serialization_alias="lastStatus")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    last_published_count: int = Field(default=0, serialization_alias="lastPublishedCount")
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class PublishSchedulerSettingsUpdateRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int = Field(ge=5, le=1440, alias="intervalMinutes", serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, ge=1, le=20, alias="batchSize", serialization_alias="batchSize")
+
+
+class PublishSchedulerRunResponse(BaseModel):
+    ran: bool
+    reason: str
+    published: int = 0
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+
+
 class EnrichmentRunResponse(BaseModel):
     processed: int
     enriched: int
+
+
+class PublishRunResponse(BaseModel):
+    published: int
 
 
 class PromptConfigListResponse(BaseModel):

@@ -18,6 +18,7 @@ from .models import (
     EditorReview,
     NewsItem,
     PipelineRun,
+    PublishSchedulerSettings,
     PromptConfig,
     RawItem,
     RawItemPreview,
@@ -143,6 +144,8 @@ class NewsRepository:
                         status TEXT NOT NULL DEFAULT 'draft',
                         review_status TEXT NOT NULL DEFAULT 'pending',
                         review_summary TEXT,
+                        publish_decision TEXT NOT NULL DEFAULT 'publish_pending',
+                        publish_reason TEXT,
                         prompt_config_id TEXT NOT NULL,
                         prompt_name TEXT NOT NULL,
                         model TEXT NOT NULL,
@@ -351,6 +354,36 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_reviewed_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_interval_minutes INTEGER NOT NULL DEFAULT 60"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_batch_size INTEGER NOT NULL DEFAULT 5"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_last_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_next_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_last_status TEXT NOT NULL DEFAULT 'idle'"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_last_error TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_last_published_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS publish_decision TEXT NOT NULL DEFAULT 'publish_pending'"
+                )
+                cursor.execute(
+                    "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS publish_reason TEXT"
                 )
                 cursor.execute(
                     "ALTER TABLE source_configs ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'rss'"
@@ -1001,6 +1034,7 @@ class NewsRepository:
                 r.importance_score,
                 r.triage_label,
                 r.is_duplicate,
+                r.duplicate_of,
                 r.full_text,
                 r.full_text_source_url,
                 r.full_text_source_title,
@@ -1008,8 +1042,12 @@ class NewsRepository:
                 r.extraction_mode,
                 r.enrichment_status,
                 r.enrichment_error,
+                cp.status,
+                cp.reason,
+                cp.priority_label,
                 r.tags
             FROM raw_items r
+            LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
             ORDER BY
                 CASE WHEN d.raw_item_id IS NOT NULL THEN 0 ELSE 1 END,
@@ -1327,6 +1365,32 @@ class NewsRepository:
 
         return self._map_editorial_scheduler_settings_row(row)
 
+    def get_publish_scheduler_settings(self) -> PublishSchedulerSettings:
+        statement = """
+            SELECT
+                publish_enabled,
+                publish_interval_minutes,
+                publish_batch_size,
+                publish_last_run_at,
+                publish_next_run_at,
+                publish_last_status,
+                publish_last_error,
+                publish_last_published_count,
+                updated_at
+            FROM scheduler_settings
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        if row is None:
+            return PublishSchedulerSettings()
+
+        return self._map_publish_scheduler_settings_row(row)
+
     def update_scheduler_settings(
         self,
         *,
@@ -1437,6 +1501,42 @@ class NewsRepository:
             connection.commit()
 
         return self.get_editorial_scheduler_settings()
+
+    def update_publish_scheduler_settings(
+        self,
+        *,
+        enabled: bool,
+        interval_minutes: int,
+        batch_size: int,
+    ) -> PublishSchedulerSettings:
+        now = datetime.now(timezone.utc)
+        next_run_at = now + timedelta(minutes=interval_minutes) if enabled else None
+
+        statement = """
+            INSERT INTO scheduler_settings (
+                id,
+                publish_enabled,
+                publish_interval_minutes,
+                publish_batch_size,
+                publish_next_run_at,
+                publish_last_status,
+                updated_at
+            )
+            VALUES ('default', %s, %s, %s, %s, COALESCE((SELECT publish_last_status FROM scheduler_settings WHERE id = 'default'), 'idle'), NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET publish_enabled = EXCLUDED.publish_enabled,
+                publish_interval_minutes = EXCLUDED.publish_interval_minutes,
+                publish_batch_size = EXCLUDED.publish_batch_size,
+                publish_next_run_at = EXCLUDED.publish_next_run_at,
+                updated_at = NOW()
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
+            connection.commit()
+
+        return self.get_publish_scheduler_settings()
 
     def mark_scheduler_run(
         self,
@@ -1619,6 +1719,63 @@ class NewsRepository:
 
         return self.get_editorial_scheduler_settings()
 
+    def mark_publish_scheduler_run(
+        self,
+        *,
+        ran_at: datetime,
+        next_run_at: datetime | None,
+        status: str,
+        error: str | None = None,
+        published_count: int = 0,
+    ) -> PublishSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET publish_last_run_at = %s,
+                publish_next_run_at = %s,
+                publish_last_status = %s,
+                publish_last_error = %s,
+                publish_last_published_count = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    statement,
+                    (
+                        ran_at,
+                        next_run_at,
+                        status,
+                        error,
+                        published_count,
+                    ),
+                )
+            connection.commit()
+
+        return self.get_publish_scheduler_settings()
+
+    def set_publish_scheduler_status(
+        self,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> PublishSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET publish_last_status = %s,
+                publish_last_error = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (status, error))
+            connection.commit()
+
+        return self.get_publish_scheduler_settings()
+
     def recover_scheduler_if_stale(self) -> SchedulerSettings:
         settings = self.get_scheduler_settings()
         if settings.last_status != "running":
@@ -1642,6 +1799,15 @@ class NewsRepository:
         if settings.last_status != "running":
             return settings
         return self.set_editorial_scheduler_status(
+            status="idle",
+            error="Recovered stale running status after API restart.",
+        )
+
+    def recover_publish_scheduler_if_stale(self) -> PublishSchedulerSettings:
+        settings = self.get_publish_scheduler_settings()
+        if settings.last_status != "running":
+            return settings
+        return self.set_publish_scheduler_status(
             status="idle",
             error="Recovered stale running status after API restart.",
         )
@@ -2027,6 +2193,8 @@ class NewsRepository:
                 status,
                 review_status,
                 review_summary,
+                publish_decision,
+                publish_reason,
                 prompt_config_id,
                 prompt_name,
                 model,
@@ -2243,6 +2411,44 @@ class NewsRepository:
 
         return [self._map_raw_row(row) for row in rows]
 
+    def list_publishable_drafts(self, limit: int = 5) -> list[DraftArticle]:
+        statement = """
+            SELECT
+                id,
+                raw_item_id,
+                title,
+                dek,
+                body,
+                category,
+                source_title,
+                source_url,
+                published_at,
+                status,
+                review_status,
+                review_summary,
+                publish_decision,
+                publish_reason,
+                prompt_config_id,
+                prompt_name,
+                model,
+                generation_mode,
+                created_at,
+                updated_at
+            FROM draft_articles
+            WHERE status = 'ready_for_publish'
+              AND review_status = 'reviewed'
+              AND publish_decision = 'publish_auto'
+            ORDER BY updated_at ASC, published_at DESC
+            LIMIT %s
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+        return [self._map_draft_row(row) for row in rows]
+
     def get_raw_item(self, raw_item_id: str) -> RawItem | None:
         statement = """
             SELECT
@@ -2302,6 +2508,8 @@ class NewsRepository:
                 status,
                 review_status,
                 review_summary,
+                publish_decision,
+                publish_reason,
                 prompt_config_id,
                 prompt_name,
                 model,
@@ -2340,12 +2548,14 @@ class NewsRepository:
                         status,
                         review_status,
                         review_summary,
+                        publish_decision,
+                        publish_reason,
                         prompt_config_id,
                         prompt_name,
                         model,
                         generation_mode
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         title = EXCLUDED.title,
                         dek = EXCLUDED.dek,
@@ -2357,6 +2567,8 @@ class NewsRepository:
                         status = EXCLUDED.status,
                         review_status = EXCLUDED.review_status,
                         review_summary = EXCLUDED.review_summary,
+                        publish_decision = EXCLUDED.publish_decision,
+                        publish_reason = EXCLUDED.publish_reason,
                         prompt_config_id = EXCLUDED.prompt_config_id,
                         prompt_name = EXCLUDED.prompt_name,
                         model = EXCLUDED.model,
@@ -2376,6 +2588,8 @@ class NewsRepository:
                         draft.status,
                         draft.review_status,
                         draft.review_summary,
+                        draft.publish_decision,
+                        draft.publish_reason,
                         draft.prompt_config_id,
                         draft.prompt_name,
                         draft.model,
@@ -2502,6 +2716,8 @@ class NewsRepository:
         review_status: str,
         status: str,
         review_summary: str,
+        publish_decision: str | None = None,
+        publish_reason: str | None = None,
     ) -> None:
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
@@ -2511,10 +2727,12 @@ class NewsRepository:
                     SET review_status = %s,
                         status = %s,
                         review_summary = %s,
+                        publish_decision = COALESCE(%s, publish_decision),
+                        publish_reason = COALESCE(%s, publish_reason),
                         updated_at = NOW()
                     WHERE id = %s
                     """,
-                    (review_status, status, review_summary, draft_id),
+                    (review_status, status, review_summary, publish_decision, publish_reason, draft_id),
                 )
             connection.commit()
 
@@ -3144,14 +3362,18 @@ class NewsRepository:
             importance_score=int(row[11]),
             triage_label=str(row[12]),
             is_duplicate=bool(row[13]),
-            full_text=row[14],
-            full_text_source_url=row[15],
-            full_text_source_title=row[16],
-            reference_urls=list(row[17] or []),
-            extraction_mode=row[18],
-            enrichment_status=row[19],
-            enrichment_error=row[20],
-            tags=list(row[21] or []),
+            duplicate_of=row[14],
+            full_text=row[15],
+            full_text_source_url=row[16],
+            full_text_source_title=row[17],
+            reference_urls=list(row[18] or []),
+            extraction_mode=row[19],
+            enrichment_status=row[20],
+            enrichment_error=row[21],
+            content_plan_status=row[22],
+            content_plan_reason=row[23],
+            content_plan_priority_label=row[24],
+            tags=list(row[25] or []),
         )
 
     @staticmethod
@@ -3259,6 +3481,22 @@ class NewsRepository:
         )
 
     @staticmethod
+    def _map_publish_scheduler_settings_row(
+        row: tuple[object, ...]
+    ) -> PublishSchedulerSettings:
+        return PublishSchedulerSettings(
+            enabled=bool(row[0]),
+            interval_minutes=int(row[1] or 60),
+            batch_size=int(row[2] or 5),
+            last_run_at=row[3],
+            next_run_at=row[4],
+            last_status=str(row[5] or "idle"),
+            last_error=row[6],
+            last_published_count=int(row[7] or 0),
+            updated_at=row[8],
+        )
+
+    @staticmethod
     def _map_pipeline_run_row(row: tuple[object, ...]) -> PipelineRun:
         return PipelineRun(
             id=str(row[0]),
@@ -3294,12 +3532,14 @@ class NewsRepository:
             status=str(row[9]),
             review_status=str(row[10]),
             review_summary=row[11],
-            prompt_config_id=str(row[12]),
-            prompt_name=str(row[13]),
-            model=str(row[14]),
-            generation_mode=str(row[15]),
-            created_at=row[16],
-            updated_at=row[17],
+            publish_decision=str(row[12]),
+            publish_reason=row[13],
+            prompt_config_id=str(row[14]),
+            prompt_name=str(row[15]),
+            model=str(row[16]),
+            generation_mode=str(row[17]),
+            created_at=row[18],
+            updated_at=row[19],
         )
 
     @staticmethod
