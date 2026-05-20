@@ -2,9 +2,41 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+_DOTENV_LOADED = False
+
+
+def _load_dotenv() -> None:
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+
+    root_dir = Path(__file__).resolve().parents[3]
+    env_path = root_dir / ".env"
+    if not env_path.exists():
+        _DOTENV_LOADED = True
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if value and len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+    _DOTENV_LOADED = True
 
 
 def _get_env(name: str, default: str | None = None) -> str | None:
+    _load_dotenv()
     value = os.getenv(name)
     if value is None:
         return default
@@ -39,7 +71,7 @@ class OpenAISettings:
 
 
 def get_openai_settings() -> OpenAISettings:
-    default_model = _get_env("OPENAI_MODEL", "gpt-5") or "gpt-5"
+    default_model = _get_env("OPENAI_MODEL", "gpt-5-mini") or "gpt-5-mini"
     return OpenAISettings(
         api_key=_get_env("OPENAI_API_KEY"),
         editorial_model=_get_env("OPENAI_EDITORIAL_MODEL", default_model) or default_model,

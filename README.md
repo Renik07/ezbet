@@ -697,10 +697,21 @@
 - [x] настраиваемый scheduler batch-size на источник
 - [x] первый шаг к разделению быстрого ingest и enrichment: scheduler умеет запускаться без inline enrichment
 - [x] отдельный ручной enrichment run для добора `full_text`, `lead`, `tags` по уже собранным `raw_items`
+- [x] отдельный enrichment scheduler: свой `enabled`, `interval_minutes`, `batch_size`, `tick/run` и состояние последнего прогона
 - [x] отдельный безопасный scheduler trigger endpoint / job runner для автосбора всех active-источников
 - [x] кнопка и форма в `/admin` для ручной настройки интервала автозагрузки новостей
 - [x] защита от двойного запуска scheduler: advisory lock / job lock и проверка `is_due`
 - [x] scheduler должен брать только новые новости относительно `source_sync_state`, а не перечитывать весь часовой диапазон по wall-clock
+- [ ] вернуть shortlist для enrichment scheduler после этапа тестов: по `score / triage / freshness / duplicate-state`, без draft-элементов
+- [x] editorial scheduler как отдельный автоматический этап после enrichment
+- [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
+- [ ] publish scheduler / publish rules как отдельный этап после editorial
+- [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
+- [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
+- [ ] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`
+- [ ] per-item diagnostics: почему item стал duplicate / не получил `full_text` / не попал в editorial / не был опубликован
+- [x] базовый блок наблюдаемости в `/admin`: последние прогоны, counters, last successful run, ошибки по этапам
+- [ ] ближайший приоритет: сначала observability и run history для всего pipeline, и только потом publish automation
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
@@ -725,6 +736,8 @@
 - текущий sync ingestion уже умеет сразу добирать `full_text`, но для production его нужно развести на быстрый ingest и отдельный background enrichment, чтобы длинние прогоны не падали по времени
 - для production scheduler лучше делать не как вечный таймер внутри web API процесса, а как внешний cron / job trigger, который вызывает ingestion-runner по расписанию
 - watermark-инвариант: запуск в `08:00` не должен повторно тянуть то, что уже было успешно обработано в `07:00`; ориентиром служит `last_published_at / last_external_id`, а не просто текущее время
+- `full_text` и тяжелый enrichment не должны идти по всему потоку подряд; сначала нужен shortlist нужных новостей, и только потом дорогой добор контекста
+- для production нужна не только консольная отладка, а полноценная observability-модель: structured logs, run history, item diagnostics и admin-панель состояния pipeline
 
 Локальный dev-тест scheduler:
 
@@ -941,8 +954,8 @@ npm run dev
 
 ```env
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5
-OPENAI_EDITORIAL_MODEL=gpt-5
+OPENAI_MODEL=gpt-5-mini
+OPENAI_EDITORIAL_MODEL=gpt-5-mini
 OPENAI_SEARCH_MODEL=gpt-5-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_STYLE=responses

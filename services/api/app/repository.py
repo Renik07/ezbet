@@ -13,8 +13,11 @@ from .models import (
     Article,
     ContentPlanItem,
     DraftArticle,
+    EnrichmentSchedulerSettings,
+    EditorialSchedulerSettings,
     EditorReview,
     NewsItem,
+    PipelineRun,
     PromptConfig,
     RawItem,
     RawItemPreview,
@@ -255,6 +258,29 @@ class NewsRepository:
                     """
                 )
                 cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pipeline_runs (
+                        id TEXT PRIMARY KEY,
+                        phase TEXT NOT NULL,
+                        trigger TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        started_at TIMESTAMPTZ NOT NULL,
+                        finished_at TIMESTAMPTZ NOT NULL,
+                        duration_ms INTEGER NOT NULL DEFAULT 0,
+                        found_count INTEGER NOT NULL DEFAULT 0,
+                        saved_count INTEGER NOT NULL DEFAULT 0,
+                        published_count INTEGER NOT NULL DEFAULT 0,
+                        processed_count INTEGER NOT NULL DEFAULT 0,
+                        enriched_count INTEGER NOT NULL DEFAULT 0,
+                        planned_count INTEGER NOT NULL DEFAULT 0,
+                        generated_count INTEGER NOT NULL DEFAULT 0,
+                        reviewed_count INTEGER NOT NULL DEFAULT 0,
+                        error TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 5"
                 )
                 cursor.execute(
@@ -268,6 +294,63 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS last_published_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_interval_minutes INTEGER NOT NULL DEFAULT 60"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_batch_size INTEGER NOT NULL DEFAULT 10"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_next_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_status TEXT NOT NULL DEFAULT 'idle'"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_error TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_processed_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_enriched_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_interval_minutes INTEGER NOT NULL DEFAULT 60"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_batch_size INTEGER NOT NULL DEFAULT 5"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_next_run_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_status TEXT NOT NULL DEFAULT 'idle'"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_error TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_planned_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_generated_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_reviewed_count INTEGER NOT NULL DEFAULT 0"
                 )
                 cursor.execute(
                     "ALTER TABLE source_configs ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'rss'"
@@ -784,6 +867,123 @@ class NewsRepository:
 
         return [self._map_raw_row(row) for row in rows]
 
+    def list_pipeline_runs(self, limit: int = 20) -> list[PipelineRun]:
+        statement = """
+            SELECT
+                id,
+                phase,
+                trigger,
+                status,
+                started_at,
+                finished_at,
+                duration_ms,
+                found_count,
+                saved_count,
+                published_count,
+                processed_count,
+                enriched_count,
+                planned_count,
+                generated_count,
+                reviewed_count,
+                error
+            FROM pipeline_runs
+            ORDER BY started_at DESC, created_at DESC
+            LIMIT %s
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+        return [self._map_pipeline_run_row(row) for row in rows]
+
+    def record_pipeline_run(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        trigger: str,
+        status: str,
+        started_at: datetime,
+        finished_at: datetime,
+        duration_ms: int,
+        found_count: int = 0,
+        saved_count: int = 0,
+        published_count: int = 0,
+        processed_count: int = 0,
+        enriched_count: int = 0,
+        planned_count: int = 0,
+        generated_count: int = 0,
+        reviewed_count: int = 0,
+        error: str | None = None,
+    ) -> PipelineRun:
+        statement = """
+            INSERT INTO pipeline_runs (
+                id,
+                phase,
+                trigger,
+                status,
+                started_at,
+                finished_at,
+                duration_ms,
+                found_count,
+                saved_count,
+                published_count,
+                processed_count,
+                enriched_count,
+                planned_count,
+                generated_count,
+                reviewed_count,
+                error
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    statement,
+                    (
+                        run_id,
+                        phase,
+                        trigger,
+                        status,
+                        started_at,
+                        finished_at,
+                        duration_ms,
+                        found_count,
+                        saved_count,
+                        published_count,
+                        processed_count,
+                        enriched_count,
+                        planned_count,
+                        generated_count,
+                        reviewed_count,
+                        error,
+                    ),
+                )
+            connection.commit()
+
+        return PipelineRun(
+            id=run_id,
+            phase=phase,
+            trigger=trigger,
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=duration_ms,
+            found_count=found_count,
+            saved_count=saved_count,
+            published_count=published_count,
+            processed_count=processed_count,
+            enriched_count=enriched_count,
+            planned_count=planned_count,
+            generated_count=generated_count,
+            reviewed_count=reviewed_count,
+            error=error,
+        )
+
     def list_raw_item_previews(self, limit: int = 50) -> list[RawItemPreview]:
         statement = """
             SELECT
@@ -828,44 +1028,47 @@ class NewsRepository:
     def list_pending_enrichment_raw_items(self, limit: int = 20) -> list[RawItem]:
         statement = """
             SELECT
-                id,
-                source_key,
-                source_title,
-                source_url,
-                category,
-                normalized_category,
-                external_id,
-                dedupe_key,
-                title,
-                summary,
-                lead,
-                url,
-                published_at,
-                fetched_at,
-                importance_score,
-                triage_label,
-                is_duplicate,
-                duplicate_of,
-                full_text,
-                full_text_source_url,
-                full_text_source_title,
-                reference_urls,
-                extraction_mode,
-                enrichment_status,
-                enrichment_error,
-                tags,
-                payload
-            FROM raw_items
-            WHERE is_duplicate = FALSE
-              AND url IS NOT NULL
+                r.id,
+                r.source_key,
+                r.source_title,
+                r.source_url,
+                r.category,
+                r.normalized_category,
+                r.external_id,
+                r.dedupe_key,
+                r.title,
+                r.summary,
+                r.lead,
+                r.url,
+                r.published_at,
+                r.fetched_at,
+                r.importance_score,
+                r.triage_label,
+                r.is_duplicate,
+                r.duplicate_of,
+                r.full_text,
+                r.full_text_source_url,
+                r.full_text_source_title,
+                r.reference_urls,
+                r.extraction_mode,
+                r.enrichment_status,
+                r.enrichment_error,
+                r.tags,
+                r.payload
+            FROM raw_items r
+            LEFT JOIN draft_articles d ON d.raw_item_id = r.id
+            WHERE r.is_duplicate = FALSE
+              AND d.raw_item_id IS NULL
+              AND r.url IS NOT NULL
+              AND r.fetched_at >= NOW() - INTERVAL '48 hours'
               AND (
-                full_text IS NULL
-                OR BTRIM(full_text) = ''
-                OR lead IS NULL
-                OR BTRIM(lead) = ''
-                OR COALESCE(array_length(tags, 1), 0) = 0
+                r.full_text IS NULL
+                OR BTRIM(r.full_text) = ''
+                OR r.lead IS NULL
+                OR BTRIM(r.lead) = ''
+                OR COALESCE(array_length(r.tags, 1), 0) = 0
               )
-            ORDER BY fetched_at DESC, published_at DESC
+            ORDER BY r.published_at DESC, r.fetched_at DESC, r.importance_score DESC
             LIMIT %s
         """
 
@@ -1069,6 +1272,61 @@ class NewsRepository:
 
         return self._map_scheduler_settings_row(row)
 
+    def get_enrichment_scheduler_settings(self) -> EnrichmentSchedulerSettings:
+        statement = """
+            SELECT
+                enrichment_enabled,
+                enrichment_interval_minutes,
+                enrichment_batch_size,
+                enrichment_last_run_at,
+                enrichment_next_run_at,
+                enrichment_last_status,
+                enrichment_last_error,
+                enrichment_last_processed_count,
+                enrichment_last_enriched_count,
+                updated_at
+            FROM scheduler_settings
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        if row is None:
+            return EnrichmentSchedulerSettings()
+
+        return self._map_enrichment_scheduler_settings_row(row)
+
+    def get_editorial_scheduler_settings(self) -> EditorialSchedulerSettings:
+        statement = """
+            SELECT
+                editorial_enabled,
+                editorial_interval_minutes,
+                editorial_batch_size,
+                editorial_last_run_at,
+                editorial_next_run_at,
+                editorial_last_status,
+                editorial_last_error,
+                editorial_last_planned_count,
+                editorial_last_generated_count,
+                editorial_last_reviewed_count,
+                updated_at
+            FROM scheduler_settings
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        if row is None:
+            return EditorialSchedulerSettings()
+
+        return self._map_editorial_scheduler_settings_row(row)
+
     def update_scheduler_settings(
         self,
         *,
@@ -1107,6 +1365,78 @@ class NewsRepository:
             connection.commit()
 
         return self.get_scheduler_settings()
+
+    def update_enrichment_scheduler_settings(
+        self,
+        *,
+        enabled: bool,
+        interval_minutes: int,
+        batch_size: int,
+    ) -> EnrichmentSchedulerSettings:
+        now = datetime.now(timezone.utc)
+        next_run_at = now + timedelta(minutes=interval_minutes) if enabled else None
+
+        statement = """
+            INSERT INTO scheduler_settings (
+                id,
+                enrichment_enabled,
+                enrichment_interval_minutes,
+                enrichment_batch_size,
+                enrichment_next_run_at,
+                enrichment_last_status,
+                updated_at
+            )
+            VALUES ('default', %s, %s, %s, %s, COALESCE((SELECT enrichment_last_status FROM scheduler_settings WHERE id = 'default'), 'idle'), NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET enrichment_enabled = EXCLUDED.enrichment_enabled,
+                enrichment_interval_minutes = EXCLUDED.enrichment_interval_minutes,
+                enrichment_batch_size = EXCLUDED.enrichment_batch_size,
+                enrichment_next_run_at = EXCLUDED.enrichment_next_run_at,
+                updated_at = NOW()
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
+            connection.commit()
+
+        return self.get_enrichment_scheduler_settings()
+
+    def update_editorial_scheduler_settings(
+        self,
+        *,
+        enabled: bool,
+        interval_minutes: int,
+        batch_size: int,
+    ) -> EditorialSchedulerSettings:
+        now = datetime.now(timezone.utc)
+        next_run_at = now + timedelta(minutes=interval_minutes) if enabled else None
+
+        statement = """
+            INSERT INTO scheduler_settings (
+                id,
+                editorial_enabled,
+                editorial_interval_minutes,
+                editorial_batch_size,
+                editorial_next_run_at,
+                editorial_last_status,
+                updated_at
+            )
+            VALUES ('default', %s, %s, %s, %s, COALESCE((SELECT editorial_last_status FROM scheduler_settings WHERE id = 'default'), 'idle'), NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET editorial_enabled = EXCLUDED.editorial_enabled,
+                editorial_interval_minutes = EXCLUDED.editorial_interval_minutes,
+                editorial_batch_size = EXCLUDED.editorial_batch_size,
+                editorial_next_run_at = EXCLUDED.editorial_next_run_at,
+                updated_at = NOW()
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
+            connection.commit()
+
+        return self.get_editorial_scheduler_settings()
 
     def mark_scheduler_run(
         self,
@@ -1166,11 +1496,152 @@ class NewsRepository:
 
         return self.get_scheduler_settings()
 
+    def mark_enrichment_scheduler_run(
+        self,
+        *,
+        ran_at: datetime,
+        next_run_at: datetime | None,
+        status: str,
+        error: str | None = None,
+        processed_count: int = 0,
+        enriched_count: int = 0,
+    ) -> EnrichmentSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET enrichment_last_run_at = %s,
+                enrichment_next_run_at = %s,
+                enrichment_last_status = %s,
+                enrichment_last_error = %s,
+                enrichment_last_processed_count = %s,
+                enrichment_last_enriched_count = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    statement,
+                    (
+                        ran_at,
+                        next_run_at,
+                        status,
+                        error,
+                        processed_count,
+                        enriched_count,
+                    ),
+                )
+            connection.commit()
+
+        return self.get_enrichment_scheduler_settings()
+
+    def set_enrichment_scheduler_status(
+        self,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> EnrichmentSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET enrichment_last_status = %s,
+                enrichment_last_error = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (status, error))
+            connection.commit()
+
+        return self.get_enrichment_scheduler_settings()
+
+    def mark_editorial_scheduler_run(
+        self,
+        *,
+        ran_at: datetime,
+        next_run_at: datetime | None,
+        status: str,
+        error: str | None = None,
+        planned_count: int = 0,
+        generated_count: int = 0,
+        reviewed_count: int = 0,
+    ) -> EditorialSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET editorial_last_run_at = %s,
+                editorial_next_run_at = %s,
+                editorial_last_status = %s,
+                editorial_last_error = %s,
+                editorial_last_planned_count = %s,
+                editorial_last_generated_count = %s,
+                editorial_last_reviewed_count = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    statement,
+                    (
+                        ran_at,
+                        next_run_at,
+                        status,
+                        error,
+                        planned_count,
+                        generated_count,
+                        reviewed_count,
+                    ),
+                )
+            connection.commit()
+
+        return self.get_editorial_scheduler_settings()
+
+    def set_editorial_scheduler_status(
+        self,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> EditorialSchedulerSettings:
+        statement = """
+            UPDATE scheduler_settings
+            SET editorial_last_status = %s,
+                editorial_last_error = %s,
+                updated_at = NOW()
+            WHERE id = 'default'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (status, error))
+            connection.commit()
+
+        return self.get_editorial_scheduler_settings()
+
     def recover_scheduler_if_stale(self) -> SchedulerSettings:
         settings = self.get_scheduler_settings()
         if settings.last_status != "running":
             return settings
         return self.set_scheduler_status(
+            status="idle",
+            error="Recovered stale running status after API restart.",
+        )
+
+    def recover_enrichment_scheduler_if_stale(self) -> EnrichmentSchedulerSettings:
+        settings = self.get_enrichment_scheduler_settings()
+        if settings.last_status != "running":
+            return settings
+        return self.set_enrichment_scheduler_status(
+            status="idle",
+            error="Recovered stale running status after API restart.",
+        )
+
+    def recover_editorial_scheduler_if_stale(self) -> EditorialSchedulerSettings:
+        settings = self.get_editorial_scheduler_settings()
+        if settings.last_status != "running":
+            return settings
+        return self.set_editorial_scheduler_status(
             status="idle",
             error="Recovered stale running status after API restart.",
         )
@@ -1707,8 +2178,15 @@ class NewsRepository:
             LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             WHERE r.is_duplicate = FALSE
               AND cp.raw_item_id IS NULL
-              AND r.triage_label IN ('high', 'medium')
-            ORDER BY r.importance_score DESC, r.published_at DESC
+            ORDER BY
+                CASE r.triage_label
+                    WHEN 'high' THEN 0
+                    WHEN 'medium' THEN 1
+                    ELSE 2
+                END,
+                r.importance_score DESC,
+                r.fetched_at DESC,
+                r.published_at DESC
             LIMIT %s
         """
 
@@ -2743,6 +3221,62 @@ class NewsRepository:
             last_saved_count=int(row[9] or 0),
             last_published_count=int(row[10] or 0),
             updated_at=row[11],
+        )
+
+    @staticmethod
+    def _map_enrichment_scheduler_settings_row(
+        row: tuple[object, ...]
+    ) -> EnrichmentSchedulerSettings:
+        return EnrichmentSchedulerSettings(
+            enabled=bool(row[0]),
+            interval_minutes=int(row[1] or 60),
+            batch_size=int(row[2] or 10),
+            last_run_at=row[3],
+            next_run_at=row[4],
+            last_status=str(row[5] or "idle"),
+            last_error=row[6],
+            last_processed_count=int(row[7] or 0),
+            last_enriched_count=int(row[8] or 0),
+            updated_at=row[9],
+        )
+
+    @staticmethod
+    def _map_editorial_scheduler_settings_row(
+        row: tuple[object, ...]
+    ) -> EditorialSchedulerSettings:
+        return EditorialSchedulerSettings(
+            enabled=bool(row[0]),
+            interval_minutes=int(row[1] or 60),
+            batch_size=int(row[2] or 5),
+            last_run_at=row[3],
+            next_run_at=row[4],
+            last_status=str(row[5] or "idle"),
+            last_error=row[6],
+            last_planned_count=int(row[7] or 0),
+            last_generated_count=int(row[8] or 0),
+            last_reviewed_count=int(row[9] or 0),
+            updated_at=row[10],
+        )
+
+    @staticmethod
+    def _map_pipeline_run_row(row: tuple[object, ...]) -> PipelineRun:
+        return PipelineRun(
+            id=str(row[0]),
+            phase=str(row[1]),
+            trigger=str(row[2]),
+            status=str(row[3]),
+            started_at=row[4],
+            finished_at=row[5],
+            duration_ms=int(row[6] or 0),
+            found_count=int(row[7] or 0),
+            saved_count=int(row[8] or 0),
+            published_count=int(row[9] or 0),
+            processed_count=int(row[10] or 0),
+            enriched_count=int(row[11] or 0),
+            planned_count=int(row[12] or 0),
+            generated_count=int(row[13] or 0),
+            reviewed_count=int(row[14] or 0),
+            error=row[15],
         )
 
     @staticmethod

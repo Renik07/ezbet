@@ -179,6 +179,25 @@ class ContentPlanItem(BaseModel):
     )
 
 
+class PipelineRun(BaseModel):
+    id: str
+    phase: str
+    trigger: str
+    status: str
+    started_at: datetime = Field(serialization_alias="startedAt")
+    finished_at: datetime = Field(serialization_alias="finishedAt")
+    duration_ms: int = Field(serialization_alias="durationMs")
+    found_count: int = Field(default=0, serialization_alias="foundCount")
+    saved_count: int = Field(default=0, serialization_alias="savedCount")
+    published_count: int = Field(default=0, serialization_alias="publishedCount")
+    processed_count: int = Field(default=0, serialization_alias="processedCount")
+    enriched_count: int = Field(default=0, serialization_alias="enrichedCount")
+    planned_count: int = Field(default=0, serialization_alias="plannedCount")
+    generated_count: int = Field(default=0, serialization_alias="generatedCount")
+    reviewed_count: int = Field(default=0, serialization_alias="reviewedCount")
+    error: Optional[str] = None
+
+
 class NewsListResponse(BaseModel):
     items: list[NewsItem]
 
@@ -193,6 +212,10 @@ class RawItemListResponse(BaseModel):
 
 class RawItemPreviewListResponse(BaseModel):
     items: list[RawItemPreview]
+
+
+class PipelineRunListResponse(BaseModel):
+    items: list[PipelineRun]
 
 
 class IngestResponse(BaseModel):
@@ -330,6 +353,68 @@ class SchedulerRunResponse(BaseModel):
     ingested: int = 0
     published: int = 0
     raw_items: int = Field(default=0, serialization_alias="rawItems")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+
+
+class EnrichmentSchedulerSettings(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(default=60, serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=10, serialization_alias="batchSize")
+    last_run_at: Optional[datetime] = Field(default=None, serialization_alias="lastRunAt")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+    last_status: str = Field(default="idle", serialization_alias="lastStatus")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    last_processed_count: int = Field(default=0, serialization_alias="lastProcessedCount")
+    last_enriched_count: int = Field(default=0, serialization_alias="lastEnrichedCount")
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class EnrichmentSchedulerSettingsUpdateRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int = Field(ge=5, le=1440, alias="intervalMinutes", serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=10, ge=1, le=50, alias="batchSize", serialization_alias="batchSize")
+
+
+class EnrichmentSchedulerRunResponse(BaseModel):
+    ran: bool
+    reason: str
+    processed: int = 0
+    enriched: int = 0
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+
+
+class EditorialSchedulerSettings(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(default=60, serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, serialization_alias="batchSize")
+    last_run_at: Optional[datetime] = Field(default=None, serialization_alias="lastRunAt")
+    next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
+    last_status: str = Field(default="idle", serialization_alias="lastStatus")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    last_planned_count: int = Field(default=0, serialization_alias="lastPlannedCount")
+    last_generated_count: int = Field(default=0, serialization_alias="lastGeneratedCount")
+    last_reviewed_count: int = Field(default=0, serialization_alias="lastReviewedCount")
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        serialization_alias="updatedAt",
+    )
+
+
+class EditorialSchedulerSettingsUpdateRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int = Field(ge=5, le=1440, alias="intervalMinutes", serialization_alias="intervalMinutes")
+    batch_size: int = Field(default=5, ge=1, le=20, alias="batchSize", serialization_alias="batchSize")
+
+
+class EditorialSchedulerRunResponse(BaseModel):
+    ran: bool
+    reason: str
+    planned: int = 0
+    generated: int = 0
+    reviewed: int = 0
     next_run_at: Optional[datetime] = Field(default=None, serialization_alias="nextRunAt")
 
 

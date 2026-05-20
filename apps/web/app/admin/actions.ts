@@ -125,6 +125,25 @@ export async function runContentPlannerNow() {
   redirect("/admin?notice=content-plan-run");
 }
 
+export async function saveEditorialSchedulerSettingsNow(formData: FormData) {
+  const enabled = String(formData.get("enabled") ?? "") === "on";
+  const intervalMinutes = Number(formData.get("intervalMinutes") ?? 60);
+  const batchSize = Number(formData.get("batchSize") ?? 5);
+
+  try {
+    await apiPost("/api/v1/editorial-scheduler", {
+      enabled,
+      intervalMinutes,
+      batchSize
+    });
+  } catch (error) {
+    redirectWithError("editorial-scheduler-save-error", error);
+  }
+
+  revalidatePath("/admin");
+  redirect("/admin?notice=editorial-scheduler-saved");
+}
+
 export async function resetDatabaseNow() {
   try {
     await apiPost("/api/v1/dev/reset", {});
@@ -174,6 +193,25 @@ export async function saveSchedulerSettingsNow(formData: FormData) {
   redirect("/admin?notice=scheduler-saved");
 }
 
+export async function saveEnrichmentSchedulerSettingsNow(formData: FormData) {
+  const enabled = String(formData.get("enabled") ?? "") === "on";
+  const intervalMinutes = Number(formData.get("intervalMinutes") ?? 60);
+  const batchSize = Number(formData.get("batchSize") ?? 10);
+
+  try {
+    await apiPost("/api/v1/enrichment-scheduler", {
+      enabled,
+      intervalMinutes,
+      batchSize
+    });
+  } catch (error) {
+    redirectWithError("enrichment-scheduler-save-error", error);
+  }
+
+  revalidatePath("/admin");
+  redirect("/admin?notice=enrichment-scheduler-saved");
+}
+
 export async function runSchedulerNow() {
   try {
     const response = await apiPost("/api/v1/scheduler/run", {});
@@ -193,18 +231,66 @@ export async function runSchedulerNow() {
 }
 
 export async function runEnrichmentNow() {
+  let detail = "Обработано 0, реально обогащено 0.";
   try {
     const response = await apiPost("/api/v1/enrichment/run?limit=10", {});
     const payload = (await response.json()) as { processed?: number; enriched?: number };
-    const detail = `Обработано ${payload.processed ?? 0}, реально обогащено ${payload.enriched ?? 0}.`;
-    revalidatePath("/admin");
-    revalidatePath("/studio");
-    revalidatePath("/news");
-    revalidatePath("/");
-    redirect(`/admin?notice=enrichment-run&detail=${encodeURIComponent(detail)}`);
+    detail = `Обработано ${payload.processed ?? 0}, реально обогащено ${payload.enriched ?? 0}.`;
   } catch (error) {
     redirectWithError("enrichment-run-error", error);
   }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=enrichment-run&detail=${encodeURIComponent(detail)}`);
+}
+
+export async function runEnrichmentSchedulerNow() {
+  let detail = "Обработано 0, реально обогащено 0.";
+  try {
+    const response = await apiPost("/api/v1/enrichment-scheduler/run", {});
+    const payload = (await response.json()) as { ran?: boolean; reason?: string; processed?: number; enriched?: number };
+    if (!payload.ran) {
+      throw new Error(`Enrichment scheduler не запустился: ${payload.reason ?? "unknown"}`);
+    }
+    detail = `Обработано ${payload.processed ?? 0}, реально обогащено ${payload.enriched ?? 0}.`;
+  } catch (error) {
+    redirectWithError("enrichment-scheduler-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=enrichment-scheduler-run&detail=${encodeURIComponent(detail)}`);
+}
+
+export async function runEditorialSchedulerNow() {
+  let detail = "Запланировано 0, сгенерировано 0, проверено 0.";
+  try {
+    const response = await apiPost("/api/v1/editorial-scheduler/run", {});
+    const payload = (await response.json()) as {
+      ran?: boolean;
+      reason?: string;
+      planned?: number;
+      generated?: number;
+      reviewed?: number;
+    };
+    if (!payload.ran) {
+      throw new Error(`Editorial scheduler не запустился: ${payload.reason ?? "unknown"}`);
+    }
+    detail = `Запланировано ${payload.planned ?? 0}, сгенерировано ${payload.generated ?? 0}, проверено ${payload.reviewed ?? 0}.`;
+  } catch (error) {
+    redirectWithError("editorial-scheduler-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=editorial-scheduler-run&detail=${encodeURIComponent(detail)}`);
 }
 
 export async function createSourceNow(formData: FormData) {

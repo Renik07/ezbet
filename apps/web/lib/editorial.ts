@@ -157,6 +157,52 @@ export type SchedulerSettings = {
   updatedAt: string;
 };
 
+export type EnrichmentSchedulerSettings = {
+  enabled: boolean;
+  intervalMinutes: number;
+  batchSize: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: string;
+  lastError?: string;
+  lastProcessedCount: number;
+  lastEnrichedCount: number;
+  updatedAt: string;
+};
+
+export type EditorialSchedulerSettings = {
+  enabled: boolean;
+  intervalMinutes: number;
+  batchSize: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: string;
+  lastError?: string;
+  lastPlannedCount: number;
+  lastGeneratedCount: number;
+  lastReviewedCount: number;
+  updatedAt: string;
+};
+
+export type PipelineRun = {
+  id: string;
+  phase: string;
+  trigger: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  foundCount: number;
+  savedCount: number;
+  publishedCount: number;
+  processedCount: number;
+  enrichedCount: number;
+  plannedCount: number;
+  generatedCount: number;
+  reviewedCount: number;
+  error?: string;
+};
+
 export type EditorialStudioData = {
   prompts: PromptConfig[];
   rawItems: RawItem[];
@@ -167,6 +213,9 @@ export type EditorialStudioData = {
   sourceStates: SourceSyncState[];
   sources: SourceConfig[];
   scheduler: SchedulerSettings;
+  enrichmentScheduler: EnrichmentSchedulerSettings;
+  editorialScheduler: EditorialSchedulerSettings;
+  pipelineRuns: PipelineRun[];
   isLive: boolean;
   liveError?: string;
 };
@@ -285,7 +334,7 @@ const fallbackContentPlan: ContentPlanItem[] = [
 
 const fallbackEditorialStatus: EditorialStatus = {
   openaiEnabled: false,
-  openaiModel: "gpt-5",
+  openaiModel: "gpt-5-mini",
   openaiSearchModel: "gpt-5-mini",
   fallbackMode: true,
   providerLabel: "OpenAI",
@@ -393,6 +442,29 @@ const fallbackScheduler: SchedulerSettings = {
   updatedAt: "2026-05-05T10:00:00.000Z"
 };
 
+const fallbackEnrichmentScheduler: EnrichmentSchedulerSettings = {
+  enabled: false,
+  intervalMinutes: 60,
+  batchSize: 10,
+  lastStatus: "idle",
+  lastProcessedCount: 0,
+  lastEnrichedCount: 0,
+  updatedAt: "2026-05-05T10:00:00.000Z"
+};
+
+const fallbackEditorialScheduler: EditorialSchedulerSettings = {
+  enabled: false,
+  intervalMinutes: 60,
+  batchSize: 5,
+  lastStatus: "idle",
+  lastPlannedCount: 0,
+  lastGeneratedCount: 0,
+  lastReviewedCount: 0,
+  updatedAt: "2026-05-05T10:00:00.000Z"
+};
+
+const fallbackPipelineRuns: PipelineRun[] = [];
+
 export async function getEditorialStudioData(): Promise<EditorialStudioData> {
   const baseUrl = resolveApiBaseUrl();
 
@@ -407,6 +479,9 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
       scheduler: fallbackScheduler,
+      enrichmentScheduler: fallbackEnrichmentScheduler,
+      editorialScheduler: fallbackEditorialScheduler,
+      pipelineRuns: fallbackPipelineRuns,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
     };
@@ -422,7 +497,10 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       statusResponse,
       sourceStatesResponse,
       sourcesResponse,
-      schedulerResponse
+      schedulerResponse,
+      enrichmentSchedulerResponse,
+      editorialSchedulerResponse,
+      pipelineRunsResponse
     ] =
       await Promise.all([
       fetch(new URL("/api/v1/prompts", baseUrl).toString(), { next: { revalidate: 30 } }),
@@ -433,7 +511,10 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       fetch(new URL("/api/v1/editorial/status", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/source-states", baseUrl).toString(), { next: { revalidate: 30 } }),
       fetch(new URL("/api/v1/sources", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { next: { revalidate: 30 } })
+      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
+      fetch(new URL("/api/v1/enrichment-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
+      fetch(new URL("/api/v1/editorial-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
+      fetch(new URL("/api/v1/pipeline-runs?limit=12", baseUrl).toString(), { next: { revalidate: 15 } })
     ]);
 
     if (
@@ -445,7 +526,10 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       !statusResponse.ok ||
       !sourceStatesResponse.ok ||
       !sourcesResponse.ok ||
-      !schedulerResponse.ok
+      !schedulerResponse.ok ||
+      !enrichmentSchedulerResponse.ok ||
+      !editorialSchedulerResponse.ok ||
+      !pipelineRunsResponse.ok
     ) {
       const responses: Array<[string, number]> = [
         ["prompts", promptsResponse.status],
@@ -456,7 +540,10 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
         ["status", statusResponse.status],
         ["source-states", sourceStatesResponse.status],
         ["sources", sourcesResponse.status],
-        ["scheduler", schedulerResponse.status]
+        ["scheduler", schedulerResponse.status],
+        ["enrichment-scheduler", enrichmentSchedulerResponse.status],
+        ["editorial-scheduler", editorialSchedulerResponse.status],
+        ["pipeline-runs", pipelineRunsResponse.status]
       ];
       const failedStatuses = responses
         .filter(([, status]) => status >= 400)
@@ -474,6 +561,9 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     const sourceStatesPayload = (await sourceStatesResponse.json()) as { items: SourceSyncState[] };
     const sourcesPayload = (await sourcesResponse.json()) as { items: SourceConfig[] };
     const schedulerPayload = (await schedulerResponse.json()) as SchedulerSettings;
+    const enrichmentSchedulerPayload = (await enrichmentSchedulerResponse.json()) as EnrichmentSchedulerSettings;
+    const editorialSchedulerPayload = (await editorialSchedulerResponse.json()) as EditorialSchedulerSettings;
+    const pipelineRunsPayload = (await pipelineRunsResponse.json()) as { items: PipelineRun[] };
 
     return {
       prompts: promptsPayload.items,
@@ -485,6 +575,9 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       sourceStates: sourceStatesPayload.items,
       sources: sourcesPayload.items,
       scheduler: schedulerPayload,
+      enrichmentScheduler: enrichmentSchedulerPayload,
+      editorialScheduler: editorialSchedulerPayload,
+      pipelineRuns: pipelineRunsPayload.items,
       isLive: true
     };
   } catch (error) {
@@ -498,6 +591,9 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       sourceStates: fallbackSourceStates,
       sources: fallbackSources,
       scheduler: fallbackScheduler,
+      enrichmentScheduler: fallbackEnrichmentScheduler,
+      editorialScheduler: fallbackEditorialScheduler,
+      pipelineRuns: fallbackPipelineRuns,
       isLive: false,
       liveError: error instanceof Error ? error.message : "Unknown API error."
     };

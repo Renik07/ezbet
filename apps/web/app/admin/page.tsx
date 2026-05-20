@@ -11,10 +11,14 @@ import {
   ingestRssTestBatchNow,
   probeNewSourceNow,
   resetDatabaseNow,
+  runEditorialSchedulerNow,
   runEnrichmentNow,
+  runEnrichmentSchedulerNow,
   runSchedulerNow,
   runContentPlannerNow,
   runEditorialNow,
+  saveEditorialSchedulerSettingsNow,
+  saveEnrichmentSchedulerSettingsNow,
   saveSchedulerSettingsNow,
   savePromptVersion
 } from "./actions";
@@ -74,8 +78,21 @@ export default async function AdminPage({
           sampleUrl: params.probeSampleUrl
         }
       : null;
-  const { prompts, drafts, reviews, contentPlan, editorialStatus, sourceStates, sources, scheduler, isLive, liveError } =
-    await getEditorialStudioData();
+  const {
+    prompts,
+    drafts,
+    reviews,
+    contentPlan,
+    editorialStatus,
+    sourceStates,
+    sources,
+    scheduler,
+    enrichmentScheduler,
+    editorialScheduler,
+    pipelineRuns,
+    isLive,
+    liveError
+  } = await getEditorialStudioData();
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
   const activeSources = sources.filter((source) => source.status === "active");
@@ -144,6 +161,45 @@ export default async function AdminPage({
             <p style={{ margin: 0 }}>{notice}</p>
           </div>
         ) : null}
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>История прогонов</h2>
+            <p>Последние прогоны ingest, enrichment и editorial, чтобы быстро понимать, что сработало, сколько заняло и где была ошибка.</p>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
+          {pipelineRuns.length ? (
+            pipelineRuns.map((run) => (
+              <article key={run.id} className="news-card">
+                <span>
+                  {formatPipelinePhase(run.phase)} · {formatPipelineTrigger(run.trigger)} · {run.status}
+                </span>
+                <h3>{formatDateTime(run.startedAt)}</h3>
+                <p className="footer-note">
+                  Длительность: {formatDuration(run.durationMs)} · завершен: {formatDateTime(run.finishedAt)}
+                </p>
+                <p className="footer-note">
+                  Найдено: {run.foundCount} · сохранено: {run.savedCount} · опубликовано: {run.publishedCount}
+                </p>
+                <p className="footer-note">
+                  Обработано: {run.processedCount} · обогащено: {run.enrichedCount} · planned: {run.plannedCount}
+                </p>
+                <p className="footer-note">
+                  drafts: {run.generatedCount} · reviews: {run.reviewedCount}
+                </p>
+                {run.error ? <p className="source-card-error">{run.error}</p> : null}
+              </article>
+            ))
+          ) : (
+            <article className="news-card">
+              <h3>История прогонов пока пуста</h3>
+              <p>После первого ingest, enrichment или editorial run здесь появятся записи со статусом, длительностью и счетчиками.</p>
+            </article>
+          )}
+        </div>
       </section>
 
       <section>
@@ -277,6 +333,138 @@ export default async function AdminPage({
             <p className="footer-note">Сохранено в сырой поток: {scheduler.lastSavedCount}</p>
             <p className="footer-note">Добавлено в ленту: {scheduler.lastPublishedCount}</p>
             {scheduler.lastError ? <p className="source-card-error">{scheduler.lastError}</p> : null}
+          </article>
+        </div>
+        <div className="admin-grid" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)", marginTop: 20 }}>
+          <article className="news-card">
+            <span>enrichment scheduler config</span>
+            <h3>Автодобор full text</h3>
+            <form action={saveEnrichmentSchedulerSettingsNow} className="prompt-form">
+              <label className="checkbox-row">
+                <input name="enabled" type="checkbox" defaultChecked={enrichmentScheduler.enabled} />
+                <span>Включить автоматический enrichment</span>
+              </label>
+              <label className="field field-compact">
+                <span>Интервал в минутах</span>
+                <select name="intervalMinutes" defaultValue={String(enrichmentScheduler.intervalMinutes)}>
+                  <option value="5">5 минут</option>
+                  <option value="15">15 минут</option>
+                  <option value="30">30 минут</option>
+                  <option value="60">60 минут</option>
+                  <option value="120">120 минут</option>
+                  <option value="180">180 минут</option>
+                  <option value="360">360 минут</option>
+                </select>
+              </label>
+              <label className="field field-compact">
+                <span>Размер пачки raw_items</span>
+                <select name="batchSize" defaultValue={String(enrichmentScheduler.batchSize)}>
+                  <option value="5">5 новостей</option>
+                  <option value="10">10 новостей</option>
+                  <option value="15">15 новостей</option>
+                  <option value="20">20 новостей</option>
+                  <option value="30">30 новостей</option>
+                  <option value="50">50 новостей</option>
+                </select>
+              </label>
+              <p className="footer-note">
+                Этот этап отдельно добирает <strong>full text</strong>, <strong>lead</strong> и <strong>tags</strong>
+                для уже собранных raw_items. Сейчас для тестирования он идет по всем свежим элементам без дублей и без draft,
+                а позже мы вернем shortlist по приоритету, чтобы не тратить лишние ресурсы.
+              </p>
+              <div className="source-button-row">
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Сохранить enrichment scheduler"
+                  pendingLabel="Сохраняем enrichment scheduler..."
+                  disabled={!isLive}
+                />
+                <PendingSubmitButton
+                  className="button-secondary"
+                  formAction={runEnrichmentSchedulerNow}
+                  idleLabel="Запустить enrichment scheduler"
+                  pendingLabel="Запускаем enrichment scheduler..."
+                  disabled={!isLive}
+                />
+              </div>
+            </form>
+          </article>
+          <article className="news-card">
+            <span>enrichment scheduler state</span>
+            <h3>{enrichmentScheduler.enabled ? "Enrichment scheduler включён" : "Enrichment scheduler выключен"}</h3>
+            <p className="footer-note">Интервал: {enrichmentScheduler.intervalMinutes} мин.</p>
+            <p className="footer-note">Размер пачки: {enrichmentScheduler.batchSize} raw_items</p>
+            <p className="footer-note">Последний запуск: {formatDateTime(enrichmentScheduler.lastRunAt)}</p>
+            <p className="footer-note">Следующий запуск: {formatDateTime(enrichmentScheduler.nextRunAt)}</p>
+            <p className="footer-note">Последний статус: {enrichmentScheduler.lastStatus}</p>
+            <p className="footer-note">Обработано raw_items: {enrichmentScheduler.lastProcessedCount}</p>
+            <p className="footer-note">Реально обогащено: {enrichmentScheduler.lastEnrichedCount}</p>
+            {enrichmentScheduler.lastError ? <p className="source-card-error">{enrichmentScheduler.lastError}</p> : null}
+          </article>
+        </div>
+        <div className="admin-grid" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)", marginTop: 20 }}>
+          <article className="news-card">
+            <span>editorial scheduler config</span>
+            <h3>Автогенерация материалов</h3>
+            <form action={saveEditorialSchedulerSettingsNow} className="prompt-form">
+              <label className="checkbox-row">
+                <input name="enabled" type="checkbox" defaultChecked={editorialScheduler.enabled} />
+                <span>Включить автоматический editorial</span>
+              </label>
+              <label className="field field-compact">
+                <span>Интервал в минутах</span>
+                <select name="intervalMinutes" defaultValue={String(editorialScheduler.intervalMinutes)}>
+                  <option value="5">5 минут</option>
+                  <option value="15">15 минут</option>
+                  <option value="30">30 минут</option>
+                  <option value="60">60 минут</option>
+                  <option value="120">120 минут</option>
+                  <option value="180">180 минут</option>
+                  <option value="360">360 минут</option>
+                </select>
+              </label>
+              <label className="field field-compact">
+                <span>Размер пачки</span>
+                <select name="batchSize" defaultValue={String(editorialScheduler.batchSize)}>
+                  <option value="2">2 новости</option>
+                  <option value="3">3 новости</option>
+                  <option value="5">5 новостей</option>
+                  <option value="10">10 новостей</option>
+                </select>
+              </label>
+              <p className="footer-note">
+                Этот этап сначала обновляет <strong>content plan</strong> для shortlisted-новостей, а затем запускает
+                <strong> writer/editor</strong> и переводит готовые материалы дальше по pipeline.
+              </p>
+              <div className="source-button-row">
+                <PendingSubmitButton
+                  className="button-primary"
+                  idleLabel="Сохранить editorial scheduler"
+                  pendingLabel="Сохраняем editorial scheduler..."
+                  disabled={!isLive}
+                />
+                <PendingSubmitButton
+                  className="button-secondary"
+                  formAction={runEditorialSchedulerNow}
+                  idleLabel="Запустить editorial scheduler"
+                  pendingLabel="Запускаем editorial scheduler..."
+                  disabled={!isLive}
+                />
+              </div>
+            </form>
+          </article>
+          <article className="news-card">
+            <span>editorial scheduler state</span>
+            <h3>{editorialScheduler.enabled ? "Editorial scheduler включён" : "Editorial scheduler выключен"}</h3>
+            <p className="footer-note">Интервал: {editorialScheduler.intervalMinutes} мин.</p>
+            <p className="footer-note">Размер пачки: {editorialScheduler.batchSize} новостей</p>
+            <p className="footer-note">Последний запуск: {formatDateTime(editorialScheduler.lastRunAt)}</p>
+            <p className="footer-note">Следующий запуск: {formatDateTime(editorialScheduler.nextRunAt)}</p>
+            <p className="footer-note">Последний статус: {editorialScheduler.lastStatus}</p>
+            <p className="footer-note">Добавлено в content plan: {editorialScheduler.lastPlannedCount}</p>
+            <p className="footer-note">Сгенерировано draft: {editorialScheduler.lastGeneratedCount}</p>
+            <p className="footer-note">Проверено editor-review: {editorialScheduler.lastReviewedCount}</p>
+            {editorialScheduler.lastError ? <p className="source-card-error">{editorialScheduler.lastError}</p> : null}
           </article>
         </div>
       </section>
@@ -673,6 +861,14 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return "Scheduler запущен вручную.";
     case "scheduler-run-error":
       return detail ? `Scheduler не выполнен: ${detail}` : "Scheduler не выполнен.";
+    case "enrichment-scheduler-saved":
+      return "Настройки enrichment scheduler сохранены.";
+    case "enrichment-scheduler-save-error":
+      return detail ? `Enrichment scheduler не сохранён: ${detail}` : "Enrichment scheduler не сохранён.";
+    case "enrichment-scheduler-run":
+      return detail ? `Enrichment scheduler выполнен: ${detail}` : "Enrichment scheduler выполнен.";
+    case "enrichment-scheduler-run-error":
+      return detail ? `Enrichment scheduler не выполнен: ${detail}` : "Enrichment scheduler не выполнен.";
     case "enrichment-run":
       return detail ? `Отдельный enrichment завершён: ${detail}` : "Отдельный enrichment завершён.";
     case "enrichment-run-error":
@@ -703,6 +899,14 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return "Content plan успешно обновлён.";
     case "content-plan-run-error":
       return detail ? `Content plan не обновлён: ${detail}` : "Content plan не обновлён.";
+    case "editorial-scheduler-saved":
+      return "Настройки editorial scheduler сохранены.";
+    case "editorial-scheduler-save-error":
+      return detail ? `Editorial scheduler не сохранён: ${detail}` : "Editorial scheduler не сохранён.";
+    case "editorial-scheduler-run":
+      return detail ? `Editorial scheduler выполнен: ${detail}` : "Editorial scheduler выполнен.";
+    case "editorial-scheduler-run-error":
+      return detail ? `Editorial scheduler не выполнен: ${detail}` : "Editorial scheduler не выполнен.";
     case "editorial-run":
       return "Editorial run завершён, новые draft-материалы и review-результаты подтянуты.";
     case "editorial-run-error":
@@ -733,6 +937,45 @@ function formatDateTime(value?: string) {
     dateStyle: "medium",
     timeStyle: "short"
   });
+}
+
+function formatDuration(durationMs: number) {
+  if (durationMs < 1000) {
+    return `${durationMs} мс`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds} сек`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes} мин ${seconds} сек`;
+}
+
+function formatPipelinePhase(value: string) {
+  switch (value) {
+    case "ingest":
+      return "Сбор новостей";
+    case "enrichment":
+      return "Добор full text";
+    case "editorial":
+      return "Генерация материалов";
+    default:
+      return value;
+  }
+}
+
+function formatPipelineTrigger(value: string) {
+  switch (value) {
+    case "scheduler":
+      return "scheduler";
+    case "manual":
+      return "ручной запуск";
+    default:
+      return value;
+  }
 }
 
 function formatSourceType(value: string) {

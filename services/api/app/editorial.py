@@ -114,6 +114,7 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
     writer_prompt = repository.get_active_prompt("writer")
     editor_prompt = repository.get_active_prompt("editor")
     raw_candidates = repository.list_planned_raw_items_for_drafts(limit=limit)
+    rewrite_enabled = False
 
     generated: list[DraftArticle] = []
     reviews: list[EditorReview] = []
@@ -149,7 +150,7 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 review_summary=stored_review.summary,
             )
             repository.set_content_plan_status(raw_item.id, "published")
-        elif quality_gate.decision == "rewrite":
+        elif quality_gate.decision == "rewrite" and rewrite_enabled:
             rewritten_draft = rewrite_draft(stored_draft, raw_item, writer_prompt, ai_client, quality_gate.reason)
             if rewritten_draft is not None:
                 stored_draft = repository.upsert_draft(rewritten_draft)
@@ -193,6 +194,14 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                     review_summary=quality_gate.reason,
                 )
                 repository.set_content_plan_status(raw_item.id, "rewrite_needed")
+        elif quality_gate.decision == "rewrite":
+            repository.set_draft_review_status(
+                stored_draft.id,
+                review_status="quality_rewrite",
+                status="rewrite_needed",
+                review_summary=quality_gate.reason,
+            )
+            repository.set_content_plan_status(raw_item.id, "rewrite_needed")
         else:
             if stored_draft.generation_mode == "template":
                 repository.set_draft_review_status(
