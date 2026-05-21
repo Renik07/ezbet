@@ -2862,6 +2862,8 @@ class NewsRepository:
         self,
         raw_item_id: str,
         *,
+        title: str | None = None,
+        summary: str | None = None,
         full_text: str | None = None,
         lead: str | None = None,
         full_text_source_url: str | None = None,
@@ -2872,6 +2874,8 @@ class NewsRepository:
         enrichment_error: str | None = None,
         tags: list[str] | None = None,
     ) -> RawItem | None:
+        cleaned_title = (title or "").strip() or None
+        cleaned_summary = (summary or "").strip() or None
         cleaned_full_text = (full_text or "").strip() or None
         cleaned_lead = (lead or "").strip() or None
         cleaned_full_text_source_url = (full_text_source_url or "").strip() or None
@@ -2883,7 +2887,9 @@ class NewsRepository:
         cleaned_tags = [value.strip() for value in (tags or []) if value.strip()]
 
         if (
-            cleaned_full_text is None
+            cleaned_title is None
+            and cleaned_summary is None
+            and cleaned_full_text is None
             and cleaned_lead is None
             and cleaned_full_text_source_url is None
             and cleaned_full_text_source_title is None
@@ -2900,7 +2906,9 @@ class NewsRepository:
                 cursor.execute(
                     """
                     UPDATE raw_items
-                    SET full_text = COALESCE(%s, full_text),
+                    SET title = COALESCE(%s, title),
+                        summary = COALESCE(%s, summary),
+                        full_text = COALESCE(%s, full_text),
                         lead = COALESCE(%s, lead),
                         full_text_source_url = COALESCE(%s, full_text_source_url),
                         full_text_source_title = COALESCE(%s, full_text_source_title),
@@ -2912,6 +2920,8 @@ class NewsRepository:
                     WHERE id = %s
                     """,
                     (
+                        cleaned_title,
+                        cleaned_summary,
                         cleaned_full_text,
                         cleaned_lead,
                         cleaned_full_text_source_url,
@@ -2932,6 +2942,69 @@ class NewsRepository:
 
     def update_raw_item_full_text(self, raw_item_id: str, full_text: str) -> RawItem | None:
         return self.update_raw_item_enrichment(raw_item_id, full_text=full_text)
+
+    def recheck_raw_item_duplicate_after_enrichment(
+        self,
+        raw_item_id: str,
+        *,
+        window_hours: int = 72,
+    ) -> RawItem | None:
+        item = self.get_raw_item(raw_item_id)
+        if item is None or item.is_duplicate:
+            return item
+
+        candidate_texts: dict[str, list[tuple[str, str]]] = {}
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, normalized_category, title, summary, full_text
+                    FROM raw_items
+                    WHERE id <> %s
+                      AND is_duplicate = FALSE
+                      AND fetched_at >= %s
+                    ORDER BY fetched_at DESC, published_at DESC
+                    """,
+                    (
+                        raw_item_id,
+                        datetime.now(timezone.utc) - timedelta(hours=window_hours),
+                    ),
+                )
+                rows = cursor.fetchall()
+
+        for row in rows:
+            candidate_id = str(row[0])
+            category = str(row[1])
+            title = str(row[2] or "")
+            summary = str(row[3] or "")
+            full_text = str(row[4] or "")
+            source_text = full_text or summary
+            candidate_texts.setdefault(category, []).append(
+                (candidate_id, self._normalize_similarity_text(f"{title} {source_text}"))
+            )
+
+        duplicate_match_id = self._find_near_duplicate_id(
+            item,
+            recent_similarity_candidates=candidate_texts,
+            pending_similarity_candidates={},
+        )
+        if not duplicate_match_id:
+            return item
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE raw_items
+                    SET is_duplicate = TRUE,
+                        duplicate_of = %s
+                    WHERE id = %s
+                    """,
+                    (duplicate_match_id, raw_item_id),
+                )
+            connection.commit()
+
+        return self.get_raw_item(raw_item_id)
 
     def upsert_many(self, items: list[NewsItem]) -> list[NewsItem]:
         added: list[NewsItem] = []
@@ -3261,7 +3334,7 @@ class NewsRepository:
             )
 
     def _validate_source_activation_readiness(self, source: SourceItem) -> None:
-        if source.status != "active" or source.source_type not in {"scraping", "news_sitemap", "sitemap"}:
+        if source.status != "active" or source.source_type not in {"scraping", "news_sitemap"}:
             return
 
         state = self.get_source_sync_state_map().get(source.key)
@@ -3270,7 +3343,6 @@ class NewsRepository:
         if state.last_probe_readiness in {"unknown", "empty", "fetch_error"}:
             source_label = {
                 "news_sitemap": "News sitemap",
-                "sitemap": "Sitemap",
             }.get(source.source_type, "Scraping")
             raise ValueError(
                 f"{source_label}-источник можно переводить в active только после успешного preflight, "

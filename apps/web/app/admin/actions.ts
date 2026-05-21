@@ -33,7 +33,7 @@ async function apiPost(path: string, body: Record<string, unknown>) {
   return response;
 }
 
-const PRECHECK_SOURCE_TYPES = new Set(["news_sitemap", "sitemap", "scraping"]);
+const PRECHECK_SOURCE_TYPES = new Set(["news_sitemap", "scraping"]);
 
 function extractApiErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
@@ -357,9 +357,21 @@ export async function createSourceNow(formData: FormData) {
   const category = String(formData.get("category") ?? "");
   const notes = String(formData.get("notes") ?? "");
   const probeOk = String(formData.get("probeOk") ?? "") === "true";
+  const probeReadiness = String(formData.get("probeReadiness") ?? "unknown");
   const probedKey = String(formData.get("probedKey") ?? "");
   const probedUrl = String(formData.get("probedUrl") ?? "");
   const probedSourceType = String(formData.get("resolvedSourceType") ?? "");
+  const resolvedSourceUrl = String(formData.get("resolvedSourceUrl") ?? url);
+  const supportsRss = String(formData.get("supportsRss") ?? "") === "true";
+  const supportsNewsSitemap = String(formData.get("supportsNewsSitemap") ?? "") === "true";
+  const supportsSitemap = String(formData.get("supportsSitemap") ?? "") === "true";
+  const supportsScraping = String(formData.get("supportsScraping") ?? "") === "true";
+  const fullTextOk = String(formData.get("fullTextOk") ?? "") === "true";
+  const leadOk = String(formData.get("leadOk") ?? "") === "true";
+  const tagsCount = Number(formData.get("tagsCount") ?? 0);
+  const probeItemCount = Number(formData.get("probeItemCount") ?? 0);
+  const sampleTitle = String(formData.get("sampleTitle") ?? "");
+  const sampleUrl = String(formData.get("sampleUrl") ?? "");
 
   try {
     if (!probeOk) {
@@ -381,31 +393,22 @@ export async function createSourceNow(formData: FormData) {
       category,
       source_type: sourceType,
       status: requiresPrecheck ? "draft" : "active",
-      notes
+      notes,
+      probeOk,
+      probeItemCount,
+      probeReadiness,
+      resolvedSourceType: sourceType,
+      resolvedSourceUrl,
+      supportsRss,
+      supportsNewsSitemap,
+      supportsSitemap,
+      supportsScraping,
+      fullTextOk,
+      leadOk,
+      tagsCount,
+      sampleTitle: sampleTitle || null,
+      sampleUrl: sampleUrl || null
     });
-
-    if (requiresPrecheck) {
-      try {
-        const probeResponse = await apiPost(`/api/v1/sources/${sourceKey}/probe`, {});
-        const probeResult = await probeResponse.json();
-        if (!probeResult.ok) {
-          throw new Error("Preflight не подтвердил рабочий поток новостей.");
-        }
-        await apiPost(`/api/v1/sources/${sourceKey}`, {
-          title,
-          url,
-          category,
-          source_type: sourceType,
-          status: "active",
-          notes
-        });
-      } catch (error) {
-        try {
-          await apiPost(`/api/v1/sources/${sourceKey}/delete`, {});
-        } catch {}
-        throw error;
-      }
-    }
   } catch (error) {
     redirect(`/admin?notice=source-save-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`);
   }
@@ -439,6 +442,11 @@ export async function probeNewSourceNow(formData: FormData) {
       notes
     });
     const result = await response.json();
+    if (result.resolvedSourceType === "sitemap") {
+      throw new Error(
+        "Обычный sitemap больше не используется в новостном pipeline. Нужен RSS, news sitemap, scraping или ai search."
+      );
+    }
     params.set("notice", "source-draft-probed");
     params.set("probeOk", String(Boolean(result.ok)));
     params.set("probeReadiness", String(result.readiness ?? "unknown"));

@@ -253,6 +253,20 @@ class SourceCreateRequest(BaseModel):
     source_type: str = Field(default="rss", serialization_alias="sourceType")
     status: str = "draft"
     notes: str = ""
+    probe_ok: bool = Field(default=False, alias="probeOk", serialization_alias="probeOk")
+    probe_item_count: int = Field(default=0, alias="probeItemCount", serialization_alias="probeItemCount")
+    probe_readiness: str = Field(default="unknown", alias="probeReadiness", serialization_alias="probeReadiness")
+    resolved_source_type: Optional[str] = Field(default=None, alias="resolvedSourceType", serialization_alias="resolvedSourceType")
+    resolved_source_url: Optional[str] = Field(default=None, alias="resolvedSourceUrl", serialization_alias="resolvedSourceUrl")
+    supports_rss: bool = Field(default=False, alias="supportsRss", serialization_alias="supportsRss")
+    supports_news_sitemap: bool = Field(default=False, alias="supportsNewsSitemap", serialization_alias="supportsNewsSitemap")
+    supports_sitemap: bool = Field(default=False, alias="supportsSitemap", serialization_alias="supportsSitemap")
+    supports_scraping: bool = Field(default=False, alias="supportsScraping", serialization_alias="supportsScraping")
+    full_text_ok: bool = Field(default=False, alias="fullTextOk", serialization_alias="fullTextOk")
+    lead_ok: bool = Field(default=False, alias="leadOk", serialization_alias="leadOk")
+    tags_count: int = Field(default=0, alias="tagsCount", serialization_alias="tagsCount")
+    sample_title: Optional[str] = Field(default=None, alias="sampleTitle", serialization_alias="sampleTitle")
+    sample_url: Optional[str] = Field(default=None, alias="sampleUrl", serialization_alias="sampleUrl")
 
 
 class SourceUpdateRequest(BaseModel):

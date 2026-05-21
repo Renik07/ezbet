@@ -19,7 +19,7 @@ from .models import NewsItem, PromptConfig, RawItem, SourceItem, SourceSyncState
 if TYPE_CHECKING:
     from .repository import NewsRepository
 
-SUPPORTED_ACTIVE_SOURCE_TYPES = {"rss", "news_sitemap", "sitemap", "scraping", "ai_research"}
+SUPPORTED_ACTIVE_SOURCE_TYPES = {"rss", "news_sitemap", "scraping", "ai_research"}
 
 POSITIVE_CONTAINER_TERMS = (
     "news",
@@ -76,7 +76,18 @@ BLOCKED_URL_SEGMENTS = {
     "contacts",
     "contact",
     "advert",
+    "advertisement",
+    "advertising",
+    "ads",
     "promo",
+    "cookie",
+    "cookies",
+    "agreement",
+    "privacy",
+    "policy",
+    "policies",
+    "terms",
+    "legal",
 }
 
 PREFERRED_URL_SEGMENTS = {
@@ -168,6 +179,7 @@ class SourceFetchError(RuntimeError):
 
 @dataclass
 class ArticleEnrichmentResult:
+    title: str | None
     full_text: str | None
     lead: str | None
     tags: list[str]
@@ -322,11 +334,20 @@ def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> 
 
     enrichment = extract_article_enrichment(raw_item.url, timeout=10)
     if enrichment is not None and (
-        enrichment.full_text or enrichment.lead or enrichment.tags
+        enrichment.title or enrichment.full_text or enrichment.lead or enrichment.tags
     ):
+        normalized_title, normalized_summary = _resolve_enriched_raw_headline(
+            raw_item.title,
+            raw_item.summary,
+            enrichment.title,
+            enrichment.lead,
+            enrichment.full_text,
+        )
         return (
             repository.update_raw_item_enrichment(
                 raw_item.id,
+                title=normalized_title,
+                summary=normalized_summary,
                 full_text=enrichment.full_text,
                 lead=enrichment.lead,
                 full_text_source_url=raw_item.url,
@@ -783,6 +804,10 @@ def _parse_scraping_source(source: SourceItem, timeout: int) -> list[RawItem]:
     items: list[RawItem] = []
 
     for index, candidate in enumerate(parser.candidates):
+        if _looks_like_listing_title(candidate.title):
+            continue
+        if not _looks_like_scraping_article_url(candidate.url):
+            continue
         published = candidate.published_at or (fetched_at - timedelta(seconds=index))
         items.append(
             _build_raw_item(
@@ -803,7 +828,7 @@ def _parse_scraping_source(source: SourceItem, timeout: int) -> list[RawItem]:
     fallback_title = parser.og_title or parser.page_title or source.title
     fallback_summary = parser.og_description or parser.meta_description or fallback_title
     canonical_url = parser.canonical_url or source.url
-    if not fallback_title:
+    if not fallback_title or _looks_like_listing_title(fallback_title) or not _looks_like_scraping_article_url(canonical_url):
         return []
 
     return [
@@ -931,13 +956,15 @@ def _parse_news_sitemap_document(
 
         keywords = _find_child_text(news_node, {"keywords"}) if news_node is not None else None
         tags = _split_meta_values(keywords or "")
-        summary = title or (", ".join(tags[:3]) if tags else normalized_url)
+        fallback_title = _title_from_url(normalized_url)
+        resolved_title = _normalize_whitespace(title or fallback_title or normalized_url)
+        summary = resolved_title or (", ".join(tags[:3]) if tags else normalized_url)
 
         seen_urls.add(normalized_url)
         entries.append(
             {
                 "url": normalized_url,
-                "title": _normalize_whitespace(title or ""),
+                "title": resolved_title,
                 "summary": _normalize_whitespace(summary),
                 "published_at": published_at,
                 "source_title": _normalize_whitespace(publication_name or source.title) or source.title,
@@ -998,7 +1025,7 @@ def _parse_generic_sitemap_document(
         normalized_url = _normalize_url(loc) if loc else None
         if not normalized_url or normalized_url in seen_urls:
             continue
-        if not _looks_like_news_url(normalized_url):
+        if not _looks_like_generic_sitemap_article_url(normalized_url):
             continue
 
         lastmod = _find_child_text(node, {"lastmod"})
@@ -1085,11 +1112,19 @@ def extract_article_enrichment(url: str | None, timeout: int = 10) -> ArticleEnr
         if fallback and len(fallback) >= 80:
             full_text = fallback
 
+    resolved_title = parser.og_title or parser.heading_title or parser.page_title
+    if resolved_title:
+        resolved_title = _normalize_whitespace(resolved_title)
+
     lead = parser.og_description or parser.meta_description
     if lead:
         lead = _normalize_whitespace(lead)
 
+    if _looks_like_listing_text(full_text):
+        full_text = None
+
     return ArticleEnrichmentResult(
+        title=resolved_title or None,
         full_text=full_text,
         lead=lead or None,
         tags=parser.tags,
@@ -1100,6 +1135,8 @@ def _is_usable_full_text(value: str | None, source_summary: str | None = None) -
     if not value:
         return False
     normalized = value.strip()
+    if _looks_like_listing_text(normalized):
+        return False
     if len(normalized) >= 180:
         return True
     if normalized.count("\n\n") >= 1 and len(normalized) >= 120:
@@ -1381,11 +1418,13 @@ class _ScrapingDocumentParser(HTMLParser):
 
             if not url or not title or not _looks_like_story_title(title):
                 return
+            if _looks_like_listing_title(title) or _looks_like_category_label(title):
+                return
             if self._anchor_context_score < 1:
                 return
             if urlsplit(url).netloc.lower() != self.base_host:
                 return
-            if not _looks_like_news_url(url):
+            if not _looks_like_scraping_article_url(url):
                 return
             if url in self._seen_candidate_urls:
                 return
@@ -1429,7 +1468,14 @@ class _ArticleDocumentParser(HTMLParser):
         self._text_capture_parts: list[str] = []
         self._in_paragraph = False
         self._paragraph_parts: list[str] = []
+        self._in_title_tag = False
+        self._title_parts: list[str] = []
+        self._in_h1_tag = False
+        self._h1_parts: list[str] = []
         self.paragraphs: list[str] = []
+        self.page_title: str | None = None
+        self.og_title: str | None = None
+        self.heading_title: str | None = None
         self.meta_description: str | None = None
         self.og_description: str | None = None
         self.tags: list[str] = []
@@ -1438,6 +1484,13 @@ class _ArticleDocumentParser(HTMLParser):
         attr_map = {key.lower(): (value or "") for key, value in attrs}
         tag = tag.lower()
         self._container_scores.append(self._container_scores[-1] + _article_container_score(tag, attr_map))
+
+        if tag == "title":
+            self._in_title_tag = True
+            return
+        if tag == "h1":
+            self._in_h1_tag = True
+            self._h1_parts = []
 
         if tag in {"script", "style", "noscript"}:
             self._skip_depth += 1
@@ -1462,6 +1515,8 @@ class _ArticleDocumentParser(HTMLParser):
                 return
             if name == "description":
                 self.meta_description = content
+            elif prop == "og:title":
+                self.og_title = content
             elif prop == "og:description":
                 self.og_description = content
             elif name == "keywords":
@@ -1477,6 +1532,20 @@ class _ArticleDocumentParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         try:
+            if tag == "title":
+                self._in_title_tag = False
+                title = _normalize_whitespace(" ".join(self._title_parts))
+                if title:
+                    self.page_title = title
+                self._title_parts = []
+                return
+            if tag == "h1" and self._in_h1_tag:
+                self._in_h1_tag = False
+                heading = _normalize_whitespace(" ".join(self._h1_parts))
+                if heading and not self.heading_title:
+                    self.heading_title = heading
+                self._h1_parts = []
+
             if tag in {"script", "style", "noscript"} and self._skip_depth > 0:
                 self._skip_depth -= 1
                 return
@@ -1501,6 +1570,10 @@ class _ArticleDocumentParser(HTMLParser):
                 self._container_scores.pop()
 
     def handle_data(self, data: str) -> None:
+        if self._in_title_tag:
+            self._title_parts.append(data)
+        if self._in_h1_tag:
+            self._h1_parts.append(data)
         if self._skip_depth > 0:
             return
         if self._in_paragraph:
@@ -1666,7 +1739,156 @@ def _looks_like_story_title(value: str) -> bool:
     if lowered in blocked:
         return False
     blocked_terms = ("канал", "подписк", "кинотеатр", "okko", "аккаунт", "авторизац")
-    return not any(term in lowered for term in blocked_terms)
+    if any(term in lowered for term in blocked_terms):
+        return False
+    return not _looks_like_category_label(lowered)
+
+
+def _looks_like_listing_title(value: str) -> bool:
+    lowered = value.strip().lower()
+    if not lowered:
+        return False
+    patterns = (
+        "новости ",
+        "последние новости",
+        "актуальные события",
+        "самые свежие",
+        "все новости",
+    )
+    return any(pattern in lowered for pattern in patterns)
+
+
+def _looks_like_category_label(value: str) -> bool:
+    lowered = value.strip().lower()
+    if not lowered:
+        return False
+
+    words = re.findall(r"[a-zа-я0-9]+", lowered, flags=re.IGNORECASE)
+    if 1 <= len(words) <= 4 and lowered.count("/") >= 1 and not re.search(r"\d", lowered):
+        return True
+
+    generic_labels = {
+        "футбол",
+        "хоккей",
+        "теннис",
+        "баскетбол",
+        "биатлон",
+        "бобслей",
+        "скелетон",
+        "санный спорт",
+        "фигурное катание",
+        "мма",
+        "бокс",
+        "авто",
+        "формула 1",
+        "кхл",
+        "нхл",
+        "рпл",
+        "апл",
+        "ла лига",
+        "серия а",
+        "лига 1",
+        "бундеслига",
+    }
+    return lowered in generic_labels
+
+
+def _looks_like_scraping_article_url(url: str) -> bool:
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/").lower()
+    if not path:
+        return False
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return False
+
+    leaf = segments[-1]
+    if leaf == "news":
+        return False
+
+    if len(segments) >= 2 and segments[-2] == "news" and not re.search(r"\d", leaf):
+        return False
+
+    if any(segment in BLOCKED_URL_SEGMENTS for segment in segments):
+        return False
+
+    if leaf in {
+        "football",
+        "hockey",
+        "tennis",
+        "basketball",
+        "boxing",
+        "mma",
+        "bobsleigh",
+        "skeleton",
+        "luge",
+        "athletics",
+        "f1",
+        "news",
+    }:
+        return False
+
+    if re.search(r"\.(html?|php|aspx?)$", leaf):
+        return True
+    if re.search(r"\d", leaf):
+        return True
+    if leaf.count("-") >= 3 or leaf.count("_") >= 3:
+        return True
+
+    if len(segments) >= 3 and segments[-2] in {"news", "article", "articles", "story", "stories"}:
+        return leaf.count("-") >= 2 or leaf.count("_") >= 2
+
+    return False
+
+
+def _looks_like_generic_sitemap_article_url(url: str) -> bool:
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/").lower()
+    if not path:
+        return False
+
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return False
+    if any(segment in BLOCKED_URL_SEGMENTS for segment in segments):
+        return False
+
+    leaf = segments[-1]
+    if leaf in {
+        "index",
+        "home",
+        "main",
+        "news",
+        "sport",
+        "sports",
+        "football",
+        "hockey",
+        "tennis",
+        "basketball",
+        "cookies",
+        "cookie",
+        "agreement",
+        "advertisement",
+        "privacy",
+        "terms",
+    }:
+        return False
+
+    if re.search(r"\.(html?|php|aspx?)$", leaf):
+        return True
+    if re.search(r"\d", leaf):
+        return True
+    if leaf.count("-") >= 3 or leaf.count("_") >= 3:
+        return True
+
+    if len(segments) >= 3 and any(segment in PREFERRED_URL_SEGMENTS for segment in segments[:-1]):
+        if leaf.count("-") >= 2 or leaf.count("_") >= 2:
+            return True
+
+    if len(segments) >= 4 and all(re.fullmatch(r"\d{1,4}", segment) for segment in segments[-4:-1]):
+        return len(re.findall(r"[a-zа-я0-9]+", leaf, flags=re.IGNORECASE)) >= 3
+
+    return False
 
 
 def _title_from_url(url: str) -> str:
@@ -1694,9 +1916,9 @@ def _score_probe_result(result: SourceProbeResult) -> tuple[int, int, int, int]:
     adapter_rank = {
         "news_sitemap": 4,
         "rss": 3,
-        "sitemap": 2,
         "scraping": 1,
         "ai_research": 0,
+        "sitemap": -1,
     }.get(result.resolved_source_type or "", 0)
     return (
         1 if result.ok else 0,
@@ -1711,7 +1933,7 @@ def _probe_support_flags(source_type: str, *, ok: bool, item_count: int) -> tupl
     return (
         source_type == "rss" and supported,
         source_type == "news_sitemap" and supported,
-        source_type == "sitemap" and supported,
+        False,
         source_type == "scraping" and supported,
     )
 
@@ -1744,8 +1966,6 @@ def _build_auto_probe_candidates(source: SourceItem) -> list[SourceItem]:
         add_candidate("news_sitemap", candidate_url)
     for candidate_url in _candidate_urls_for_rss(source.url):
         add_candidate("rss", candidate_url)
-    for candidate_url in _candidate_urls_for_sitemap(source.url):
-        add_candidate("sitemap", candidate_url)
     add_candidate("scraping", source.url)
 
     return candidates
@@ -2200,6 +2420,115 @@ def _looks_like_news_url(url: str) -> bool:
         return True
 
     return bool(re.search(r"\d", path))
+
+
+def _looks_like_listing_text(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    if len(lines) >= 4:
+        list_like_lines = sum(
+            1
+            for line in lines
+            if re.match(r"^\d{1,2}:\d{2}\s+", line) and "|" in line
+        )
+        if list_like_lines >= 3:
+            return True
+
+    compact = " ".join(normalized.split())
+    matches = re.findall(r"\b\d{1,2}:\d{2}\b.*?\|\s*\d+", compact)
+    return len(matches) >= 3
+
+
+def _looks_like_translit_slug_title(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    if re.search(r"[А-Яа-я]", normalized):
+        return False
+    words = re.findall(r"[a-z0-9]+", normalized.lower())
+    if len(words) < 4:
+        return False
+    translit_patterns = (
+        "zh",
+        "shh",
+        "sh",
+        "kh",
+        "ts",
+        "ch",
+        "ya",
+        "yu",
+        "yo",
+        "cz",
+    )
+    translit_word_count = sum(
+        1 for word in words if any(pattern in word for pattern in translit_patterns)
+    )
+    if translit_word_count >= 2:
+        return True
+
+    translit_markers = {
+        "povyol",
+        "kubka",
+        "stenli",
+        "zabili",
+        "golu",
+        "vyshel",
+        "chempionov",
+        "rossiya",
+        "futbol",
+        "khokkey",
+        "rolan",
+        "garros",
+        "ukrainskih",
+        "diskvalificzirovala",
+        "korrupcziyu",
+        "tennisisty",
+        "ogranichat",
+        "obshhenie",
+    }
+    return any(marker in words for marker in translit_markers)
+
+
+def _resolve_enriched_raw_headline(
+    current_title: str,
+    current_summary: str,
+    extracted_title: str | None,
+    extracted_lead: str | None,
+    extracted_full_text: str | None,
+) -> tuple[str | None, str | None]:
+    current_title_has_cyrillic = bool(re.search(r"[А-Яа-я]", current_title or ""))
+    current_summary_has_cyrillic = bool(re.search(r"[А-Яа-я]", current_summary or ""))
+    if current_title_has_cyrillic and current_summary_has_cyrillic:
+        return None, None
+
+    candidate_title = (extracted_title or "").strip()
+    candidate_lead = (extracted_lead or "").strip()
+    candidate_full_text = (extracted_full_text or "").strip()
+
+    if candidate_title and re.search(r"[А-Яа-я]", candidate_title):
+        resolved_title = candidate_title
+    elif candidate_lead and re.search(r"[А-Яа-я]", candidate_lead):
+        resolved_title = candidate_lead.split(". ", 1)[0].strip().rstrip(".")
+    elif candidate_full_text and re.search(r"[А-Яа-я]", candidate_full_text):
+        resolved_title = candidate_full_text.split(". ", 1)[0].strip().rstrip(".")
+    else:
+        return None, None
+
+    if len(resolved_title) < 12:
+        return None, None
+
+    resolved_summary = candidate_lead or resolved_title
+
+    next_title = resolved_title if not current_title_has_cyrillic or _looks_like_translit_slug_title(current_title) else None
+    next_summary = resolved_summary if not current_summary_has_cyrillic or current_summary.strip() == current_title.strip() else None
+    return next_title, next_summary
 
 
 def _try_parse_datetime(value: str) -> datetime | None:

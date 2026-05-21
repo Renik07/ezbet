@@ -567,9 +567,21 @@ export default async function AdminPage({
                 <input name="url" placeholder="https://example.com/feed.xml" defaultValue={sourceDraft.url} required />
               </label>
               <input type="hidden" name="probeOk" value={draftProbe?.ok ? "true" : "false"} />
+              <input type="hidden" name="probeReadiness" value={draftProbe?.readiness ?? "unknown"} />
+              <input type="hidden" name="probeItemCount" value={String(draftProbe?.count ?? 0)} />
               <input type="hidden" name="probedKey" value={sourceDraft.key} />
               <input type="hidden" name="probedUrl" value={sourceDraft.url} />
               <input type="hidden" name="resolvedSourceType" value={sourceDraft.type} />
+              <input type="hidden" name="resolvedSourceUrl" value={sourceDraft.url} />
+              <input type="hidden" name="supportsRss" value={draftProbe?.supportsRss ? "true" : "false"} />
+              <input type="hidden" name="supportsNewsSitemap" value={draftProbe?.supportsNewsSitemap ? "true" : "false"} />
+              <input type="hidden" name="supportsSitemap" value={draftProbe?.supportsSitemap ? "true" : "false"} />
+              <input type="hidden" name="supportsScraping" value={draftProbe?.supportsScraping ? "true" : "false"} />
+              <input type="hidden" name="fullTextOk" value={draftProbe?.fullTextOk ? "true" : "false"} />
+              <input type="hidden" name="leadOk" value={draftProbe?.leadOk ? "true" : "false"} />
+              <input type="hidden" name="tagsCount" value={String(draftProbe?.tagsCount ?? 0)} />
+              <input type="hidden" name="sampleTitle" value={draftProbe?.sampleTitle ?? ""} />
+              <input type="hidden" name="sampleUrl" value={draftProbe?.sampleUrl ?? ""} />
               <div className="source-inline-fields">
                 <label className="field field-compact">
                   <span>Type</span>
@@ -577,7 +589,6 @@ export default async function AdminPage({
                     <option value="auto">auto detect</option>
                     <option value="rss">rss</option>
                     <option value="news_sitemap">news sitemap</option>
-                    <option value="sitemap">sitemap</option>
                     <option value="scraping">scraping</option>
                     <option value="ai_research">ai search</option>
                   </select>
@@ -603,8 +614,7 @@ export default async function AdminPage({
                   {draftProbe.tagsCount}
                   <br />
                   Capability profile: rss {draftProbe.supportsRss ? "yes" : "no"} · news sitemap{" "}
-                  {draftProbe.supportsNewsSitemap ? "yes" : "no"} · sitemap{" "}
-                  {draftProbe.supportsSitemap ? "yes" : "no"} · scraping {draftProbe.supportsScraping ? "yes" : "no"}
+                  {draftProbe.supportsNewsSitemap ? "yes" : "no"} · scraping {draftProbe.supportsScraping ? "yes" : "no"}
                   {draftProbe.sampleTitle ? (
                     <>
                       <br />
@@ -679,8 +689,8 @@ export default async function AdminPage({
               </p>
               <p className="footer-note">
                 Capability profile: preferred {formatSourceType(state?.preferredAdapter ?? "unknown")} · rss{" "}
-                {state?.supportsRss ? "yes" : "no"} · news sitemap {state?.supportsNewsSitemap ? "yes" : "no"} · sitemap{" "}
-                {state?.supportsSitemap ? "yes" : "no"} · scraping {state?.supportsScraping ? "yes" : "no"}
+                {state?.supportsRss ? "yes" : "no"} · news sitemap {state?.supportsNewsSitemap ? "yes" : "no"} · scraping{" "}
+                {state?.supportsScraping ? "yes" : "no"}
               </p>
               {state?.preferredAdapterUrl ? (
                 <p className="footer-note">
@@ -711,7 +721,7 @@ export default async function AdminPage({
               <p className="footer-note">
                 Последний batch: {state?.lastItemCount ?? 0} · failures подряд: {state?.consecutiveFailures ?? 0}
               </p>
-              {(source.sourceType === "scraping" || source.sourceType === "news_sitemap" || source.sourceType === "sitemap") &&
+              {(source.sourceType === "scraping" || source.sourceType === "news_sitemap") &&
               source.status !== "draft" &&
               (state?.lastProbeReadiness === "unknown" ||
                 state?.lastProbeReadiness === "empty" ||
@@ -960,7 +970,7 @@ function getNoticeMessage(notice?: string, detail?: string) {
         ? `Проверка нового источника не удалась: ${detail}`
         : "Проверка нового источника не удалась.";
     case "source-activation-blocked":
-      return "Источник не переведён в active: сначала нужен успешный preflight-check для news sitemap, sitemap или scraping.";
+      return "Источник не переведён в active: сначала нужен успешный preflight-check для news sitemap или scraping.";
     case "source-save-error":
       return detail
         ? `Источник не сохранён: ${detail}`
@@ -1120,8 +1130,6 @@ function formatSourceType(value: string) {
       return "auto detect";
     case "news_sitemap":
       return "news sitemap";
-    case "sitemap":
-      return "sitemap";
     case "ai_research":
     case "ai_search":
       return "ai search";

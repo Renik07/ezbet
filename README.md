@@ -691,6 +691,7 @@
 - [x] усиленный `AI preflight fallback`: проверка нескольких sample-новостей и `ready_ai`, если хотя бы одна статья даёт пригодный `full_text`
 - [ ] единая валидация источников в админке в зависимости от `source_type`
 - [x] безопасная активация новых источников: только поддерживаемые adapter'ы могут уходить в `active`
+- [x] generic sitemap больше не пускаем в автоматический active-flow: для auto-pipeline доверяем только `rss`, `news_sitemap`, `scraping`, `ai_research`
 - [x] улучшенное состояние обхода источников: last successful fetch, last successful parse, error counters, retry policy
 - [ ] scheduler с фиксированными окнами, например `09:00 / 12:00 / 15:00 / 18:00`
 - [x] конфигурируемый ingest scheduler: `enabled`, `interval_minutes`, `last_run_at`, `next_run_at`
@@ -702,6 +703,7 @@
 - [x] кнопка и форма в `/admin` для ручной настройки интервала автозагрузки новостей
 - [x] защита от двойного запуска scheduler: advisory lock / job lock и проверка `is_due`
 - [x] scheduler должен брать только новые новости относительно `source_sync_state`, а не перечитывать весь часовой диапазон по wall-clock
+- [x] post-enrichment duplicate recheck: после нормализации `title/summary/full_text` свежая новость еще раз проходит cross-source near-duplicate проверку
 - [ ] вернуть shortlist для enrichment scheduler после этапа тестов: по `score / triage / freshness / duplicate-state`, без draft-элементов
 - [x] editorial scheduler как отдельный автоматический этап после enrichment
 - [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
@@ -1041,8 +1043,11 @@ npm run dev:web
 9. Настроить scheduler и провести первый сквозной тест: добавить сайт -> забрать новости -> добрать `full_text` -> опубликовать
 
 # Источники
-1. https://www.sport-express.ru/services/materials/news/se - RSS
-2. https://www.championat.com/sitemap/news.xml - news sitemap
+1. https://www.sport-express.ru/services/materials/news/se - RSS (Сбор новостей  - ОК. ФУЛЛ текст берется через веб-поиск)
+2. https://www.championat.com/sitemap/news.xml - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
+3. https://www.sports.ru (https://www.sports.ru/news) - scraping (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
+4. https://www.sovsport.ru (https://www.sovsport.ru/sitemap-news.xml) - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
+5. https://www.sportsdaily.ru/news/ - scraping (Сбор новостей - ОК. ФУЛЛ текст берется через веб-поиск)
 
 # Убить процесс
 1. lsof -i :8000

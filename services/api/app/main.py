@@ -157,17 +157,42 @@ def list_sources() -> SourceListResponse:
 @app.post("/api/v1/sources", response_model=SourceListResponse)
 def create_source(payload: SourceCreateRequest) -> SourceListResponse:
     try:
-        repository.create_source_config(
-            SourceItem(
-                key=payload.key,
-                title=payload.title,
-                url=payload.url,
-                category=payload.category,
-                source_type=payload.source_type,
-                status=payload.status,
-                notes=payload.notes,
-            )
+        source_type = payload.resolved_source_type or payload.source_type
+        source = SourceItem(
+            key=payload.key,
+            title=payload.title,
+            url=payload.url,
+            category=payload.category,
+            source_type=source_type,
+            status=payload.status,
+            notes=payload.notes,
         )
+
+        requires_precheck = source_type in {"scraping", "news_sitemap"}
+        if requires_precheck and payload.probe_ok:
+            draft_source = source.model_copy(update={"status": "draft"})
+            repository.create_source_config(draft_source)
+            repository.record_source_probe(
+                draft_source,
+                ok=payload.probe_ok,
+                item_count=payload.probe_item_count,
+                message="Preflight сохранен из UI перед активацией источника.",
+                readiness=payload.probe_readiness,
+                preferred_adapter=payload.resolved_source_type or source_type,
+                preferred_adapter_url=payload.resolved_source_url or payload.url,
+                supports_rss=payload.supports_rss,
+                supports_news_sitemap=payload.supports_news_sitemap,
+                supports_sitemap=payload.supports_sitemap,
+                supports_scraping=payload.supports_scraping,
+                full_text_ok=payload.full_text_ok,
+                lead_ok=payload.lead_ok,
+                tags_count=payload.tags_count,
+                sample_title=payload.sample_title,
+                sample_url=payload.sample_url,
+            )
+            repository.update_source_config(draft_source.model_copy(update={"status": "active"}))
+        else:
+            repository.create_source_config(source)
     except Exception as exc:
         _raise_source_http_error(exc)
     return SourceListResponse(items=repository.list_source_configs())
@@ -1197,6 +1222,10 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
         try:
             enrich_raw_item_content(repository, raw_item)
             updated_item = repository.get_raw_item(raw_item_id)
+            if updated_item is not None and not updated_item.is_duplicate:
+                deduped_item = repository.recheck_raw_item_duplicate_after_enrichment(raw_item_id)
+                if deduped_item is not None:
+                    updated_item = deduped_item
             after_has_any = bool(
                 updated_item
                 and (
@@ -1207,6 +1236,12 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
             )
             if after_has_any and not before_has_any:
                 enriched_count += 1
+            if updated_item is not None and updated_item.is_duplicate:
+                logger.info(
+                    "Post-enrichment duplicate detected: raw_item_id=%s duplicate_of=%s",
+                    raw_item_id,
+                    updated_item.duplicate_of,
+                )
             logger.info("Enrichment finished: raw_item_id=%s source=%s", raw_item_id, raw_item.source_key)
         except Exception as exc:
             repository.update_raw_item_enrichment(
