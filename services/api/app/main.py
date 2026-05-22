@@ -663,12 +663,16 @@ def _run_source_ingestion(
             limit_per_source=per_source,
             ai_search_prompt=ai_search_prompt,
         )
+        prefilter_result = repository.prefilter_known_raw_items(raw_items)
+        raw_items = prefilter_result.fresh_items
         logger.info(
-            "Ingestion collected raw items: total=%s source_results=%s",
+            "Ingestion collected raw items: total=%s fresh_after_prefilter=%s source_results=%s",
+            len(raw_items) + len(prefilter_result.skipped_items),
             len(raw_items),
             len(source_results),
         )
-        inserted_raw_items = repository.insert_raw_items(raw_items)
+        insert_result = repository.insert_raw_items(raw_items)
+        inserted_raw_items = insert_result.inserted_count
         logger.info("Ingestion inserted raw items: inserted=%s", inserted_raw_items)
         if run_enrichment:
             _run_ingestion_enrichment(raw_items)
@@ -696,6 +700,26 @@ def _run_source_ingestion(
             )
         published = repository.upsert_many(raw_items_to_news(raw_items))
         repository.sync_news_ai_review_flags()
+        skipped_items = _merge_skipped_ingest_items(
+            prefilter_result.skipped_items,
+            insert_result.skipped_items,
+            [
+                {
+                    "title": item.title,
+                    "reason": item.duplicate_reason or "Новость отсечена как дубль и не попала в ленту.",
+                }
+                for item in raw_items
+                if item.is_duplicate
+            ],
+        )
+        source_breakdown = [
+            {
+                "source_key": result.source.key,
+                "source_title": result.source.title,
+                "found_count": len([item for item in raw_items if item.source_key == result.source.key]),
+            }
+            for result in source_results
+        ]
         logger.info(
             "Ingestion finished: raw_items=%s inserted=%s published=%s",
             len(raw_items),
@@ -714,6 +738,8 @@ def _run_source_ingestion(
             found_count=len(raw_items),
             saved_count=inserted_raw_items,
             published_count=len(published),
+            skipped_items=skipped_items,
+            source_breakdown=source_breakdown,
         )
         return IngestResponse(
             ingested=len(raw_items),
@@ -734,6 +760,27 @@ def _run_source_ingestion(
             error=str(exc),
         )
         raise
+
+
+def _merge_skipped_ingest_items(
+    *groups: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for group in groups:
+        for item in group:
+            title = str(item.get("title", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            if not title:
+                continue
+            key = (title, reason)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append({"title": title, "reason": reason})
+
+    return merged
 
 
 def _run_scheduler(*, force: bool) -> SchedulerRunResponse:

@@ -218,6 +218,15 @@ export type PipelineRun = {
   plannedCount: number;
   generatedCount: number;
   reviewedCount: number;
+  skippedItems: Array<{
+    title: string;
+    reason?: string;
+  }>;
+  sourceBreakdown: Array<{
+    sourceKey: string;
+    sourceTitle: string;
+    foundCount: number;
+  }>;
   error?: string;
 };
 

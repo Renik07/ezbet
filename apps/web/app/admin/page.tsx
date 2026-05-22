@@ -1082,13 +1082,52 @@ function renderPipelineRunMetrics(run: {
   plannedCount: number;
   generatedCount: number;
   reviewedCount: number;
+  skippedItems: Array<{
+    title: string;
+    reason?: string;
+  }>;
+  sourceBreakdown: Array<{
+    sourceKey: string;
+    sourceTitle: string;
+    foundCount: number;
+  }>;
 }) {
   switch (run.phase) {
     case "ingest":
       return (
-        <p className="footer-note">
-          Найдено: {run.foundCount} · сохранено: {run.savedCount} · добавлено в ленту: {run.publishedCount}
-        </p>
+        <>
+          <p className="footer-note">
+            Найдено: {run.foundCount} · сохранено: {run.savedCount} · добавлено в ленту: {run.publishedCount}
+          </p>
+          {run.sourceBreakdown.length ? (
+            <p className="footer-note">
+              По источникам:{" "}
+              {run.sourceBreakdown
+                .map((item) => `${item.sourceTitle}: ${item.foundCount}`)
+                .join(" · ")}
+            </p>
+          ) : null}
+          {run.skippedItems.length ? (
+            <div style={{ marginTop: 10 }}>
+              <p className="footer-note" style={{ marginBottom: 6 }}>
+                Отсечено новостей: {run.skippedItems.length}
+              </p>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+                {run.skippedItems.slice(0, 6).map((item, index) => (
+                  <li key={`${item.title}-${index}`} className="footer-note">
+                    <strong>{item.title}</strong>
+                    {item.reason ? ` — ${item.reason}` : ""}
+                  </li>
+                ))}
+              </ul>
+              {run.skippedItems.length > 6 ? (
+                <p className="footer-note" style={{ marginTop: 8 }}>
+                  И ещё {run.skippedItems.length - 6}.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </>
       );
     case "enrichment":
       return (

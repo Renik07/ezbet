@@ -205,7 +205,23 @@ class PipelineRun(BaseModel):
     planned_count: int = Field(default=0, serialization_alias="plannedCount")
     generated_count: int = Field(default=0, serialization_alias="generatedCount")
     reviewed_count: int = Field(default=0, serialization_alias="reviewedCount")
+    skipped_items: list["PipelineSkippedItem"] = Field(default_factory=list, serialization_alias="skippedItems")
+    source_breakdown: list["PipelineSourceBreakdownItem"] = Field(
+        default_factory=list,
+        serialization_alias="sourceBreakdown",
+    )
     error: Optional[str] = None
+
+
+class PipelineSkippedItem(BaseModel):
+    title: str
+    reason: Optional[str] = None
+
+
+class PipelineSourceBreakdownItem(BaseModel):
+    source_key: str = Field(serialization_alias="sourceKey")
+    source_title: str = Field(serialization_alias="sourceTitle")
+    found_count: int = Field(default=0, serialization_alias="foundCount")
 
 
 class NewsListResponse(BaseModel):

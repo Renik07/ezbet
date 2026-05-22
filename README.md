@@ -722,6 +722,8 @@
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
 - [x] свести `template fallback` к аварийному режиму, а не к обычному пути публикации
+- [x] ранняя остановка по watermark для `rss` и `news sitemap`, чтобы старые новости не раздували `Найдено`
+- [ ] понятные причины остановки по этапам pipeline: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
 
 Что уже считаем честно рабочим:
 
@@ -742,6 +744,7 @@
 - текущий sync ingestion уже умеет сразу добирать `full_text`, но для production его нужно развести на быстрый ingest и отдельный background enrichment, чтобы длинние прогоны не падали по времени
 - для production scheduler лучше делать не как вечный таймер внутри web API процесса, а как внешний cron / job trigger, который вызывает ingestion-runner по расписанию
 - watermark-инвариант: запуск в `08:00` не должен повторно тянуть то, что уже было успешно обработано в `07:00`; ориентиром служит `last_published_at / last_external_id`, а не просто текущее время
+- для `rss` и `news sitemap` ранний stopping по watermark должен срабатывать еще до стадии dedupe в БД: если дошли до уже обработанного `last_external_id` или до более старой новости, дальше ленту читать не нужно
 - `full_text` и тяжелый enrichment не должны идти по всему потоку подряд; сначала нужен shortlist нужных новостей, и только потом дорогой добор контекста
 - для production нужна не только консольная отладка, а полноценная observability-модель: structured logs, run history, item diagnostics и admin-панель состояния pipeline
 

@@ -1186,6 +1186,31 @@ def _filter_new_items(
 
     last_published_at = state.last_published_at
     last_external_id = state.last_external_id
+
+    if source_type in {"rss", "news_sitemap"} and _items_look_descending_by_freshness(items):
+        fresh_items: list[RawItem] = []
+        for item in items:
+            if last_external_id is not None and item.external_id == last_external_id:
+                break
+
+            if item.published_at > last_published_at:
+                fresh_items.append(item)
+                continue
+
+            if (
+                item.published_at == last_published_at
+                and last_external_id is not None
+                and item.external_id != last_external_id
+            ):
+                fresh_items.append(item)
+                continue
+
+            if item.published_at < last_published_at:
+                break
+
+        if fresh_items:
+            return fresh_items
+
     fresh_items: list[RawItem] = []
 
     for item in items:
@@ -1201,6 +1226,18 @@ def _filter_new_items(
             fresh_items.append(item)
 
     return fresh_items
+
+
+def _items_look_descending_by_freshness(items: list[RawItem]) -> bool:
+    if len(items) < 2:
+        return True
+
+    previous = items[0].published_at
+    for item in items[1:]:
+        if item.published_at > previous:
+            return False
+        previous = item.published_at
+    return True
 
 
 def _parse_rss(root: ElementTree.Element, source: SourceItem, payload: str) -> list[RawItem]:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +20,8 @@ from .models import (
     EditorReview,
     NewsItem,
     PipelineRun,
+    PipelineSkippedItem,
+    PipelineSourceBreakdownItem,
     PublishSchedulerSettings,
     PromptConfig,
     RawItem,
@@ -26,6 +30,18 @@ from .models import (
     SourceItem,
     SourceSyncState,
 )
+
+
+@dataclass
+class InsertRawItemsResult:
+    inserted_count: int
+    skipped_items: list[dict[str, str]]
+
+
+@dataclass
+class PrefilterRawItemsResult:
+    fresh_items: list[RawItem]
+    skipped_items: list[dict[str, str]]
 
 
 class NewsRepository:
@@ -280,10 +296,18 @@ class NewsRepository:
                         planned_count INTEGER NOT NULL DEFAULT 0,
                         generated_count INTEGER NOT NULL DEFAULT 0,
                         reviewed_count INTEGER NOT NULL DEFAULT 0,
+                        skipped_items TEXT NOT NULL DEFAULT '[]',
+                        source_breakdown TEXT NOT NULL DEFAULT '[]',
                         error TEXT,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
+                )
+                cursor.execute(
+                    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS skipped_items TEXT NOT NULL DEFAULT '[]'"
+                )
+                cursor.execute(
+                    "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS source_breakdown TEXT NOT NULL DEFAULT '[]'"
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 5"
@@ -928,6 +952,8 @@ class NewsRepository:
                 planned_count,
                 generated_count,
                 reviewed_count,
+                skipped_items,
+                source_breakdown,
                 error
             FROM pipeline_runs
             ORDER BY started_at DESC, created_at DESC
@@ -959,6 +985,8 @@ class NewsRepository:
         planned_count: int = 0,
         generated_count: int = 0,
         reviewed_count: int = 0,
+        skipped_items: list[dict[str, str]] | None = None,
+        source_breakdown: list[dict[str, object]] | None = None,
         error: str | None = None,
     ) -> PipelineRun:
         statement = """
@@ -978,10 +1006,14 @@ class NewsRepository:
                 planned_count,
                 generated_count,
                 reviewed_count,
+                skipped_items,
+                source_breakdown,
                 error
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+        serialized_skipped_items = json.dumps(skipped_items or [], ensure_ascii=False)
+        serialized_source_breakdown = json.dumps(source_breakdown or [], ensure_ascii=False)
 
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
@@ -1003,6 +1035,8 @@ class NewsRepository:
                         planned_count,
                         generated_count,
                         reviewed_count,
+                        serialized_skipped_items,
+                        serialized_source_breakdown,
                         error,
                     ),
                 )
@@ -1024,6 +1058,20 @@ class NewsRepository:
             planned_count=planned_count,
             generated_count=generated_count,
             reviewed_count=reviewed_count,
+            skipped_items=[
+                PipelineSkippedItem(title=str(item.get("title", "")).strip(), reason=item.get("reason"))
+                for item in (skipped_items or [])
+                if str(item.get("title", "")).strip()
+            ],
+            source_breakdown=[
+                PipelineSourceBreakdownItem(
+                    source_key=str(item.get("source_key", "")).strip(),
+                    source_title=str(item.get("source_title", "")).strip(),
+                    found_count=int(item.get("found_count", 0) or 0),
+                )
+                for item in (source_breakdown or [])
+                if str(item.get("source_title", "")).strip()
+            ],
             error=error,
         )
 
@@ -2798,8 +2846,9 @@ class NewsRepository:
         )
         return self.upsert_many([generated])
 
-    def insert_raw_items(self, items: list[RawItem]) -> int:
+    def insert_raw_items(self, items: list[RawItem]) -> InsertRawItemsResult:
         inserted = 0
+        skipped_items: list[dict[str, str]] = []
 
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
@@ -2911,9 +2960,55 @@ class NewsRepository:
                             pending_similarity_candidates.setdefault(item.normalized_category, []).append(
                                 (item.id, combined_text)
                             )
+                    else:
+                        skipped_items.append(
+                            {
+                                "title": item.title,
+                                "reason": item.duplicate_reason
+                                or "Новость уже была сохранена ранее и не была добавлена повторно.",
+                            }
+                        )
             connection.commit()
 
-        return inserted
+        return InsertRawItemsResult(inserted_count=inserted, skipped_items=skipped_items)
+
+    def prefilter_known_raw_items(self, items: list[RawItem]) -> PrefilterRawItemsResult:
+        if not items:
+            return PrefilterRawItemsResult(fresh_items=[], skipped_items=[])
+
+        dedupe_keys = sorted({item.dedupe_key for item in items if item.dedupe_key})
+        if not dedupe_keys:
+            return PrefilterRawItemsResult(fresh_items=items, skipped_items=[])
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT dedupe_key
+                    FROM raw_items
+                    WHERE dedupe_key = ANY(%s)
+                    """,
+                    (dedupe_keys,),
+                )
+                known_dedupe_keys = {str(row[0]) for row in cursor.fetchall()}
+
+        if not known_dedupe_keys:
+            return PrefilterRawItemsResult(fresh_items=items, skipped_items=[])
+
+        fresh_items: list[RawItem] = []
+        skipped_items: list[dict[str, str]] = []
+        for item in items:
+            if item.dedupe_key in known_dedupe_keys:
+                skipped_items.append(
+                    {
+                        "title": item.title,
+                        "reason": "Новость уже была загружена ранее и отсечена до повторного сохранения.",
+                    }
+                )
+                continue
+            fresh_items.append(item)
+
+        return PrefilterRawItemsResult(fresh_items=fresh_items, skipped_items=skipped_items)
 
     def update_raw_item_enrichment(
         self,
@@ -3633,6 +3728,14 @@ class NewsRepository:
 
     @staticmethod
     def _map_pipeline_run_row(row: tuple[object, ...]) -> PipelineRun:
+        try:
+            skipped_items_payload = json.loads(str(row[15] or "[]"))
+        except json.JSONDecodeError:
+            skipped_items_payload = []
+        try:
+            source_breakdown_payload = json.loads(str(row[16] or "[]"))
+        except json.JSONDecodeError:
+            source_breakdown_payload = []
         return PipelineRun(
             id=str(row[0]),
             phase=str(row[1]),
@@ -3649,7 +3752,24 @@ class NewsRepository:
             planned_count=int(row[12] or 0),
             generated_count=int(row[13] or 0),
             reviewed_count=int(row[14] or 0),
-            error=row[15],
+            skipped_items=[
+                PipelineSkippedItem(
+                    title=str(item.get("title", "")).strip(),
+                    reason=str(item.get("reason")).strip() if item.get("reason") else None,
+                )
+                for item in skipped_items_payload
+                if isinstance(item, dict) and str(item.get("title", "")).strip()
+            ],
+            source_breakdown=[
+                PipelineSourceBreakdownItem(
+                    source_key=str(item.get("source_key", "")).strip(),
+                    source_title=str(item.get("source_title", "")).strip(),
+                    found_count=int(item.get("found_count", 0) or 0),
+                )
+                for item in source_breakdown_payload
+                if isinstance(item, dict) and str(item.get("source_title", "")).strip()
+            ],
+            error=row[17],
         )
 
     @staticmethod
