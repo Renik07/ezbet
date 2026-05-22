@@ -2009,7 +2009,7 @@ def _candidate_urls_for_sitemap(url: str) -> list[str]:
 
 
 def _candidate_urls_for_rss(url: str) -> list[str]:
-    candidates = _build_candidate_urls(
+    candidates = _host_specific_rss_candidates(url) + _build_candidate_urls(
         url,
         (
             "rss",
@@ -2028,6 +2028,34 @@ def _candidate_urls_for_rss(url: str) -> list[str]:
             if item not in candidates:
                 candidates.insert(0, item)
     return candidates
+
+
+def _host_specific_rss_candidates(url: str) -> list[str]:
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return []
+
+    host = parts.netloc.lower()
+    base_root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+    candidates: list[str] = []
+
+    if "sport-express.ru" in host:
+        candidates.extend(
+            [
+                f"{base_root}/services/materials/news/se/",
+                f"{base_root}/services/materials/news/se",
+            ]
+        )
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = candidate.rstrip("/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(candidate)
+    return unique
 
 
 def _build_candidate_urls(url: str, suffixes: tuple[str, ...]) -> list[str]:

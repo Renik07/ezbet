@@ -640,29 +640,9 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
 
 export function buildRawDraftPairs(data: EditorialStudioData, limit = 10): RawDraftPair[] {
   const draftsByRawId = new Map(data.drafts.map((draft) => [draft.rawItemId, draft]));
-  const rawById = new Map(data.rawItems.map((rawItem) => [rawItem.id, rawItem]));
   const pairs: RawDraftPair[] = [];
-  const usedRawIds = new Set<string>();
-
-  for (const draft of data.drafts) {
-    const rawItem = rawById.get(draft.rawItemId);
-    if (!rawItem) {
-      continue;
-    }
-
-    pairs.push({ rawItem, draft });
-    usedRawIds.add(rawItem.id);
-
-    if (pairs.length >= limit) {
-      return pairs;
-    }
-  }
 
   for (const rawItem of data.rawItems) {
-    if (usedRawIds.has(rawItem.id)) {
-      continue;
-    }
-
     pairs.push({
       rawItem,
       draft: draftsByRawId.get(rawItem.id)

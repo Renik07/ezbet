@@ -704,7 +704,7 @@
 - [x] защита от двойного запуска scheduler: advisory lock / job lock и проверка `is_due`
 - [x] scheduler должен брать только новые новости относительно `source_sync_state`, а не перечитывать весь часовой диапазон по wall-clock
 - [x] post-enrichment duplicate recheck: после нормализации `title/summary/full_text` свежая новость еще раз проходит cross-source near-duplicate проверку
-- [ ] вернуть shortlist для enrichment scheduler после этапа тестов: по `score / triage / freshness / duplicate-state`, без draft-элементов
+- [x] мягкий shortlist для enrichment scheduler: сначала более приоритетные и более неполные raw_items, но без жесткого отрезания свежих `low`
 - [x] editorial scheduler как отдельный автоматический этап после enrichment
 - [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
 - [ ] publish scheduler / publish rules как отдельный этап после editorial
@@ -712,8 +712,10 @@
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
 - [ ] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`
 - [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
+- [x] duplicate diagnostics by stage: в UI видно, где новость стала дублем — при первичной загрузке, после enrichment или перед публикацией
 - [~] publish rules: базовые `publish_decision / publish_reason` уже есть в editorial-слое; дальше вынести их в отдельный publish scheduler и admin-control
 - [x] publish rules + отдельный publish scheduler: editorial теперь только готовит `ready_for_publish`, а отдельный publish-этап публикует только `publish_auto`
+- [x] явный pre-publish duplicate guard: draft отдельно сверяется с уже опубликованными статьями и получает `skip / hold / rewrite` с понятной причиной
 - [x] базовый блок наблюдаемости в `/admin`: последние прогоны, counters, last successful run, ошибки по этапам
 - [ ] ближайший приоритет: сначала observability и run history для всего pipeline, и только потом publish automation
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода

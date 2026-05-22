@@ -97,6 +97,8 @@ class NewsRepository:
                         triage_label TEXT NOT NULL DEFAULT 'low',
                         is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
                         duplicate_of TEXT,
+                        duplicate_stage TEXT,
+                        duplicate_reason TEXT,
                         full_text TEXT,
                         full_text_source_url TEXT,
                         full_text_source_title TEXT,
@@ -483,6 +485,12 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS duplicate_of TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS duplicate_stage TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS duplicate_reason TEXT"
                 )
                 cursor.execute(
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS full_text TEXT"
@@ -879,6 +887,8 @@ class NewsRepository:
                 triage_label,
                 is_duplicate,
                 duplicate_of,
+                duplicate_stage,
+                duplicate_reason,
                 full_text,
                 full_text_source_url,
                 full_text_source_title,
@@ -1035,6 +1045,8 @@ class NewsRepository:
                 r.triage_label,
                 r.is_duplicate,
                 r.duplicate_of,
+                r.duplicate_stage,
+                r.duplicate_reason,
                 r.full_text,
                 r.full_text_source_url,
                 r.full_text_source_title,
@@ -1050,7 +1062,6 @@ class NewsRepository:
             LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
             ORDER BY
-                CASE WHEN d.raw_item_id IS NOT NULL THEN 0 ELSE 1 END,
                 r.fetched_at DESC,
                 r.published_at DESC
             LIMIT %s
@@ -1084,6 +1095,8 @@ class NewsRepository:
                 r.triage_label,
                 r.is_duplicate,
                 r.duplicate_of,
+                r.duplicate_stage,
+                r.duplicate_reason,
                 r.full_text,
                 r.full_text_source_url,
                 r.full_text_source_title,
@@ -1095,6 +1108,7 @@ class NewsRepository:
                 r.payload
             FROM raw_items r
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
+            LEFT JOIN source_configs s ON s.key = r.source_key
             WHERE r.is_duplicate = FALSE
               AND d.raw_item_id IS NULL
               AND r.url IS NOT NULL
@@ -1106,7 +1120,34 @@ class NewsRepository:
                 OR BTRIM(r.lead) = ''
                 OR COALESCE(array_length(r.tags, 1), 0) = 0
               )
-            ORDER BY r.published_at DESC, r.fetched_at DESC, r.importance_score DESC
+            ORDER BY
+              CASE
+                WHEN r.full_text IS NULL OR BTRIM(r.full_text) = '' THEN 0
+                ELSE 1
+              END,
+              CASE
+                WHEN r.lead IS NULL OR BTRIM(r.lead) = '' THEN 0
+                ELSE 1
+              END,
+              CASE
+                WHEN COALESCE(array_length(r.tags, 1), 0) = 0 THEN 0
+                ELSE 1
+              END,
+              CASE r.triage_label
+                WHEN 'high' THEN 0
+                WHEN 'medium' THEN 1
+                ELSE 2
+              END,
+              CASE COALESCE(s.source_type, '')
+                WHEN 'news_sitemap' THEN 0
+                WHEN 'rss' THEN 1
+                WHEN 'scraping' THEN 2
+                WHEN 'ai_research' THEN 3
+                ELSE 4
+              END,
+              r.importance_score DESC,
+              r.fetched_at DESC,
+              r.published_at DESC
             LIMIT %s
         """
 
@@ -2333,6 +2374,8 @@ class NewsRepository:
                 r.triage_label,
                 r.is_duplicate,
                 r.duplicate_of,
+                r.duplicate_stage,
+                r.duplicate_reason,
                 r.full_text,
                 r.full_text_source_url,
                 r.full_text_source_title,
@@ -2386,6 +2429,8 @@ class NewsRepository:
                 r.triage_label,
                 r.is_duplicate,
                 r.duplicate_of,
+                r.duplicate_stage,
+                r.duplicate_reason,
                 r.full_text,
                 r.full_text_source_url,
                 r.full_text_source_title,
@@ -2470,6 +2515,8 @@ class NewsRepository:
                 triage_label,
                 is_duplicate,
                 duplicate_of,
+                duplicate_stage,
+                duplicate_reason,
                 full_text,
                 full_text_source_url,
                 full_text_source_title,
@@ -2766,8 +2813,12 @@ class NewsRepository:
                     if existing_raw_id and existing_raw_id != item.id:
                         item.is_duplicate = True
                         item.duplicate_of = existing_raw_id
+                        item.duplicate_stage = "ingest"
+                        item.duplicate_reason = "Точный дубль найден при первичной загрузке по dedupe key / URL."
                     elif item.is_duplicate and not item.duplicate_of:
                         item.duplicate_of = known_dedupe_map.get(item.dedupe_key, item.id)
+                        item.duplicate_stage = item.duplicate_stage or "ingest"
+                        item.duplicate_reason = item.duplicate_reason or "Новость помечена как дубль при первичной загрузке."
                     else:
                         duplicate_match_id = self._find_near_duplicate_id(
                             item,
@@ -2777,6 +2828,8 @@ class NewsRepository:
                         if duplicate_match_id is not None and duplicate_match_id != item.id:
                             item.is_duplicate = True
                             item.duplicate_of = duplicate_match_id
+                            item.duplicate_stage = "ingest"
+                            item.duplicate_reason = "Похожая новость найдена при первичной загрузке среди свежих raw items."
 
                     cursor.execute(
                         """
@@ -2799,6 +2852,8 @@ class NewsRepository:
                             triage_label,
                             is_duplicate,
                             duplicate_of,
+                            duplicate_stage,
+                            duplicate_reason,
                             full_text,
                             full_text_source_url,
                             full_text_source_title,
@@ -2809,7 +2864,7 @@ class NewsRepository:
                             tags,
                             payload
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                         RETURNING id
                         """,
@@ -2832,6 +2887,8 @@ class NewsRepository:
                             item.triage_label,
                             item.is_duplicate,
                             item.duplicate_of,
+                            item.duplicate_stage,
+                            item.duplicate_reason,
                             item.full_text,
                             item.full_text_source_url,
                             item.full_text_source_title,
@@ -2997,7 +3054,9 @@ class NewsRepository:
                     """
                     UPDATE raw_items
                     SET is_duplicate = TRUE,
-                        duplicate_of = %s
+                        duplicate_of = %s,
+                        duplicate_stage = 'after_enrichment',
+                        duplicate_reason = 'Похожая новость найдена после добора full text и нормализации заголовка.'
                     WHERE id = %s
                     """,
                     (duplicate_match_id, raw_item_id),
@@ -3406,15 +3465,17 @@ class NewsRepository:
             triage_label=str(row[15]),
             is_duplicate=bool(row[16]),
             duplicate_of=row[17],
-            full_text=row[18],
-            full_text_source_url=row[19],
-            full_text_source_title=row[20],
-            reference_urls=list(row[21] or []),
-            extraction_mode=row[22],
-            enrichment_status=row[23],
-            enrichment_error=row[24],
-            tags=list(row[25] or []),
-            payload=str(row[26]),
+            duplicate_stage=row[18],
+            duplicate_reason=row[19],
+            full_text=row[20],
+            full_text_source_url=row[21],
+            full_text_source_title=row[22],
+            reference_urls=list(row[23] or []),
+            extraction_mode=row[24],
+            enrichment_status=row[25],
+            enrichment_error=row[26],
+            tags=list(row[27] or []),
+            payload=str(row[28]),
         )
 
     @staticmethod
@@ -3435,17 +3496,19 @@ class NewsRepository:
             triage_label=str(row[12]),
             is_duplicate=bool(row[13]),
             duplicate_of=row[14],
-            full_text=row[15],
-            full_text_source_url=row[16],
-            full_text_source_title=row[17],
-            reference_urls=list(row[18] or []),
-            extraction_mode=row[19],
-            enrichment_status=row[20],
-            enrichment_error=row[21],
-            content_plan_status=row[22],
-            content_plan_reason=row[23],
-            content_plan_priority_label=row[24],
-            tags=list(row[25] or []),
+            duplicate_stage=row[15],
+            duplicate_reason=row[16],
+            full_text=row[17],
+            full_text_source_url=row[18],
+            full_text_source_title=row[19],
+            reference_urls=list(row[20] or []),
+            extraction_mode=row[21],
+            enrichment_status=row[22],
+            enrichment_error=row[23],
+            content_plan_status=row[24],
+            content_plan_reason=row[25],
+            content_plan_priority_label=row[26],
+            tags=list(row[27] or []),
         )
 
     @staticmethod

@@ -376,8 +376,8 @@ export default async function AdminPage({
               </label>
               <p className="footer-note">
                 Этот этап отдельно добирает <strong>full text</strong>, <strong>lead</strong> и <strong>tags</strong>
-                для уже собранных raw_items. Сейчас для тестирования он идет по всем свежим элементам без дублей и без draft,
-                а позже мы вернем shortlist по приоритету, чтобы не тратить лишние ресурсы.
+                для уже собранных raw_items. Сейчас он работает по мягкому shortlist: сначала берет самые неполные и более
+                приоритетные новости, а свежие low-элементы оставляет как fallback, если в пачке остается место.
               </p>
               <div className="source-button-row">
                 <PendingSubmitButton

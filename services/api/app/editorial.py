@@ -198,6 +198,16 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 publish_reason=quality_gate.reason,
             )
             repository.set_content_plan_status(raw_item.id, "rewrite_needed")
+        elif quality_gate.decision == "skip":
+            repository.set_draft_review_status(
+                stored_draft.id,
+                review_status="quality_hold",
+                status="hold",
+                review_summary=quality_gate.reason,
+                publish_decision="publish_skip",
+                publish_reason=quality_gate.reason,
+            )
+            repository.set_content_plan_status(raw_item.id, "hold")
         else:
             if stored_draft.generation_mode == "template":
                 repository.set_draft_review_status(
@@ -401,17 +411,49 @@ def evaluate_quality_gate(
     if source_similarity >= 0.82:
         return QualityGateResult("rewrite", "Quality gate: итоговый текст слишком близок к исходному source summary.")
 
-    candidate_similarities = [
-        compute_similarity(f"{draft.title} {draft.dek} {body}", f"{candidate.title} {candidate.dek} {candidate.body}")
-        for candidate in similarity_candidates
-    ]
-    max_similarity = max(candidate_similarities, default=0.0)
-    if max_similarity >= 0.9:
-        return QualityGateResult("hold", "Quality gate: материал слишком похож на уже опубликованную статью.")
-    if max_similarity >= 0.78:
-        return QualityGateResult("rewrite", "Quality gate: материал слишком близок к недавней статье той же категории.")
+    duplicate_guard = evaluate_published_duplicate_guard(draft, similarity_candidates)
+    if duplicate_guard is not None:
+        return duplicate_guard
 
     return QualityGateResult("pass", "Quality gate: материал можно публиковать.")
+
+
+def evaluate_published_duplicate_guard(
+    draft: DraftArticle,
+    similarity_candidates: list[Article],
+) -> QualityGateResult | None:
+    if not similarity_candidates:
+        return None
+
+    draft_text = f"{draft.title} {draft.dek} {draft.body}"
+    best_candidate: Article | None = None
+    best_score = 0.0
+
+    for candidate in similarity_candidates:
+        similarity = compute_similarity(draft_text, f"{candidate.title} {candidate.dek} {candidate.body}")
+        if similarity > best_score:
+            best_score = similarity
+            best_candidate = candidate
+
+    if best_candidate is None:
+        return None
+
+    if best_score >= 0.9:
+        return QualityGateResult(
+            "skip",
+            f'Pre-publish duplicate check: материал практически совпадает с уже опубликованной статьёй "{best_candidate.title}".',
+        )
+    if best_score >= 0.82:
+        return QualityGateResult(
+            "hold",
+            f'Pre-publish duplicate check: материал слишком близок к уже опубликованной статье "{best_candidate.title}" и требует ручной проверки.',
+        )
+    if best_score >= 0.78:
+        return QualityGateResult(
+            "rewrite",
+            f'Pre-publish duplicate check: материал близок к недавней статье "{best_candidate.title}", лучше усилить различия перед публикацией.',
+        )
+    return None
 
 
 def normalize_gate_text(value: str) -> str:

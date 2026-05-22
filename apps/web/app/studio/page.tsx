@@ -116,13 +116,25 @@ function formatPublishDecision(decision?: string) {
 function describePipelineState(rawItem: {
   isDuplicate: boolean;
   duplicateOf?: string;
+  duplicateStage?: string;
+  duplicateReason?: string;
   fullText?: string;
   contentPlanStatus?: string;
   contentPlanPriorityLabel?: string;
   contentPlanReason?: string;
 }) {
   if (rawItem.isDuplicate) {
-    return `Дубликат: эта новость не пойдет дальше как самостоятельный материал${rawItem.duplicateOf ? `, duplicate_of=${rawItem.duplicateOf}` : ""}.`;
+    const stageLabel =
+      rawItem.duplicateStage === "ingest"
+        ? "Дубликат найден при первичной загрузке."
+        : rawItem.duplicateStage === "after_enrichment"
+          ? "Дубликат найден после добора full text."
+          : rawItem.duplicateStage === "before_publish"
+            ? "Дубликат найден перед публикацией."
+            : "Новость помечена как дубликат.";
+    const reason = rawItem.duplicateReason ? ` ${rawItem.duplicateReason}` : "";
+    const duplicateOf = rawItem.duplicateOf ? ` Связана с записью ${rawItem.duplicateOf}.` : "";
+    return `${stageLabel}${reason}${duplicateOf}`;
   }
   if (!rawItem.fullText) {
     return "Ожидает enrichment: полный текст еще не получен.";
