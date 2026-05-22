@@ -656,9 +656,18 @@ def _run_source_ingestion(
     )
     try:
         ai_search_prompt = repository.get_active_prompt("ai_search")
+        source_keys = [source.key for source in sources]
+        known_external_ids_by_source = repository.get_recent_known_external_ids_by_source(
+            source_keys
+        )
+        known_dedupe_keys_by_source = repository.get_recent_known_dedupe_keys_by_source(
+            source_keys
+        )
         raw_items, source_results = ingest_sources_with_results(
             sources,
             repository.get_source_sync_state_map(),
+            known_external_ids_by_source=known_external_ids_by_source,
+            known_dedupe_keys_by_source=known_dedupe_keys_by_source,
             limit=limit,
             limit_per_source=per_source,
             ai_search_prompt=ai_search_prompt,

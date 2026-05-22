@@ -1370,6 +1370,84 @@ class NewsRepository:
     def get_source_sync_state_map(self) -> dict[str, SourceSyncState]:
         return {item.source_key: item for item in self.list_source_sync_states()}
 
+    def get_recent_known_external_ids_by_source(
+        self,
+        source_keys: list[str],
+        *,
+        per_source_limit: int = 200,
+    ) -> dict[str, set[str]]:
+        if not source_keys:
+            return {}
+
+        statement = """
+            SELECT source_key, external_id
+            FROM (
+                SELECT
+                    source_key,
+                    external_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY source_key
+                        ORDER BY fetched_at DESC, published_at DESC
+                    ) AS rn
+                FROM raw_items
+                WHERE source_key = ANY(%s)
+                  AND external_id <> ''
+            ) ranked
+            WHERE rn <= %s
+        """
+
+        known_by_source: dict[str, set[str]] = {key: set() for key in source_keys}
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (source_keys, per_source_limit))
+                rows = cursor.fetchall()
+
+        for row in rows:
+            source_key = str(row[0])
+            external_id = str(row[1])
+            known_by_source.setdefault(source_key, set()).add(external_id)
+
+        return known_by_source
+
+    def get_recent_known_dedupe_keys_by_source(
+        self,
+        source_keys: list[str],
+        *,
+        per_source_limit: int = 200,
+    ) -> dict[str, set[str]]:
+        if not source_keys:
+            return {}
+
+        statement = """
+            SELECT source_key, dedupe_key
+            FROM (
+                SELECT
+                    source_key,
+                    dedupe_key,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY source_key
+                        ORDER BY fetched_at DESC, published_at DESC
+                    ) AS rn
+                FROM raw_items
+                WHERE source_key = ANY(%s)
+                  AND dedupe_key <> ''
+            ) ranked
+            WHERE rn <= %s
+        """
+
+        known_by_source: dict[str, set[str]] = {key: set() for key in source_keys}
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (source_keys, per_source_limit))
+                rows = cursor.fetchall()
+
+        for row in rows:
+            source_key = str(row[0])
+            dedupe_key = str(row[1])
+            known_by_source.setdefault(source_key, set()).add(dedupe_key)
+
+        return known_by_source
+
     def get_scheduler_settings(self) -> SchedulerSettings:
         statement = """
             SELECT

@@ -261,6 +261,8 @@ def ingest_sources(
 def ingest_sources_with_results(
     sources: Iterable[SourceItem],
     source_states: dict[str, SourceSyncState] | None = None,
+    known_external_ids_by_source: dict[str, set[str]] | None = None,
+    known_dedupe_keys_by_source: dict[str, set[str]] | None = None,
     timeout: int = 10,
     limit: int | None = None,
     max_retries: int = 1,
@@ -271,6 +273,8 @@ def ingest_sources_with_results(
     results: list[SourceIngestionResult] = []
     seen_keys: set[str] = set()
     states = source_states or {}
+    known_external_ids_map = known_external_ids_by_source or {}
+    known_dedupe_keys_map = known_dedupe_keys_by_source or {}
 
     for source in sources:
         source_state = states.get(source.key)
@@ -281,7 +285,13 @@ def ingest_sources_with_results(
             ai_search_prompt=ai_search_prompt,
         )
         collected_items = source_result.items
-        filtered_items = _filter_new_items(collected_items, source_state, source.source_type)
+        filtered_items = _filter_new_items(
+            collected_items,
+            source_state,
+            source.source_type,
+            known_external_ids=known_external_ids_map.get(source.key, set()),
+            known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
+        )
         if limit is not None and limit_per_source:
             filtered_items = filtered_items[:limit]
         for item in filtered_items:
@@ -1171,15 +1181,23 @@ def _filter_new_items(
     items: list[RawItem],
     state: SourceSyncState | None,
     source_type: str,
+    *,
+    known_external_ids: set[str] | None = None,
+    known_dedupe_keys: set[str] | None = None,
 ) -> list[RawItem]:
-    if state is not None and source_type == "scraping" and state.last_external_id:
+    known_ids = known_external_ids or set()
+    known_keys = known_dedupe_keys or set()
+    if state is not None and source_type == "scraping":
         fresh_items: list[RawItem] = []
         for item in items:
-            if item.external_id == state.last_external_id:
-                break
+            if (
+                (state.last_external_id and item.external_id == state.last_external_id)
+                or item.external_id in known_ids
+                or item.dedupe_key in known_keys
+            ):
+                return fresh_items
             fresh_items.append(item)
-        if fresh_items:
-            return fresh_items
+        return fresh_items
 
     if state is None or state.last_published_at is None:
         return items
@@ -1191,6 +1209,12 @@ def _filter_new_items(
         fresh_items: list[RawItem] = []
         for item in items:
             if last_external_id is not None and item.external_id == last_external_id:
+                break
+
+            if item.external_id in known_ids:
+                break
+
+            if item.dedupe_key in known_keys:
                 break
 
             if item.published_at > last_published_at:
