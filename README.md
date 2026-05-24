@@ -723,7 +723,14 @@
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
 - [x] свести `template fallback` к аварийному режиму, а не к обычному пути публикации
 - [x] ранняя остановка по watermark для `rss` и `news sitemap`, чтобы старые новости не раздували `Найдено`
-- [ ] понятные причины остановки по этапам pipeline: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
+- [x] усиленные понятные причины остановки по этапам pipeline в `studio`: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
+- [x] локальный `pipeline:loop` для полного автотеста цепочки `ingest -> enrichment -> editorial -> publish`
+- [ ] production cron / external scheduler вместо локального shell-loop
+- [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
+- [ ] production soak-test на идемпотентность: повторные циклы не должны заново тянуть `full_text`, генерировать второй draft или повторно публиковать материал
+- [ ] production monitoring / alerts: structured logs, health-checks по scheduler-этапам, сигнал при долгом отсутствии успешных прогонов
+- [ ] production recovery / resilience: безопасное восстановление после рестарта API / worker без зависших `running` и дублей
+- [ ] production env checklist: секреты, timeouts, concurrency limits, базовые cron-настройки и runbook запуска
 
 Что уже считаем честно рабочим:
 
@@ -753,7 +760,10 @@
 - включить scheduler и задать интервал в `/admin`
 - разово дернуть scheduler: `npm run scheduler:tick`
 - крутить локальный цикл, имитирующий внешний cron: `npm run scheduler:loop`
+- разово дернуть полный локальный pipeline: `npm run pipeline:tick`
+- крутить локальный полный цикл по всем scheduler-этапам: `npm run pipeline:loop`
 - при необходимости форсировать запуск в обход `is_due`: `SCHEDULER_MODE=run npm run scheduler:tick`
+- при необходимости форсировать весь локальный pipeline в обход `is_due`: `PIPELINE_MODE=run npm run pipeline:tick`
 - при необходимости поменять API URL: `EZBET_API_BASE_URL=http://localhost:8000 npm run scheduler:tick`
 - importance score пока rule-based и базовый
 - planner пока детерминированный, а не AI-assisted

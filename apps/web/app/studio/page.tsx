@@ -145,6 +145,134 @@ function describePipelineState(rawItem: {
   return `В content plan: ${rawItem.contentPlanStatus}${rawItem.contentPlanPriorityLabel ? ` (${rawItem.contentPlanPriorityLabel})` : ""}.`;
 }
 
+function describeEnrichmentBlock(rawItem: {
+  isDuplicate: boolean;
+  duplicateReason?: string;
+  duplicateStage?: string;
+  fullText?: string;
+  enrichmentStatus?: string;
+  enrichmentError?: string;
+  extractionMode?: string;
+}) {
+  if (rawItem.isDuplicate && rawItem.duplicateStage === "ingest") {
+    return `Добор full text не запускался: новость была отсечена как дубликат еще при первичной загрузке${rawItem.duplicateReason ? ` (${rawItem.duplicateReason})` : "."}`;
+  }
+  if (rawItem.fullText) {
+    return `Полный текст уже получен через ${formatExtractionMode(rawItem.extractionMode)}.`;
+  }
+  if (rawItem.enrichmentError) {
+    return `Добор full text завершился ошибкой: ${rawItem.enrichmentError}`;
+  }
+  switch (rawItem.enrichmentStatus) {
+    case "search_no_match":
+      return "Добор full text запускался, но источник текста не нашелся даже через web search.";
+    case "search_partial_only":
+      return "Полный текст не найден: удалось получить только частичный web-search brief.";
+    case "direct_html_ok":
+      return "Direct parser отработал, но сохранил только частичный контекст без полноценного full text.";
+    case "enrichment_error":
+      return "Добор full text не завершился успешно и требует повторного запуска или другого extraction path.";
+    default:
+      return "Full text пока не получен: новость либо еще не дошла до enrichment batch, либо источник пока не дал достаточно качественный текст для сохранения.";
+  }
+}
+
+function describeEditorialBlock(
+  rawItem: {
+    isDuplicate: boolean;
+    duplicateReason?: string;
+    fullText?: string;
+    contentPlanStatus?: string;
+    contentPlanReason?: string;
+    contentPlanPriorityLabel?: string;
+  },
+  draft?: {
+    status: string;
+    reviewStatus: string;
+    reviewSummary?: string;
+    generationMode: string;
+  }
+) {
+  if (rawItem.isDuplicate) {
+    return `До editorial новость не допускается: она уже помечена как дубликат${rawItem.duplicateReason ? ` (${rawItem.duplicateReason})` : "."}`;
+  }
+  if (!rawItem.fullText) {
+    return "Editorial еще не стартовал: сначала нужен full text или хотя бы достаточный enrichment-контекст.";
+  }
+  if (!rawItem.contentPlanStatus) {
+    return rawItem.contentPlanReason
+      ? `Editorial еще не стартовал: планировщик пока не взял новость в content plan (${rawItem.contentPlanReason}).`
+      : "Editorial еще не стартовал: новость пока не попала в content plan и ждет планировщик.";
+  }
+  if (rawItem.contentPlanStatus === "hold") {
+    return `Editorial остановлен еще на content plan: ${rawItem.contentPlanReason ?? "новость удержана правилами планировщика."}`;
+  }
+  if (rawItem.contentPlanStatus === "rewrite_needed") {
+    return `Editorial требует доработки уже на планировщике: ${rawItem.contentPlanReason ?? "нужен rewrite до writer-этапа."}`;
+  }
+  if (rawItem.contentPlanStatus === "fallback_only") {
+    return `Editorial не пойдет в обычный AI-поток: ${rawItem.contentPlanReason ?? "новость оставлена только во fallback-режиме."}`;
+  }
+  if (!draft) {
+    if (rawItem.contentPlanStatus === "planned") {
+      return `Editorial еще не стартовал: новость уже отобрана в content plan${rawItem.contentPlanPriorityLabel ? ` (${rawItem.contentPlanPriorityLabel})` : ""} и ждет своей очереди в batch.`;
+    }
+    return "Draft еще не создан: новость находится между content plan и writer-этапом.";
+  }
+  if (draft.reviewStatus === "pending") {
+    return "Editorial уже идет: draft создан, но review-этап еще не завершен.";
+  }
+  if (draft.status === "fallback_only" || draft.generationMode === "template") {
+    return `Живой AI-draft не получился: система оставила только template fallback для внутреннего просмотра${draft.reviewSummary ? ` (${draft.reviewSummary})` : "."}`;
+  }
+  if (draft.status === "hold") {
+    return `Editorial остановлен quality gate: ${draft.reviewSummary ?? "нужна дополнительная проверка редакционного качества."}`;
+  }
+  if (draft.status === "rewrite_needed") {
+    return `Editorial требует rewrite: ${draft.reviewSummary ?? "качество черновика пока недостаточно для публикации."}`;
+  }
+  if (draft.status === "ready_for_publish") {
+    return "Editorial-этап завершен успешно: материал готов к publish-этапу.";
+  }
+  return "Editorial-этап для этой новости уже отработал.";
+}
+
+function describePublishBlock(draft?: {
+  status: string;
+  reviewStatus: string;
+  publishDecision: string;
+  publishReason?: string;
+}) {
+  if (!draft) {
+    return "До publish новость еще не дошла: сначала должен появиться editorial draft.";
+  }
+  if (draft.status === "published") {
+    return "Публикация уже произошла: материал находится в ленте.";
+  }
+  if (draft.publishDecision === "publish_auto" && draft.status === "ready_for_publish") {
+    return "Публикация еще не случилась, но материал уже готов и ждет следующий publish run.";
+  }
+  if (draft.publishDecision === "publish_hold") {
+    return `Публикация остановлена правилом hold${draft.publishReason ? `: ${draft.publishReason}` : "."}`;
+  }
+  if (draft.publishDecision === "publish_skip") {
+    return `Автопубликация запрещена${draft.publishReason ? `: ${draft.publishReason}` : "."}`;
+  }
+  if (draft.status === "hold") {
+    return `Публикация не началась, потому что editorial удержал материал${draft.publishReason ? `: ${draft.publishReason}` : "."}`;
+  }
+  if (draft.status === "rewrite_needed") {
+    return `Публикация не началась, потому что материал отправлен на rewrite${draft.publishReason ? `: ${draft.publishReason}` : "."}`;
+  }
+  if (draft.status === "fallback_only") {
+    return "Публикация не началась, потому что у материала остался только внутренний template fallback.";
+  }
+  if (draft.reviewStatus === "pending" || draft.publishDecision === "publish_pending") {
+    return "Публикация еще не решена: editorial/review-цикл не дошел до финального publish decision.";
+  }
+  return draft.publishReason ?? "Публикация для этой новости пока не произошла.";
+}
+
 function describeEditorialState(rawItem: {
   contentPlanStatus?: string;
   contentPlanReason?: string;
@@ -340,6 +468,15 @@ export default async function StudioPage() {
                 <div className="compare-block">
                   <strong>Pipeline status</strong>
                   <p>{describePipelineState(rawItem)}</p>
+                  <p>
+                    <strong>Full text:</strong> {describeEnrichmentBlock(rawItem)}
+                  </p>
+                  <p>
+                    <strong>Editorial:</strong> {describeEditorialBlock(rawItem, draft)}
+                  </p>
+                  <p>
+                    <strong>Publish:</strong> {describePublishBlock(draft)}
+                  </p>
                   {rawItem.contentPlanReason ? <p>Причина отбора: {rawItem.contentPlanReason}</p> : null}
                 </div>
                 <p className="footer-note">

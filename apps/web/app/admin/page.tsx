@@ -271,7 +271,9 @@ export default async function AdminPage({
                 <span>Интервал в минутах</span>
                 <select name="intervalMinutes" defaultValue={String(scheduler.intervalMinutes)}>
                   <option value="5">5 минут</option>
+                  <option value="10">10 минут</option>
                   <option value="15">15 минут</option>
+                  <option value="20">20 минут</option>
                   <option value="30">30 минут</option>
                   <option value="60">60 минут</option>
                   <option value="120">120 минут</option>
@@ -355,7 +357,9 @@ export default async function AdminPage({
                 <span>Интервал в минутах</span>
                 <select name="intervalMinutes" defaultValue={String(enrichmentScheduler.intervalMinutes)}>
                   <option value="5">5 минут</option>
+                  <option value="10">10 минут</option>
                   <option value="15">15 минут</option>
+                  <option value="20">20 минут</option>
                   <option value="30">30 минут</option>
                   <option value="60">60 минут</option>
                   <option value="120">120 минут</option>
@@ -422,7 +426,9 @@ export default async function AdminPage({
                 <span>Интервал в минутах</span>
                 <select name="intervalMinutes" defaultValue={String(editorialScheduler.intervalMinutes)}>
                   <option value="5">5 минут</option>
+                  <option value="10">10 минут</option>
                   <option value="15">15 минут</option>
+                  <option value="20">20 минут</option>
                   <option value="30">30 минут</option>
                   <option value="60">60 минут</option>
                   <option value="120">120 минут</option>
@@ -487,7 +493,9 @@ export default async function AdminPage({
                 <span>Интервал в минутах</span>
                 <select name="intervalMinutes" defaultValue={String(publishScheduler.intervalMinutes)}>
                   <option value="5">5 минут</option>
+                  <option value="10">10 минут</option>
                   <option value="15">15 минут</option>
+                  <option value="20">20 минут</option>
                   <option value="30">30 минут</option>
                   <option value="60">60 минут</option>
                   <option value="120">120 минут</option>

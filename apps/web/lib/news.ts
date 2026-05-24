@@ -111,7 +111,7 @@ export async function getNews(query?: string, options?: { aiOnly?: boolean }): P
     }
 
     const response = await fetch(url.toString(), {
-      next: { revalidate: 30 }
+      cache: "no-store"
     });
 
     if (!response.ok) {
@@ -147,7 +147,7 @@ export async function getArticle(slug: string): Promise<{ item?: Article; isLive
 
   try {
     const response = await fetch(new URL(`/api/v1/articles/${slug}`, baseUrl).toString(), {
-      next: { revalidate: 30 }
+      cache: "no-store"
     });
 
     if (!response.ok) {

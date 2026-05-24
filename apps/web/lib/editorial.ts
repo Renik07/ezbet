@@ -544,19 +544,19 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       pipelineRunsResponse
     ] =
       await Promise.all([
-      fetch(new URL("/api/v1/prompts", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/raw-items/preview?limit=50", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/drafts", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/reviews", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/content-plan", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/editorial/status", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/source-states", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/sources", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/enrichment-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/editorial-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/publish-scheduler", baseUrl).toString(), { next: { revalidate: 30 } }),
-      fetch(new URL("/api/v1/pipeline-runs?limit=12", baseUrl).toString(), { next: { revalidate: 15 } })
+      fetch(new URL("/api/v1/prompts", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/raw-items/preview?limit=50", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/drafts", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/reviews", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/content-plan", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/editorial/status", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/source-states", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/sources", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/enrichment-scheduler", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/editorial-scheduler", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/publish-scheduler", baseUrl).toString(), { cache: "no-store" }),
+      fetch(new URL("/api/v1/pipeline-runs?limit=12", baseUrl).toString(), { cache: "no-store" })
     ]);
 
     if (
