@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 from typing import Optional
 
@@ -26,6 +27,12 @@ from .models import (
     ContentPlanListResponse,
     ContentPlanRunResponse,
     DraftArticleListResponse,
+    IdempotencyCheck,
+    IdempotencyReportResponse,
+    MonitoringAlert,
+    MonitoringQueueSnapshot,
+    MonitoringSchedulerState,
+    MonitoringStatusResponse,
     EnrichmentRunResponse,
     EnrichmentSchedulerRunResponse,
     EnrichmentSchedulerSettings,
@@ -45,7 +52,10 @@ from .models import (
     PromptConfigCreateRequest,
     PromptConfigListResponse,
     PromptStatusUpdateRequest,
+    RecoveryAction,
+    RecoveryStatusResponse,
     PipelineRunListResponse,
+    PipelineSchedulerRunResponse,
     RawItemListResponse,
     RawItemPreviewListResponse,
     RawItem,
@@ -69,10 +79,7 @@ from .repository import NewsRepository
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     repository.ensure_schema()
-    repository.recover_scheduler_if_stale()
-    repository.recover_enrichment_scheduler_if_stale()
-    repository.recover_editorial_scheduler_if_stale()
-    repository.recover_publish_scheduler_if_stale()
+    _recover_runtime_state(trigger="startup")
     repository.ensure_prompt_defaults(default_prompt_configs())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v3")
     repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v3")
@@ -107,6 +114,321 @@ def _duration_ms(started_at: datetime, finished_at: datetime) -> int:
     return max(0, int((finished_at - started_at).total_seconds() * 1000))
 
 
+def _log_pipeline_event(
+    event: str,
+    *,
+    phase: str,
+    run_id: str | None = None,
+    source: str | None = None,
+    trigger: str | None = None,
+    status: str | None = None,
+    error_reason: str | None = None,
+    duration_ms: int | None = None,
+    counts: dict[str, int] | None = None,
+    **extra: object,
+) -> None:
+    payload: dict[str, object] = {
+        "event": event,
+        "phase": phase,
+    }
+    if run_id:
+        payload["run_id"] = run_id
+    if source:
+        payload["source"] = source
+    if trigger:
+        payload["trigger"] = trigger
+    if status:
+        payload["status"] = status
+    if error_reason:
+        payload["error_reason"] = error_reason
+    if duration_ms is not None:
+        payload["duration_ms"] = duration_ms
+    if counts:
+        payload["counts"] = counts
+
+    for key, value in extra.items():
+        if value is None:
+            continue
+        payload[key] = value
+
+    logger.info("pipeline_event %s", json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _alert_rank(severity: str) -> int:
+    if severity == "critical":
+        return 3
+    if severity == "warning":
+        return 2
+    return 1
+
+
+def _overall_monitoring_status(alerts: list[MonitoringAlert]) -> str:
+    if any(alert.severity == "critical" for alert in alerts):
+        return "critical"
+    if alerts:
+        return "warning"
+    return "ok"
+
+
+def _scheduler_stale_threshold_minutes(interval_minutes: int) -> int:
+    return max(interval_minutes * 3, interval_minutes + 15)
+
+
+def _build_scheduler_monitor(
+    *,
+    phase: str,
+    settings: object,
+    queue_count: int | None,
+    now: datetime,
+) -> MonitoringSchedulerState:
+    alerts: list[MonitoringAlert] = []
+    enabled = bool(getattr(settings, "enabled"))
+    interval_minutes = int(getattr(settings, "interval_minutes"))
+    last_status = str(getattr(settings, "last_status") or "idle")
+    last_run_at = getattr(settings, "last_run_at")
+    next_run_at = getattr(settings, "next_run_at")
+    last_error = getattr(settings, "last_error")
+    batch_size = max(1, int(getattr(settings, "batch_size")))
+
+    if enabled and last_status == "error":
+        alerts.append(
+            MonitoringAlert(
+                severity="critical",
+                phase=phase,
+                code="scheduler_error",
+                message=f"{phase} завершился ошибкой и требует проверки.",
+                error_reason=last_error,
+            )
+        )
+
+    if enabled and last_run_at is None:
+        alerts.append(
+            MonitoringAlert(
+                severity="warning",
+                phase=phase,
+                code="never_ran",
+                message=f"{phase} еще ни разу не запускался после включения.",
+            )
+        )
+
+    if enabled and last_run_at is not None:
+        stale_threshold = _scheduler_stale_threshold_minutes(interval_minutes)
+        age_minutes = int((now - last_run_at).total_seconds() // 60)
+        if age_minutes > stale_threshold:
+            alerts.append(
+                MonitoringAlert(
+                    severity="critical" if (queue_count or 0) > 0 else "warning",
+                    phase=phase,
+                    code="stale_run",
+                    message=f"{phase} не запускался слишком долго.",
+                    observed_value=age_minutes,
+                    threshold_value=stale_threshold,
+                )
+            )
+
+    if queue_count is not None:
+        if not enabled and queue_count > 0:
+            alerts.append(
+                MonitoringAlert(
+                    severity="warning",
+                    phase=phase,
+                    code="queue_while_disabled",
+                    message=f"У {phase} есть очередь, но scheduler выключен.",
+                    observed_value=queue_count,
+                )
+            )
+        backlog_threshold = max(batch_size * 3, 10)
+        if queue_count >= backlog_threshold:
+            alerts.append(
+                MonitoringAlert(
+                    severity="warning",
+                    phase=phase,
+                    code="queue_backlog",
+                    message=f"Очередь {phase} растет быстрее, чем ее успевают разбирать.",
+                    observed_value=queue_count,
+                    threshold_value=backlog_threshold,
+                )
+            )
+
+    alerts.sort(key=lambda item: _alert_rank(item.severity), reverse=True)
+    return MonitoringSchedulerState(
+        phase=phase,
+        enabled=enabled,
+        healthy=not alerts,
+        last_status=last_status,
+        last_run_at=last_run_at,
+        next_run_at=next_run_at,
+        interval_minutes=interval_minutes,
+        queue_count=queue_count,
+        alerts=alerts,
+    )
+
+
+def _build_monitoring_status() -> MonitoringStatusResponse:
+    now = datetime.now(timezone.utc)
+    scheduler_settings = repository.get_scheduler_settings()
+    enrichment_settings = repository.get_enrichment_scheduler_settings()
+    editorial_settings = repository.get_editorial_scheduler_settings()
+    publish_settings = repository.get_publish_scheduler_settings()
+
+    queues = MonitoringQueueSnapshot(
+        enrichment=repository.count_pending_enrichment_raw_items(),
+        editorial=repository.count_planned_raw_items_for_drafts(),
+        publish=repository.count_publishable_drafts(),
+    )
+
+    schedulers = [
+        _build_scheduler_monitor(
+            phase="ingest",
+            settings=scheduler_settings,
+            queue_count=None,
+            now=now,
+        ),
+        _build_scheduler_monitor(
+            phase="enrichment",
+            settings=enrichment_settings,
+            queue_count=queues.enrichment,
+            now=now,
+        ),
+        _build_scheduler_monitor(
+            phase="editorial",
+            settings=editorial_settings,
+            queue_count=queues.editorial,
+            now=now,
+        ),
+        _build_scheduler_monitor(
+            phase="publish",
+            settings=publish_settings,
+            queue_count=queues.publish,
+            now=now,
+        ),
+    ]
+
+    alerts = [alert for scheduler in schedulers for alert in scheduler.alerts]
+    alerts.sort(key=lambda item: _alert_rank(item.severity), reverse=True)
+    return MonitoringStatusResponse(
+        status=_overall_monitoring_status(alerts),
+        generated_at=now,
+        queues=queues,
+        schedulers=schedulers,
+        alerts=alerts,
+    )
+
+
+def _recover_runtime_state(*, trigger: str) -> RecoveryStatusResponse:
+    checked_at = datetime.now(timezone.utc)
+    actions: list[RecoveryAction] = []
+    recovery_plan = [
+        ("ingest", repository.get_scheduler_settings, repository.recover_scheduler_if_stale),
+        ("enrichment", repository.get_enrichment_scheduler_settings, repository.recover_enrichment_scheduler_if_stale),
+        ("editorial", repository.get_editorial_scheduler_settings, repository.recover_editorial_scheduler_if_stale),
+        ("publish", repository.get_publish_scheduler_settings, repository.recover_publish_scheduler_if_stale),
+    ]
+
+    for phase, get_settings, recover_fn in recovery_plan:
+        settings = get_settings()
+        if settings.last_status != "running":
+            continue
+        recovered_settings = recover_fn()
+        action = RecoveryAction(
+            phase=phase,
+            previous_status="running",
+            recovered_status=recovered_settings.last_status,
+            message=recovered_settings.last_error or "Recovered stale running status.",
+            updated_at=recovered_settings.updated_at,
+        )
+        actions.append(action)
+        _log_pipeline_event(
+            "recovery_action",
+            phase=phase,
+            trigger=trigger,
+            status=recovered_settings.last_status,
+            error_reason=recovered_settings.last_error,
+            updated_at=recovered_settings.updated_at.isoformat() if recovered_settings.updated_at else None,
+        )
+
+    if not actions:
+        _log_pipeline_event(
+            "recovery_check",
+            phase="pipeline",
+            trigger=trigger,
+            status="ok",
+            counts={"recovered": 0},
+        )
+    else:
+        _log_pipeline_event(
+            "recovery_completed",
+            phase="pipeline",
+            trigger=trigger,
+            status="ok",
+            counts={"recovered": len(actions)},
+        )
+
+    return RecoveryStatusResponse(
+        recovered=bool(actions),
+        trigger=trigger,
+        checked_at=checked_at,
+        actions=actions,
+    )
+
+
+def _build_idempotency_report() -> IdempotencyReportResponse:
+    checked_at = datetime.now(timezone.utc)
+    ready_to_publish_with_existing_article = repository.count_ready_to_publish_with_existing_article()
+    published_drafts_missing_article = repository.count_published_drafts_missing_article()
+    published_drafts_missing_news_item = repository.count_published_drafts_missing_news_item()
+    articles_missing_published_draft = repository.count_articles_missing_published_draft()
+    multiple_articles_per_news_item = repository.count_multiple_articles_per_news_item()
+
+    checks = [
+        IdempotencyCheck(
+            code="ready_to_publish_already_has_article",
+            passed=ready_to_publish_with_existing_article == 0,
+            message="Draft в очереди publish не должен уже иметь опубликованную article-запись.",
+            observed_value=ready_to_publish_with_existing_article,
+            expected_value=0,
+            severity="critical",
+        ),
+        IdempotencyCheck(
+            code="published_draft_missing_article",
+            passed=published_drafts_missing_article == 0,
+            message="Published draft должен иметь связанную article-запись.",
+            observed_value=published_drafts_missing_article,
+            expected_value=0,
+            severity="critical",
+        ),
+        IdempotencyCheck(
+            code="published_draft_missing_news_item",
+            passed=published_drafts_missing_news_item == 0,
+            message="Published draft должен иметь связанную news_item-запись.",
+            observed_value=published_drafts_missing_news_item,
+            expected_value=0,
+            severity="critical",
+        ),
+        IdempotencyCheck(
+            code="article_missing_published_draft",
+            passed=articles_missing_published_draft == 0,
+            message="Каждая article-запись из auto-pipeline должна происходить из published draft.",
+            observed_value=articles_missing_published_draft,
+            expected_value=0,
+            severity="warning",
+        ),
+        IdempotencyCheck(
+            code="multiple_articles_per_news_item",
+            passed=multiple_articles_per_news_item == 0,
+            message="Один news_item не должен иметь несколько article-записей.",
+            observed_value=multiple_articles_per_news_item,
+            expected_value=0,
+            severity="critical",
+        ),
+    ]
+
+    status = "critical" if any((not check.passed) and check.severity == "critical" for check in checks) else (
+        "warning" if any(not check.passed for check in checks) else "ok"
+    )
+    return IdempotencyReportResponse(status=status, checked_at=checked_at, checks=checks)
+
+
 def _raise_source_http_error(exc: Exception) -> None:
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -121,6 +443,21 @@ def _raise_source_http_error(exc: Exception) -> None:
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/v1/monitoring/status", response_model=MonitoringStatusResponse)
+def monitoring_status() -> MonitoringStatusResponse:
+    return _build_monitoring_status()
+
+
+@app.post("/api/v1/recovery/run", response_model=RecoveryStatusResponse)
+def run_recovery() -> RecoveryStatusResponse:
+    return _recover_runtime_state(trigger="manual")
+
+
+@app.get("/api/v1/monitoring/idempotency", response_model=IdempotencyReportResponse)
+def monitoring_idempotency() -> IdempotencyReportResponse:
+    return _build_idempotency_report()
 
 
 @app.get("/api/v1/editorial/status", response_model=EditorialStatusResponse)
@@ -378,10 +715,19 @@ def run_scheduler_now() -> SchedulerRunResponse:
 def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRunResponse:
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("enrichment")
+    _log_pipeline_event(
+        "run_started",
+        phase="enrichment",
+        run_id=run_id,
+        trigger="manual",
+        status="running",
+        counts={"limit": limit},
+    )
     raw_items = repository.list_pending_enrichment_raw_items(limit=limit)
     try:
         processed, enriched = _run_enrichment_for_raw_items(raw_items)
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="enrichment",
@@ -389,13 +735,23 @@ def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRun
             status="ok",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             processed_count=processed,
             enriched_count=enriched,
+        )
+        _log_pipeline_event(
+            "run_finished",
+            phase="enrichment",
+            run_id=run_id,
+            trigger="manual",
+            status="ok",
+            duration_ms=duration_ms,
+            counts={"processed": processed, "enriched": enriched},
         )
         return EnrichmentRunResponse(processed=processed, enriched=enriched)
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="enrichment",
@@ -403,8 +759,17 @@ def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRun
             status="error",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             error=str(exc),
+        )
+        _log_pipeline_event(
+            "run_failed",
+            phase="enrichment",
+            run_id=run_id,
+            trigger="manual",
+            status="error",
+            error_reason=str(exc),
+            duration_ms=duration_ms,
         )
         raise
 
@@ -487,6 +852,16 @@ def run_publish_scheduler_now() -> PublishSchedulerRunResponse:
     return _run_publish_scheduler(force=True)
 
 
+@app.post("/api/v1/pipeline/tick", response_model=PipelineSchedulerRunResponse)
+def run_pipeline_tick() -> PipelineSchedulerRunResponse:
+    return _run_pipeline_scheduler(force=False)
+
+
+@app.post("/api/v1/pipeline/run", response_model=PipelineSchedulerRunResponse)
+def run_pipeline_now() -> PipelineSchedulerRunResponse:
+    return _run_pipeline_scheduler(force=True)
+
+
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
 def list_raw_items(limit: int = Query(default=50, ge=1, le=200)) -> RawItemListResponse:
     return RawItemListResponse(items=repository.list_raw_items(limit))
@@ -561,10 +936,19 @@ def list_reviews(limit: int = Query(default=20, ge=1, le=100)) -> EditorReviewLi
 def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunResponse:
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("editorial")
+    _log_pipeline_event(
+        "run_started",
+        phase="editorial",
+        run_id=run_id,
+        trigger="manual",
+        status="running",
+        counts={"limit": limit},
+    )
     try:
         drafts, reviews = run_editorial_cycle(repository, limit=limit)
         published_count = len([draft for draft in drafts if draft.status == "published"])
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="editorial",
@@ -572,14 +956,28 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
             status="ok",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             published_count=published_count,
             generated_count=len(drafts),
             reviewed_count=len(reviews),
         )
+        _log_pipeline_event(
+            "run_finished",
+            phase="editorial",
+            run_id=run_id,
+            trigger="manual",
+            status="ok",
+            duration_ms=duration_ms,
+            counts={
+                "generated": len(drafts),
+                "reviewed": len(reviews),
+                "published_ready": published_count,
+            },
+        )
         return EditorialRunResponse(generated=len(drafts), reviewed=len(reviews), drafts=drafts)
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="editorial",
@@ -587,8 +985,17 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
             status="error",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             error=str(exc),
+        )
+        _log_pipeline_event(
+            "run_failed",
+            phase="editorial",
+            run_id=run_id,
+            trigger="manual",
+            status="error",
+            error_reason=str(exc),
+            duration_ms=duration_ms,
         )
         raise
 
@@ -597,9 +1004,18 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
 def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunResponse:
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("publish")
+    _log_pipeline_event(
+        "run_started",
+        phase="publish",
+        run_id=run_id,
+        trigger="manual",
+        status="running",
+        counts={"limit": limit},
+    )
     try:
         published = _run_publish_for_drafts(limit=limit)
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="publish",
@@ -607,12 +1023,22 @@ def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunRespons
             status="ok",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             published_count=published,
+        )
+        _log_pipeline_event(
+            "run_finished",
+            phase="publish",
+            run_id=run_id,
+            trigger="manual",
+            status="ok",
+            duration_ms=duration_ms,
+            counts={"published": published},
         )
         return PublishRunResponse(published=published)
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="publish",
@@ -620,8 +1046,17 @@ def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunRespons
             status="error",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             error=str(exc),
+        )
+        _log_pipeline_event(
+            "run_failed",
+            phase="publish",
+            run_id=run_id,
+            trigger="manual",
+            status="error",
+            error_reason=str(exc),
+            duration_ms=duration_ms,
         )
         raise
 
@@ -660,12 +1095,16 @@ def _run_source_ingestion(
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("ingest")
     sources = repository.list_active_sources()
-    logger.info(
-        "Ingestion started: active_sources=%s limit=%s per_source=%s run_enrichment=%s",
-        len(sources),
-        limit,
-        per_source,
-        run_enrichment,
+    _log_pipeline_event(
+        "run_started",
+        phase="ingest",
+        run_id=run_id,
+        trigger=trigger,
+        status="running",
+        counts={"active_sources": len(sources)},
+        limit=limit or 0,
+        per_source=per_source,
+        run_enrichment=run_enrichment,
     )
     try:
         ai_search_prompt = repository.get_active_prompt("ai_search")
@@ -687,30 +1126,60 @@ def _run_source_ingestion(
         )
         prefilter_result = repository.prefilter_known_raw_items(raw_items)
         raw_items = prefilter_result.fresh_items
-        logger.info(
-            "Ingestion collected raw items: total=%s fresh_after_prefilter=%s source_results=%s",
-            len(raw_items) + len(prefilter_result.skipped_items),
-            len(raw_items),
-            len(source_results),
+        _log_pipeline_event(
+            "source_collection_completed",
+            phase="ingest",
+            run_id=run_id,
+            trigger=trigger,
+            status="ok",
+            counts={
+                "total_candidates": len(raw_items) + len(prefilter_result.skipped_items),
+                "fresh_after_prefilter": len(raw_items),
+                "source_results": len(source_results),
+            },
         )
         insert_result = repository.insert_raw_items(raw_items)
         inserted_raw_items = insert_result.inserted_count
-        logger.info("Ingestion inserted raw items: inserted=%s", inserted_raw_items)
+        _log_pipeline_event(
+            "raw_items_inserted",
+            phase="ingest",
+            run_id=run_id,
+            trigger=trigger,
+            status="ok",
+            counts={"inserted": inserted_raw_items},
+        )
         if run_enrichment:
             _run_ingestion_enrichment(raw_items)
-            logger.info("Ingestion enrichment finished for batch: candidate_items=%s", len(raw_items))
+            _log_pipeline_event(
+                "ingestion_enrichment_completed",
+                phase="ingest",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+                counts={"candidate_items": len(raw_items)},
+            )
         else:
-            logger.info("Ingestion enrichment skipped for this run")
+            _log_pipeline_event(
+                "ingestion_enrichment_skipped",
+                phase="ingest",
+                run_id=run_id,
+                trigger=trigger,
+                status="skipped",
+                error_reason="run_enrichment_disabled",
+            )
         for result in source_results:
             source_items = [item for item in raw_items if item.source_key == result.source.key]
-            logger.info(
-                "Source result: key=%s fetch=%s parse=%s items=%s retry=%s error=%s",
-                result.source.key,
-                result.fetch_status,
-                result.parse_status,
-                len(source_items),
-                result.retry_count,
-                result.error or "-",
+            _log_pipeline_event(
+                "source_result",
+                phase="ingest",
+                run_id=run_id,
+                source=result.source.key,
+                trigger=trigger,
+                status="ok" if not result.error else "error",
+                error_reason=result.error,
+                counts={"items": len(source_items), "retry_count": result.retry_count},
+                fetch_status=result.fetch_status,
+                parse_status=result.parse_status,
             )
             repository.update_source_sync_state(
                 result.source,
@@ -742,13 +1211,8 @@ def _run_source_ingestion(
             }
             for result in source_results
         ]
-        logger.info(
-            "Ingestion finished: raw_items=%s inserted=%s published=%s",
-            len(raw_items),
-            inserted_raw_items,
-            len(published),
-        )
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="ingest",
@@ -756,12 +1220,26 @@ def _run_source_ingestion(
             status="ok",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             found_count=len(raw_items),
             saved_count=inserted_raw_items,
             published_count=len(published),
             skipped_items=skipped_items,
             source_breakdown=source_breakdown,
+        )
+        _log_pipeline_event(
+            "run_finished",
+            phase="ingest",
+            run_id=run_id,
+            trigger=trigger,
+            status="ok",
+            duration_ms=duration_ms,
+            counts={
+                "raw_items": len(raw_items),
+                "inserted": inserted_raw_items,
+                "published": len(published),
+                "skipped": len(skipped_items),
+            },
         )
         return IngestResponse(
             ingested=len(raw_items),
@@ -771,6 +1249,7 @@ def _run_source_ingestion(
         )
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
+        duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
             run_id=run_id,
             phase="ingest",
@@ -778,8 +1257,17 @@ def _run_source_ingestion(
             status="error",
             started_at=started_at,
             finished_at=finished_at,
-            duration_ms=_duration_ms(started_at, finished_at),
+            duration_ms=duration_ms,
             error=str(exc),
+        )
+        _log_pipeline_event(
+            "run_failed",
+            phase="ingest",
+            run_id=run_id,
+            trigger=trigger,
+            status="error",
+            error_reason=str(exc),
+            duration_ms=duration_ms,
         )
         raise
 
@@ -808,23 +1296,40 @@ def _merge_skipped_ingest_items(
 def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
     settings = repository.get_scheduler_settings()
     now = datetime.now(timezone.utc)
-    logger.info(
-        "Scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
-        force,
-        settings.enabled,
-        settings.last_status,
-        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    run_id = _run_id("scheduler")
+    trigger = "run" if force else "tick"
+    _log_pipeline_event(
+        "scheduler_tick",
+        phase="scheduler",
+        run_id=run_id,
+        trigger=trigger,
+        status=settings.last_status or "idle",
+        force=force,
+        enabled=settings.enabled,
+        next_run_at=settings.next_run_at.isoformat() if settings.next_run_at else None,
     )
 
     if not force and not settings.enabled:
-        logger.info("Scheduler skipped: disabled")
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="scheduler",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="disabled",
+        )
         return SchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
 
     if not force and settings.next_run_at and settings.next_run_at > now:
-        logger.info(
-            "Scheduler skipped: not due yet now=%s next_run_at=%s",
-            now.isoformat(),
-            settings.next_run_at.isoformat(),
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="scheduler",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="not_due",
+            now=now.isoformat(),
+            next_run_at=settings.next_run_at.isoformat(),
         )
         return SchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
@@ -835,18 +1340,28 @@ def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
             locked = bool(row and row[0])
 
         if not locked:
-            logger.info("Scheduler skipped: advisory lock is already held")
+            _log_pipeline_event(
+                "scheduler_skipped",
+                phase="scheduler",
+                run_id=run_id,
+                trigger=trigger,
+                status="skipped",
+                error_reason="locked",
+            )
             return SchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
 
         try:
             repository.set_scheduler_status(status="running", error=None)
-            logger.info("Scheduler run started")
             scheduler_batch_size = max(1, settings.batch_size)
-            logger.info(
-                "Scheduler run ingestion mode: limit=%s per_source=%s run_enrichment=%s",
-                scheduler_batch_size,
-                True,
-                settings.run_enrichment,
+            _log_pipeline_event(
+                "scheduler_run_started",
+                phase="scheduler",
+                run_id=run_id,
+                trigger=trigger,
+                status="running",
+                counts={"batch_size": scheduler_batch_size},
+                per_source=True,
+                run_enrichment=settings.run_enrichment,
             )
             ingest_response = _run_source_ingestion(
                 limit=scheduler_batch_size,
@@ -869,12 +1384,18 @@ def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
                 saved_count=ingest_response.raw_items,
                 published_count=ingest_response.published,
             )
-            logger.info(
-                "Scheduler run finished: ingested=%s published=%s raw_items=%s next_run_at=%s",
-                ingest_response.ingested,
-                ingest_response.published,
-                ingest_response.raw_items,
-                next_run_at.isoformat() if next_run_at else "-",
+            _log_pipeline_event(
+                "scheduler_run_finished",
+                phase="scheduler",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+                counts={
+                    "ingested": ingest_response.ingested,
+                    "published": ingest_response.published,
+                    "raw_items": ingest_response.raw_items,
+                },
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
             )
             return SchedulerRunResponse(
                 ran=True,
@@ -897,12 +1418,27 @@ def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
                 status="error",
                 error=str(exc),
             )
+            _log_pipeline_event(
+                "scheduler_run_failed",
+                phase="scheduler",
+                run_id=run_id,
+                trigger=trigger,
+                status="error",
+                error_reason=str(exc),
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
+            )
             logger.exception("Scheduler run failed: %s", exc)
             raise
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEDULER_LOCK_KEY,))
-            logger.info("Scheduler advisory lock released")
+            _log_pipeline_event(
+                "scheduler_lock_released",
+                phase="scheduler",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+            )
 
 
 def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
@@ -910,23 +1446,39 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
     now = datetime.now(timezone.utc)
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("enrichment")
-    logger.info(
-        "Enrichment scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
-        force,
-        settings.enabled,
-        settings.last_status,
-        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    trigger = "run" if force else "tick"
+    _log_pipeline_event(
+        "scheduler_tick",
+        phase="enrichment",
+        run_id=run_id,
+        trigger=trigger,
+        status=settings.last_status or "idle",
+        force=force,
+        enabled=settings.enabled,
+        next_run_at=settings.next_run_at.isoformat() if settings.next_run_at else None,
     )
 
     if not force and not settings.enabled:
-        logger.info("Enrichment scheduler skipped: disabled")
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="enrichment",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="disabled",
+        )
         return EnrichmentSchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
 
     if not force and settings.next_run_at and settings.next_run_at > now:
-        logger.info(
-            "Enrichment scheduler skipped: not due yet now=%s next_run_at=%s",
-            now.isoformat(),
-            settings.next_run_at.isoformat(),
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="enrichment",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="not_due",
+            now=now.isoformat(),
+            next_run_at=settings.next_run_at.isoformat(),
         )
         return EnrichmentSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
@@ -937,15 +1489,28 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
             locked = bool(row and row[0])
 
         if not locked:
-            logger.info("Enrichment scheduler skipped: advisory lock is already held")
+            _log_pipeline_event(
+                "scheduler_skipped",
+                phase="enrichment",
+                run_id=run_id,
+                trigger=trigger,
+                status="skipped",
+                error_reason="locked",
+            )
             return EnrichmentSchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
 
         try:
             repository.set_enrichment_scheduler_status(status="running", error=None)
-            logger.info("Enrichment scheduler run started")
             batch_size = max(1, settings.batch_size)
             raw_items = repository.list_pending_enrichment_raw_items(limit=batch_size)
-            logger.info("Enrichment scheduler selected candidates: batch_size=%s found=%s", batch_size, len(raw_items))
+            _log_pipeline_event(
+                "scheduler_run_started",
+                phase="enrichment",
+                run_id=run_id,
+                trigger=trigger,
+                status="running",
+                counts={"batch_size": batch_size, "candidates_found": len(raw_items)},
+            )
             processed, enriched = _run_enrichment_for_raw_items(raw_items)
             latest_settings = repository.get_enrichment_scheduler_settings()
             next_run_at = (
@@ -973,11 +1538,15 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
                 processed_count=processed,
                 enriched_count=enriched,
             )
-            logger.info(
-                "Enrichment scheduler finished: processed=%s enriched=%s next_run_at=%s",
-                processed,
-                enriched,
-                next_run_at.isoformat() if next_run_at else "-",
+            _log_pipeline_event(
+                "scheduler_run_finished",
+                phase="enrichment",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+                duration_ms=_duration_ms(started_at, finished_at),
+                counts={"processed": processed, "enriched": enriched},
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
             )
             return EnrichmentSchedulerRunResponse(
                 ran=True,
@@ -1010,12 +1579,28 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
                 duration_ms=_duration_ms(started_at, finished_at),
                 error=str(exc),
             )
+            _log_pipeline_event(
+                "scheduler_run_failed",
+                phase="enrichment",
+                run_id=run_id,
+                trigger=trigger,
+                status="error",
+                error_reason=str(exc),
+                duration_ms=_duration_ms(started_at, finished_at),
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
+            )
             logger.exception("Enrichment scheduler failed: %s", exc)
             raise
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_unlock(%s)", (ENRICHMENT_SCHEDULER_LOCK_KEY,))
-            logger.info("Enrichment scheduler advisory lock released")
+            _log_pipeline_event(
+                "scheduler_lock_released",
+                phase="enrichment",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+            )
 
 
 def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
@@ -1023,23 +1608,39 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
     now = datetime.now(timezone.utc)
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("editorial")
-    logger.info(
-        "Editorial scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
-        force,
-        settings.enabled,
-        settings.last_status,
-        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    trigger = "run" if force else "tick"
+    _log_pipeline_event(
+        "scheduler_tick",
+        phase="editorial",
+        run_id=run_id,
+        trigger=trigger,
+        status=settings.last_status or "idle",
+        force=force,
+        enabled=settings.enabled,
+        next_run_at=settings.next_run_at.isoformat() if settings.next_run_at else None,
     )
 
     if not force and not settings.enabled:
-        logger.info("Editorial scheduler skipped: disabled")
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="editorial",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="disabled",
+        )
         return EditorialSchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
 
     if not force and settings.next_run_at and settings.next_run_at > now:
-        logger.info(
-            "Editorial scheduler skipped: not due yet now=%s next_run_at=%s",
-            now.isoformat(),
-            settings.next_run_at.isoformat(),
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="editorial",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="not_due",
+            now=now.isoformat(),
+            next_run_at=settings.next_run_at.isoformat(),
         )
         return EditorialSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
@@ -1050,15 +1651,28 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
             locked = bool(row and row[0])
 
         if not locked:
-            logger.info("Editorial scheduler skipped: advisory lock is already held")
+            _log_pipeline_event(
+                "scheduler_skipped",
+                phase="editorial",
+                run_id=run_id,
+                trigger=trigger,
+                status="skipped",
+                error_reason="locked",
+            )
             return EditorialSchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
 
         try:
             repository.set_editorial_scheduler_status(status="running", error=None)
-            logger.info("Editorial scheduler run started")
             batch_size = max(1, settings.batch_size)
             planned_items = run_content_planner(repository, limit=batch_size)
-            logger.info("Editorial scheduler planner finished: planned=%s", len(planned_items))
+            _log_pipeline_event(
+                "scheduler_run_started",
+                phase="editorial",
+                run_id=run_id,
+                trigger=trigger,
+                status="running",
+                counts={"batch_size": batch_size, "planned": len(planned_items)},
+            )
             drafts, reviews = run_editorial_cycle(repository, limit=batch_size)
             published_count = len([draft for draft in drafts if draft.status == "published"])
             latest_settings = repository.get_editorial_scheduler_settings()
@@ -1090,12 +1704,20 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
                 generated_count=len(drafts),
                 reviewed_count=len(reviews),
             )
-            logger.info(
-                "Editorial scheduler finished: planned=%s generated=%s reviewed=%s next_run_at=%s",
-                len(planned_items),
-                len(drafts),
-                len(reviews),
-                next_run_at.isoformat() if next_run_at else "-",
+            _log_pipeline_event(
+                "scheduler_run_finished",
+                phase="editorial",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+                duration_ms=_duration_ms(started_at, finished_at),
+                counts={
+                    "planned": len(planned_items),
+                    "generated": len(drafts),
+                    "reviewed": len(reviews),
+                    "published_ready": published_count,
+                },
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
             )
             return EditorialSchedulerRunResponse(
                 ran=True,
@@ -1129,12 +1751,28 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
                 duration_ms=_duration_ms(started_at, finished_at),
                 error=str(exc),
             )
+            _log_pipeline_event(
+                "scheduler_run_failed",
+                phase="editorial",
+                run_id=run_id,
+                trigger=trigger,
+                status="error",
+                error_reason=str(exc),
+                duration_ms=_duration_ms(started_at, finished_at),
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
+            )
             logger.exception("Editorial scheduler failed: %s", exc)
             raise
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_unlock(%s)", (EDITORIAL_SCHEDULER_LOCK_KEY,))
-            logger.info("Editorial scheduler advisory lock released")
+            _log_pipeline_event(
+                "scheduler_lock_released",
+                phase="editorial",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+            )
 
 
 def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
@@ -1142,23 +1780,39 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
     now = datetime.now(timezone.utc)
     started_at = datetime.now(timezone.utc)
     run_id = _run_id("publish")
-    logger.info(
-        "Publish scheduler tick: force=%s enabled=%s status=%s next_run_at=%s",
-        force,
-        settings.enabled,
-        settings.last_status,
-        settings.next_run_at.isoformat() if settings.next_run_at else "-",
+    trigger = "run" if force else "tick"
+    _log_pipeline_event(
+        "scheduler_tick",
+        phase="publish",
+        run_id=run_id,
+        trigger=trigger,
+        status=settings.last_status or "idle",
+        force=force,
+        enabled=settings.enabled,
+        next_run_at=settings.next_run_at.isoformat() if settings.next_run_at else None,
     )
 
     if not force and not settings.enabled:
-        logger.info("Publish scheduler skipped: disabled")
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="publish",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="disabled",
+        )
         return PublishSchedulerRunResponse(ran=False, reason="disabled", next_run_at=settings.next_run_at)
 
     if not force and settings.next_run_at and settings.next_run_at > now:
-        logger.info(
-            "Publish scheduler skipped: not due yet now=%s next_run_at=%s",
-            now.isoformat(),
-            settings.next_run_at.isoformat(),
+        _log_pipeline_event(
+            "scheduler_skipped",
+            phase="publish",
+            run_id=run_id,
+            trigger=trigger,
+            status="skipped",
+            error_reason="not_due",
+            now=now.isoformat(),
+            next_run_at=settings.next_run_at.isoformat(),
         )
         return PublishSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
@@ -1169,13 +1823,27 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
             locked = bool(row and row[0])
 
         if not locked:
-            logger.info("Publish scheduler skipped: advisory lock is already held")
+            _log_pipeline_event(
+                "scheduler_skipped",
+                phase="publish",
+                run_id=run_id,
+                trigger=trigger,
+                status="skipped",
+                error_reason="locked",
+            )
             return PublishSchedulerRunResponse(ran=False, reason="locked", next_run_at=settings.next_run_at)
 
         try:
             repository.set_publish_scheduler_status(status="running", error=None)
-            logger.info("Publish scheduler run started")
             batch_size = max(1, settings.batch_size)
+            _log_pipeline_event(
+                "scheduler_run_started",
+                phase="publish",
+                run_id=run_id,
+                trigger=trigger,
+                status="running",
+                counts={"batch_size": batch_size},
+            )
             published = _run_publish_for_drafts(limit=batch_size)
             latest_settings = repository.get_publish_scheduler_settings()
             next_run_at = (
@@ -1201,10 +1869,15 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
                 duration_ms=_duration_ms(started_at, finished_at),
                 published_count=published,
             )
-            logger.info(
-                "Publish scheduler finished: published=%s next_run_at=%s",
-                published,
-                next_run_at.isoformat() if next_run_at else "-",
+            _log_pipeline_event(
+                "scheduler_run_finished",
+                phase="publish",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+                duration_ms=_duration_ms(started_at, finished_at),
+                counts={"published": published},
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
             )
             return PublishSchedulerRunResponse(
                 ran=True,
@@ -1236,12 +1909,67 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
                 duration_ms=_duration_ms(started_at, finished_at),
                 error=str(exc),
             )
+            _log_pipeline_event(
+                "scheduler_run_failed",
+                phase="publish",
+                run_id=run_id,
+                trigger=trigger,
+                status="error",
+                error_reason=str(exc),
+                duration_ms=_duration_ms(started_at, finished_at),
+                next_run_at=next_run_at.isoformat() if next_run_at else None,
+            )
             logger.exception("Publish scheduler failed: %s", exc)
             raise
         finally:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_unlock(%s)", (PUBLISH_SCHEDULER_LOCK_KEY,))
-            logger.info("Publish scheduler advisory lock released")
+            _log_pipeline_event(
+                "scheduler_lock_released",
+                phase="publish",
+                run_id=run_id,
+                trigger=trigger,
+                status="ok",
+            )
+
+
+def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
+    started_at = datetime.now(timezone.utc)
+    mode = "run" if force else "tick"
+    run_id = _run_id("pipeline")
+    _log_pipeline_event(
+        "pipeline_run_started",
+        phase="pipeline",
+        run_id=run_id,
+        trigger=mode,
+        status="running",
+    )
+    ingest = _run_scheduler(force=force)
+    enrichment = _run_enrichment_scheduler(force=force)
+    editorial = _run_editorial_scheduler(force=force)
+    publish = _run_publish_scheduler(force=force)
+    finished_at = datetime.now(timezone.utc)
+    _log_pipeline_event(
+        "pipeline_run_finished",
+        phase="pipeline",
+        run_id=run_id,
+        trigger=mode,
+        status="ok",
+        duration_ms=_duration_ms(started_at, finished_at),
+        ingest_reason=ingest.reason,
+        enrichment_reason=enrichment.reason,
+        editorial_reason=editorial.reason,
+        publish_reason=publish.reason,
+    )
+    return PipelineSchedulerRunResponse(
+        mode=mode,
+        ingest=ingest,
+        enrichment=enrichment,
+        editorial=editorial,
+        publish=publish,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
 
 
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
@@ -1278,7 +2006,12 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
     candidate_items = [item for item in raw_items if not item.is_duplicate]
     candidate_ids = [item.id for item in candidate_items]
     if not candidate_ids:
-        logger.info("Enrichment skipped: no non-duplicate raw items in batch")
+        _log_pipeline_event(
+            "batch_skipped",
+            phase="enrichment",
+            status="skipped",
+            error_reason="no_non_duplicate_candidates",
+        )
         return (0, 0)
     web_search_budget_ids = {
         item.id
@@ -1292,11 +2025,20 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
             reverse=True,
         )[:ENRICHMENT_WEB_SEARCH_CAP_PER_RUN]
     }
-    logger.info("Enrichment started: candidates=%s", len(candidate_ids))
-    logger.info(
-        "Enrichment web_search budget: cap=%s eligible=%s",
-        ENRICHMENT_WEB_SEARCH_CAP_PER_RUN,
-        len(web_search_budget_ids),
+    _log_pipeline_event(
+        "batch_started",
+        phase="enrichment",
+        status="running",
+        counts={"candidates": len(candidate_ids)},
+    )
+    _log_pipeline_event(
+        "web_search_budget",
+        phase="enrichment",
+        status="ok",
+        counts={
+            "cap": ENRICHMENT_WEB_SEARCH_CAP_PER_RUN,
+            "eligible": len(web_search_budget_ids),
+        },
     )
     enriched_count = 0
 
@@ -1328,17 +2070,37 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
             if after_has_any and not before_has_any:
                 enriched_count += 1
             if updated_item is not None and updated_item.is_duplicate:
-                logger.info(
-                    "Post-enrichment duplicate detected: raw_item_id=%s duplicate_of=%s",
-                    raw_item_id,
-                    updated_item.duplicate_of,
+                _log_pipeline_event(
+                    "duplicate_detected",
+                    phase="enrichment",
+                    source=raw_item.source_key,
+                    status="ok",
+                    counts={"enriched_count": enriched_count},
+                    raw_item_id=raw_item_id,
+                    duplicate_of=updated_item.duplicate_of,
                 )
-            logger.info("Enrichment finished: raw_item_id=%s source=%s", raw_item_id, raw_item.source_key)
+            _log_pipeline_event(
+                "item_finished",
+                phase="enrichment",
+                source=raw_item.source_key,
+                status="ok",
+                counts={"enriched_count": enriched_count},
+                raw_item_id=raw_item_id,
+                enrichment_status=updated_item.enrichment_status if updated_item else None,
+            )
         except Exception as exc:
             repository.update_raw_item_enrichment(
                 raw_item_id,
                 enrichment_status="enrichment_error",
                 enrichment_error=f"Enrichment pipeline failed: {exc}",
+            )
+            _log_pipeline_event(
+                "item_failed",
+                phase="enrichment",
+                source=raw_item.source_key,
+                status="error",
+                error_reason=str(exc),
+                raw_item_id=raw_item_id,
             )
             logger.exception("Enrichment failed: raw_item_id=%s error=%s", raw_item_id, exc)
 
@@ -1351,7 +2113,12 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
             except Exception:
                 # Keep source ingestion resilient even if one full-text enrichment path fails.
                 continue
-    logger.info("Enrichment batch completed: candidates=%s", len(candidate_ids))
+    _log_pipeline_event(
+        "batch_finished",
+        phase="enrichment",
+        status="ok",
+        counts={"candidates": len(candidate_ids), "enriched": enriched_count},
+    )
     return (len(candidate_ids), enriched_count)
 
 

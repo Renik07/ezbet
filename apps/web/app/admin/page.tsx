@@ -102,6 +102,7 @@ export default async function AdminPage({
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
   const activeSources = sources.filter((source) => source.status === "active");
   const pipelineQueues = buildPipelineQueues(rawItems, drafts);
+  const duplicateAudit = buildDuplicateAudit(rawItems);
 
   return (
     <main className="page-shell">
@@ -270,6 +271,51 @@ export default async function AdminPage({
               (item) => `${item.title} — ${item.sourceTitle}`
             )}
           </article>
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Duplicate audit</h2>
+            <p>
+              Здесь видно, сколько новостей отсеклось как дубликаты на каждом этапе и по каким свежим кейсам
+              сработало совпадение.
+            </p>
+          </div>
+        </div>
+        <div className="stats-grid" style={{ marginBottom: 18 }}>
+          <div className="stat">
+            <strong>{duplicateAudit.ingest.length}</strong>
+            <span>дубли на ingest</span>
+          </div>
+          <div className="stat">
+            <strong>{duplicateAudit.afterEnrichment.length}</strong>
+            <span>дубли после enrichment</span>
+          </div>
+          <div className="stat">
+            <strong>{duplicateAudit.other.length}</strong>
+            <span>прочие duplicate-кейсы</span>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
+          {duplicateAudit.all.length ? (
+            duplicateAudit.all.slice(0, 8).map((item) => (
+              <article key={item.id} className="news-card">
+                <span>{formatDuplicateStage(item.duplicateStage)}</span>
+                <h3>{item.title}</h3>
+                <p>{item.duplicateReason || "Новость помечена как дубликат."}</p>
+                <p className="footer-note" style={{ marginTop: 12 }}>
+                  {item.sourceTitle} · {item.triageLabel} · score {item.importanceScore}
+                </p>
+              </article>
+            ))
+          ) : (
+            <article className="news-card">
+              <h3>Свежих duplicate-кейсов пока нет</h3>
+              <p>После следующего прогона ingest/enrichment здесь появятся последние отсеченные дубли с причиной.</p>
+            </article>
+          )}
         </div>
       </section>
 
@@ -507,6 +553,7 @@ export default async function AdminPage({
                   <option value="3">3 новости</option>
                   <option value="5">5 новостей</option>
                   <option value="10">10 новостей</option>
+                  <option value="15">15 новостей</option>
                 </select>
               </label>
               <p className="footer-note">
@@ -574,6 +621,7 @@ export default async function AdminPage({
                   <option value="2">2 материала</option>
                   <option value="5">5 материалов</option>
                   <option value="10">10 материалов</option>
+                  <option value="15">15 материалов</option>
                 </select>
               </label>
               <p className="footer-note">
@@ -1120,6 +1168,16 @@ function buildPipelineQueues(rawItems: RawItem[], drafts: DraftArticle[]) {
   };
 }
 
+function buildDuplicateAudit(rawItems: RawItem[]) {
+  const all = rawItems.filter((item) => item.isDuplicate);
+  return {
+    all,
+    ingest: all.filter((item) => item.duplicateStage === "ingest"),
+    afterEnrichment: all.filter((item) => item.duplicateStage === "after_enrichment"),
+    other: all.filter((item) => item.duplicateStage !== "ingest" && item.duplicateStage !== "after_enrichment"),
+  };
+}
+
 function renderQueueList<T>(items: T[], formatItem: (item: T) => string) {
   if (!items.length) {
     return <p className="footer-note">Сейчас пусто.</p>;
@@ -1156,6 +1214,19 @@ function formatDuration(durationMs: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes} мин ${seconds} сек`;
+}
+
+function formatDuplicateStage(value?: string) {
+  switch (value) {
+    case "ingest":
+      return "дубликат на ingest";
+    case "after_enrichment":
+      return "дубликат после enrichment";
+    case "before_publish":
+      return "дубликат перед публикацией";
+    default:
+      return value ?? "дубликат";
+  }
 }
 
 function formatPipelinePhase(value: string) {

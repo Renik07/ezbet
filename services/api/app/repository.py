@@ -1206,6 +1206,31 @@ class NewsRepository:
 
         return [self._map_raw_row(row) for row in rows]
 
+    def count_pending_enrichment_raw_items(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM raw_items r
+            LEFT JOIN draft_articles d ON d.raw_item_id = r.id
+            WHERE r.is_duplicate = FALSE
+              AND d.raw_item_id IS NULL
+              AND r.url IS NOT NULL
+              AND r.fetched_at >= NOW() - INTERVAL '48 hours'
+              AND (
+                r.full_text IS NULL
+                OR BTRIM(r.full_text) = ''
+                OR r.lead IS NULL
+                OR BTRIM(r.lead) = ''
+                OR COALESCE(array_length(r.tags, 1), 0) = 0
+              )
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
     def get_article_by_slug(self, slug: str) -> Article | None:
         statement = """
             SELECT
@@ -2582,6 +2607,23 @@ class NewsRepository:
 
         return [self._map_raw_row(row) for row in rows]
 
+    def count_planned_raw_items_for_drafts(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM content_plan_items cp
+            JOIN raw_items r ON r.id = cp.raw_item_id
+            LEFT JOIN draft_articles d ON d.raw_item_id = r.id
+            WHERE cp.status = 'planned'
+              AND d.raw_item_id IS NULL
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
     def list_publishable_drafts(self, limit: int = 5) -> list[DraftArticle]:
         statement = """
             SELECT
@@ -2619,6 +2661,106 @@ class NewsRepository:
                 rows = cursor.fetchall()
 
         return [self._map_draft_row(row) for row in rows]
+
+    def count_publishable_drafts(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM draft_articles
+            WHERE status = 'ready_for_publish'
+              AND review_status = 'reviewed'
+              AND publish_decision = 'publish_auto'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
+    def count_ready_to_publish_with_existing_article(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM draft_articles d
+            JOIN articles a ON a.raw_item_id = d.raw_item_id
+            WHERE d.status = 'ready_for_publish'
+              AND d.review_status = 'reviewed'
+              AND d.publish_decision = 'publish_auto'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
+    def count_articles_missing_published_draft(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM articles a
+            LEFT JOIN draft_articles d ON d.raw_item_id = a.raw_item_id
+            WHERE d.raw_item_id IS NULL
+               OR d.status <> 'published'
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
+    def count_published_drafts_missing_article(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM draft_articles d
+            LEFT JOIN articles a ON a.raw_item_id = d.raw_item_id
+            WHERE d.status = 'published'
+              AND a.raw_item_id IS NULL
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
+    def count_published_drafts_missing_news_item(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM draft_articles d
+            JOIN raw_items r ON r.id = d.raw_item_id
+            LEFT JOIN news_items n ON n.id = r.external_id
+            WHERE d.status = 'published'
+              AND n.id IS NULL
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
+
+    def count_multiple_articles_per_news_item(self) -> int:
+        statement = """
+            SELECT COUNT(*)
+            FROM (
+                SELECT news_item_id
+                FROM articles
+                GROUP BY news_item_id
+                HAVING COUNT(*) > 1
+            ) duplicates
+        """
+
+        with psycopg.connect(self.database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+                row = cursor.fetchone()
+
+        return int(row[0] if row and row[0] is not None else 0)
 
     def get_raw_item(self, raw_item_id: str) -> RawItem | None:
         statement = """
@@ -2930,33 +3072,43 @@ class NewsRepository:
 
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT dedupe_key, id FROM raw_items WHERE dedupe_key <> ''")
-                known_dedupe_map = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
+                cursor.execute("SELECT dedupe_key, id, title FROM raw_items WHERE dedupe_key <> ''")
+                known_dedupe_map = {
+                    str(row[0]): (str(row[1]), str(row[2] or ""))
+                    for row in cursor.fetchall()
+                }
                 recent_similarity_candidates = self._load_recent_dedup_candidates(cursor, window_hours=48)
-                pending_similarity_candidates: dict[str, list[tuple[str, str]]] = {}
+                pending_similarity_candidates: dict[str, list[tuple[str, str, str]]] = {}
 
                 for item in items:
-                    existing_raw_id = known_dedupe_map.get(item.dedupe_key)
-                    if existing_raw_id and existing_raw_id != item.id:
+                    existing_raw = known_dedupe_map.get(item.dedupe_key)
+                    if existing_raw and existing_raw[0] != item.id:
                         item.is_duplicate = True
-                        item.duplicate_of = existing_raw_id
+                        item.duplicate_of = existing_raw[0]
                         item.duplicate_stage = "ingest"
-                        item.duplicate_reason = "Точный дубль найден при первичной загрузке по dedupe key / URL."
+                        item.duplicate_reason = (
+                            f"Точный дубль найден при первичной загрузке по dedupe key / URL. "
+                            f"Совпало с новостью: «{existing_raw[1] or existing_raw[0]}»."
+                        )
                     elif item.is_duplicate and not item.duplicate_of:
-                        item.duplicate_of = known_dedupe_map.get(item.dedupe_key, item.id)
+                        exact_match = known_dedupe_map.get(item.dedupe_key)
+                        item.duplicate_of = exact_match[0] if exact_match is not None else item.id
                         item.duplicate_stage = item.duplicate_stage or "ingest"
                         item.duplicate_reason = item.duplicate_reason or "Новость помечена как дубль при первичной загрузке."
                     else:
-                        duplicate_match_id = self._find_near_duplicate_id(
+                        duplicate_match = self._find_near_duplicate_match(
                             item,
                             recent_similarity_candidates,
                             pending_similarity_candidates,
                         )
-                        if duplicate_match_id is not None and duplicate_match_id != item.id:
+                        if duplicate_match is not None and duplicate_match[0] != item.id:
                             item.is_duplicate = True
-                            item.duplicate_of = duplicate_match_id
+                            item.duplicate_of = duplicate_match[0]
                             item.duplicate_stage = "ingest"
-                            item.duplicate_reason = "Похожая новость найдена при первичной загрузке среди свежих raw items."
+                            item.duplicate_reason = (
+                                "Похожая новость найдена при первичной загрузке среди свежих raw items. "
+                                f"Совпало с новостью: «{duplicate_match[1]}» (similarity {duplicate_match[2]:.2f})."
+                            )
 
                     cursor.execute(
                         """
@@ -3029,14 +3181,14 @@ class NewsRepository:
                     )
                     if cursor.fetchone():
                         inserted += 1
-                        known_dedupe_map[item.dedupe_key] = item.id
+                        known_dedupe_map[item.dedupe_key] = (item.id, item.title)
                         if not item.is_duplicate:
                             combined_text = self._build_similarity_text(item)
                             recent_similarity_candidates.setdefault(item.normalized_category, []).append(
-                                (item.id, combined_text)
+                                (item.id, item.title, combined_text)
                             )
                             pending_similarity_candidates.setdefault(item.normalized_category, []).append(
-                                (item.id, combined_text)
+                                (item.id, item.title, combined_text)
                             )
                     else:
                         skipped_items.append(
@@ -3183,7 +3335,7 @@ class NewsRepository:
         if item is None or item.is_duplicate:
             return item
 
-        candidate_texts: dict[str, list[tuple[str, str]]] = {}
+        candidate_texts: dict[str, list[tuple[str, str, str]]] = {}
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -3210,15 +3362,15 @@ class NewsRepository:
             full_text = str(row[4] or "")
             source_text = full_text or summary
             candidate_texts.setdefault(category, []).append(
-                (candidate_id, self._normalize_similarity_text(f"{title} {source_text}"))
+                (candidate_id, title, self._normalize_similarity_text(f"{title} {source_text}"))
             )
 
-        duplicate_match_id = self._find_near_duplicate_id(
+        duplicate_match = self._find_near_duplicate_match(
             item,
             recent_similarity_candidates=candidate_texts,
             pending_similarity_candidates={},
         )
-        if not duplicate_match_id:
+        if not duplicate_match:
             return item
 
         with psycopg.connect(self.database_url) as connection:
@@ -3229,10 +3381,17 @@ class NewsRepository:
                     SET is_duplicate = TRUE,
                         duplicate_of = %s,
                         duplicate_stage = 'after_enrichment',
-                        duplicate_reason = 'Похожая новость найдена после добора full text и нормализации заголовка.'
+                        duplicate_reason = %s
                     WHERE id = %s
                     """,
-                    (duplicate_match_id, raw_item_id),
+                    (
+                        duplicate_match[0],
+                        (
+                            "Похожая новость найдена после добора full text и нормализации заголовка. "
+                            f"Совпало с новостью: «{duplicate_match[1]}» (similarity {duplicate_match[2]:.2f})."
+                        ),
+                        raw_item_id,
+                    ),
                 )
             connection.commit()
 
@@ -3425,7 +3584,7 @@ class NewsRepository:
         cursor: psycopg.Cursor[tuple[object, ...]],
         *,
         window_hours: int,
-    ) -> dict[str, list[tuple[str, str]]]:
+    ) -> dict[str, list[tuple[str, str, str]]]:
         cursor.execute(
             """
             SELECT id, normalized_category, title, summary
@@ -3438,43 +3597,79 @@ class NewsRepository:
         )
         rows = cursor.fetchall()
 
-        grouped: dict[str, list[tuple[str, str]]] = {}
+        grouped: dict[str, list[tuple[str, str, str]]] = {}
         for row in rows:
             item_id = str(row[0])
             category = str(row[1])
             title = str(row[2])
             summary = str(row[3])
-            grouped.setdefault(category, []).append((item_id, self._normalize_similarity_text(f"{title} {summary}")))
+            grouped.setdefault(category, []).append(
+                (item_id, title, self._normalize_similarity_text(f"{title} {summary}"))
+            )
         return grouped
 
-    def _find_near_duplicate_id(
+    def _find_near_duplicate_match(
         self,
         item: RawItem,
-        recent_similarity_candidates: dict[str, list[tuple[str, str]]],
-        pending_similarity_candidates: dict[str, list[tuple[str, str]]],
-    ) -> str | None:
+        recent_similarity_candidates: dict[str, list[tuple[str, str, str]]],
+        pending_similarity_candidates: dict[str, list[tuple[str, str, str]]],
+    ) -> tuple[str, str, float] | None:
         category = item.normalized_category
         target = self._build_similarity_text(item)
         target_tokens = self._tokenize_similarity_text(target)
         if len(target_tokens) < 4:
             return None
 
+        same_category_match = self._best_duplicate_candidate(
+            item_id=item.id,
+            target_tokens=target_tokens,
+            candidates=recent_similarity_candidates.get(category, []) + pending_similarity_candidates.get(category, []),
+        )
+        if same_category_match is not None and same_category_match[2] >= 0.84:
+            return same_category_match
+
+        cross_category_candidates: list[tuple[str, str, str]] = []
+        for candidate_category, candidate_items in recent_similarity_candidates.items():
+            if candidate_category == category:
+                continue
+            cross_category_candidates.extend(candidate_items)
+        for candidate_category, candidate_items in pending_similarity_candidates.items():
+            if candidate_category == category:
+                continue
+            cross_category_candidates.extend(candidate_items)
+
+        cross_category_match = self._best_duplicate_candidate(
+            item_id=item.id,
+            target_tokens=target_tokens,
+            candidates=cross_category_candidates,
+        )
+        if cross_category_match is not None and cross_category_match[2] >= 0.9:
+            return cross_category_match
+        return None
+
+    def _best_duplicate_candidate(
+        self,
+        *,
+        item_id: str,
+        target_tokens: set[str],
+        candidates: list[tuple[str, str, str]],
+    ) -> tuple[str, str, float] | None:
         best_match_id: str | None = None
+        best_match_title = ""
         best_score = 0.0
 
-        for candidate_id, candidate_text in (
-            recent_similarity_candidates.get(category, []) + pending_similarity_candidates.get(category, [])
-        ):
-            if candidate_id == item.id:
+        for candidate_id, candidate_title, candidate_text in candidates:
+            if candidate_id == item_id:
                 continue
             similarity = self._compute_similarity_from_texts(target_tokens, candidate_text)
             if similarity > best_score:
                 best_score = similarity
                 best_match_id = candidate_id
+                best_match_title = candidate_title
 
-        if best_score >= 0.84:
-            return best_match_id
-        return None
+        if best_match_id is None:
+            return None
+        return (best_match_id, best_match_title, best_score)
 
     def _build_similarity_text(self, item: RawItem) -> str:
         source_text = item.full_text or item.summary
@@ -3482,11 +3677,54 @@ class NewsRepository:
 
     @staticmethod
     def _normalize_similarity_text(value: str) -> str:
-        return " ".join(value.lower().split())
+        lowered = " ".join(value.lower().split())
+        folded = NewsRepository._fold_similarity_text(lowered)
+        return " ".join(folded.split())
+
+    @staticmethod
+    def _fold_similarity_text(value: str) -> str:
+        replacements = {
+            "а": "a",
+            "б": "b",
+            "в": "v",
+            "г": "g",
+            "д": "d",
+            "е": "e",
+            "ё": "e",
+            "ж": "zh",
+            "з": "z",
+            "и": "i",
+            "й": "i",
+            "к": "k",
+            "л": "l",
+            "м": "m",
+            "н": "n",
+            "о": "o",
+            "п": "p",
+            "р": "r",
+            "с": "s",
+            "т": "t",
+            "у": "u",
+            "ф": "f",
+            "х": "kh",
+            "ц": "ts",
+            "ч": "ch",
+            "ш": "sh",
+            "щ": "shch",
+            "ъ": "",
+            "ы": "y",
+            "ь": "",
+            "э": "e",
+            "ю": "yu",
+            "я": "ya",
+        }
+        folded = "".join(replacements.get(char, char) for char in value)
+        return re.sub(r"[^a-z0-9]+", " ", folded)
 
     @staticmethod
     def _tokenize_similarity_text(value: str) -> set[str]:
-        return {token for token in re.findall(r"[a-zA-Zа-яА-Я0-9]+", value.lower()) if len(token) > 2}
+        normalized = NewsRepository._normalize_similarity_text(value)
+        return {token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) > 2}
 
     def _compute_similarity_from_texts(self, left_tokens: set[str], right_text: str) -> float:
         right_tokens = self._tokenize_similarity_text(right_text)

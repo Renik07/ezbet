@@ -709,7 +709,7 @@
 - [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
 - [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
-- [ ] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`
+- [x] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`: единый `pipeline_event`-формат для ingest / enrichment / editorial / publish / scheduler / pipeline-run
 - [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
 - [x] duplicate diagnostics by stage: в UI видно, где новость стала дублем — при первичной загрузке, после enrichment или перед публикацией
 - [x] publish rules + отдельный publish scheduler: editorial теперь только готовит `ready_for_publish`, а отдельный publish-этап публикует только `publish_auto`
@@ -723,12 +723,17 @@
 - [x] усиленные понятные причины остановки по этапам pipeline в `studio`: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
 - [x] локальный `pipeline:loop` для полного автотеста цепочки `ingest -> enrichment -> editorial -> publish`
 - [x] очереди pipeline в `/admin`: видно, сколько новостей ждут `full text`, `editorial` и `publish`, и какие именно элементы стоят в очереди
-- [ ] production cron / external scheduler вместо локального shell-loop
+- [x] базовый end-to-end serial flow локально подтвержден: новости собираются, enrichment срабатывает, draft генерируется, publish публикует
+- [~] audit duplicate behavior: duplicate reasons и свежие кейсы уже видны понятнее; дальше добить калибровку near-duplicate правил
+- [x] near-duplicate matching v3: fallback вне одной категории и translit-aware нормализация текста перед similarity-check
+- [ ] calibrate prioritization / shortlist: проверить, что важные новости реально получают приоритет, а слабые не съедают batch
+- [ ] calibrate editorial / publish decisions: проверить, что quality gate и publish rules не дают ложных `hold / skip / rewrite`
+- [x] production cron / external scheduler вместо локального shell-loop: внешний cron может дергать один endpoint `/api/v1/pipeline/tick` или `scripts/pipeline-cron.sh`
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
-- [ ] production soak-test на идемпотентность: повторные циклы не должны заново тянуть `full_text`, генерировать второй draft или повторно публиковать материал
-- [ ] production monitoring / alerts: structured logs, health-checks по scheduler-этапам, сигнал при долгом отсутствии успешных прогонов
-- [ ] production recovery / resilience: безопасное восстановление после рестарта API / worker без зависших `running` и дублей
-- [ ] production env checklist: секреты, timeouts, concurrency limits, базовые cron-настройки и runbook запуска
+- [x] production soak-test на идемпотентность: есть endpoint `GET /api/v1/monitoring/idempotency`, который проверяет ключевые инварианты draft/article/news publish-цепочки перед controlled prod run
+- [x] production monitoring / alerts: endpoint `/api/v1/monitoring/status` показывает `ok / warning / critical`, очереди по этапам и базовые alert-сигналы по scheduler-run / backlog / disabled-with-queue
+- [x] production recovery / resilience: на старте API автоматически восстанавливаются зависшие `running`-статусы scheduler-этапов, есть ручной recovery endpoint `POST /api/v1/recovery/run`
+- [x] production env checklist: `.env.example` и README содержат обязательные env, cron/runbook, smoke-check и базовые operational limits перед controlled prod run
 
 Что уже считаем честно рабочим:
 
@@ -760,15 +765,79 @@
 - крутить локальный цикл, имитирующий внешний cron: `npm run scheduler:loop`
 - разово дернуть полный локальный pipeline: `npm run pipeline:tick`
 - крутить локальный полный цикл по всем scheduler-этапам: `npm run pipeline:loop`
+- production-like внешний cron может дергать один агрегирующий endpoint: `POST /api/v1/pipeline/tick`
+- локально этот же сценарий можно проверить одной командой: `npm run pipeline:cron`
+- базовый monitoring endpoint для cron/uptime-проверок: `GET /api/v1/monitoring/status`
+- idempotency-report перед прод-тестом: `GET /api/v1/monitoring/idempotency`
+- ручной recovery endpoint для safe-restore после рестарта/сбоя: `POST /api/v1/recovery/run`
 - при необходимости форсировать запуск в обход `is_due`: `SCHEDULER_MODE=run npm run scheduler:tick`
 - при необходимости форсировать весь локальный pipeline в обход `is_due`: `PIPELINE_MODE=run npm run pipeline:tick`
+- при необходимости форсировать весь внешний cron-сценарий в обход `is_due`: `PIPELINE_MODE=run npm run pipeline:cron`
 - разово дернуть последовательный prod-like цикл без ожидания интервалов: `npm run pipeline:serial-tick`
 - крутить последовательный prod-like цикл с паузой между полными проходами: `INTERVAL_SECONDS=300 npm run pipeline:serial-loop`
 - при необходимости поменять API URL: `EZBET_API_BASE_URL=http://localhost:8000 npm run scheduler:tick`
+- пример cron на сервере: `* * * * * cd /path/to/ezbet && EZBET_API_BASE_URL=https://api.example.com npm run pipeline:cron >> /var/log/ezbet-pipeline-cron.log 2>&1`
 - importance score пока rule-based и базовый
 - planner пока детерминированный, а не AI-assisted
 - RSS чаще всего дает краткий summary, а не полный текст статьи
 - часть editorial flow все еще может уходить в `template fallback`
+
+Production env checklist перед первым controlled prod-run:
+
+1. Обязательные env:
+- `DATABASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_EDITORIAL_MODEL`
+- `OPENAI_SEARCH_MODEL`
+- `OPENAI_BASE_URL`
+- `OPENAI_API_STYLE`
+- `OPENAI_PROVIDER_LABEL`
+- `OPENAI_TIMEOUT_SECONDS`
+- `OPENAI_WEB_SEARCH_ENABLED`
+- `OPENAI_WEB_SEARCH_LIVE`
+- `OPENAI_WEB_SEARCH_CONTEXT_SIZE`
+- `EZBET_API_BASE_URL`
+- `NEXT_PUBLIC_API_BASE_URL`
+
+2. Рекомендуемые значения для первого прод-теста:
+- `OPENAI_TIMEOUT_SECONDS=45`
+- `OPENAI_WEB_SEARCH_ENABLED=true`
+- `OPENAI_WEB_SEARCH_LIVE=true`
+- `OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium`
+
+3. Базовые operational limits на старте:
+- `ingest batch`: `3-5` на источник
+- `enrichment batch`: `5`
+- `editorial batch`: `2-3`
+- `publish batch`: `1-2`
+- `ThreadPoolExecutor` для enrichment сейчас ограничен `max_workers=4`; для первого controlled run этого достаточно
+
+4. Cron / scheduler runbook:
+- API должен быть доступен по `EZBET_API_BASE_URL`
+- внешний cron должен дергать `npm run pipeline:cron`
+- для первого controlled запуска лучше cron раз в `5-10` минут, а не агрессивнее
+- если нужен принудительный полный прогон без `is_due`, использовать `PIPELINE_MODE=run npm run pipeline:cron`
+
+5. Smoke-check сразу после деплоя:
+- `GET /health`
+- `GET /api/v1/monitoring/status`
+- `GET /api/v1/monitoring/idempotency`
+- `GET /api/v1/scheduler`
+- `GET /api/v1/enrichment-scheduler`
+- `GET /api/v1/editorial-scheduler`
+- `GET /api/v1/publish-scheduler`
+
+6. Что считать красным флагом:
+- `monitoring/status = critical`
+- любой scheduler завис в `running`
+- очереди `enrichment / editorial / publish` растут, а этапы не разбирают их
+- в истории прогонов появляются повторяющиеся `error`
+
+7. Safe-recovery runbook:
+- после рестарта сначала проверить `GET /api/v1/monitoring/status`
+- если остались странные состояния, дернуть `POST /api/v1/recovery/run`
+- только потом включать cron обратно
 
 ### Этап 4. Частичная автопубликация
 

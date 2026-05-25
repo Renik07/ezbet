@@ -25,6 +25,8 @@ export type RawItem = {
   triageLabel: string;
   isDuplicate: boolean;
   duplicateOf?: string;
+  duplicateStage?: string;
+  duplicateReason?: string;
   contentPlanStatus?: string;
   contentPlanReason?: string;
   contentPlanPriorityLabel?: string;
