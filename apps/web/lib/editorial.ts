@@ -290,6 +290,7 @@ const fallbackRawItems: RawItem[] = [
     id: "raw:fallback:1",
     sourceKey: "fallback",
     sourceTitle: "fallback source",
+    sourceUrl: "https://example.com",
     category: "general",
     normalizedCategory: "general",
     title: "Исходная RSS-новость для compare-режима",
@@ -297,6 +298,7 @@ const fallbackRawItems: RawItem[] = [
     lead: "Fallback lead показывает, что enrichment может добавлять к сырой новости более аккуратный краткий контекст.",
     fullText:
       "Это fallback full text. Здесь должен быть полный текст исходной новости или полный текст, вытянутый со страницы-источника.\n\nНа боевом потоке этот блок помогает сравнивать не только короткий summary, но и фактическую основу, из которой writer и editor собирают итоговую статью.",
+    referenceUrls: ["https://example.com/news/1"],
     tags: ["Fallback", "AI", "Editorial"],
     url: "https://example.com/news/1",
     publishedAt: "2026-05-03T00:00:00.000Z",
