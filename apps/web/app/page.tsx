@@ -2,6 +2,8 @@ import Link from "next/link";
 import { NewsCard } from "@/components/news-card";
 import { getNews } from "@/lib/news";
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true });
 
