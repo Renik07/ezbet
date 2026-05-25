@@ -11,7 +11,7 @@ function formatExtractionMode(mode?: string) {
       return "web search brief";
     case "llm_responses_html_extraction":
     case "llm_chat_completions_html_extraction":
-      return "legacy ai html";
+      return "ai html extraction";
     case "llm_responses_web_search_extraction":
     case "llm_chat_completions_web_search_extraction":
       return "legacy web search extraction";
@@ -30,12 +30,18 @@ function formatEnrichmentStatus(status?: string) {
       return "web search partial";
     case "search_no_match":
       return "web search no match";
+    case "search_skipped_budget":
+      return "web search skipped by budget";
+    case "search_skipped_run_cap":
+      return "web search skipped by run cap";
     case "enrichment_error":
       return "enrichment error";
     case "ai_html_ok":
-      return "legacy ai html ok";
+      return "ai html ok";
     case "ai_html_partial_only":
-      return "legacy ai html partial";
+      return "ai html partial";
+    case "direct_html_partial_only":
+      return "direct parser partial";
     default:
       return status ?? "ещё не запускался или не сохранил статус";
   }
@@ -166,10 +172,20 @@ function describeEnrichmentBlock(rawItem: {
   switch (rawItem.enrichmentStatus) {
     case "search_no_match":
       return "Добор full text запускался, но источник текста не нашелся даже через web search.";
+    case "search_skipped_budget":
+      return "web search fallback был сознательно пропущен по budget-правилу: для этой low-priority новости используем только локальный extraction без внешнего поиска.";
+    case "search_skipped_run_cap":
+      return "web search fallback был пропущен из-за лимита на текущий enrichment batch: в этом прогоне внешний поиск уже израсходовал свою квоту.";
     case "search_partial_only":
       return "Полный текст не найден: удалось получить только частичный web-search brief.";
     case "direct_html_ok":
       return "Direct parser отработал, но сохранил только частичный контекст без полноценного full text.";
+    case "direct_html_partial_only":
+      return "Direct parser нашел только часть контекста: заголовок, lead или короткий фрагмент, но не полный текст статьи.";
+    case "ai_html_partial_only":
+      return "AI extraction по HTML запускался, но смог поднять только частичный контекст без полноценного full text.";
+    case "ai_html_ok":
+      return "Полный текст уже получен через AI extraction по HTML самой страницы.";
     case "enrichment_error":
       return "Добор full text не завершился успешно и требует повторного запуска или другого extraction path.";
     default:

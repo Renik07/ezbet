@@ -678,21 +678,21 @@
 - [x] `ai_research` adapter первой версии через OpenAI `web_search` как временный fallback
 - [ ] вывести `ai_research` из основного happy path ingestion
 - [x] базовый `source capability probe` для auto-detection `rss / news sitemap / sitemap / scraping`
-- [ ] таблица или сущность `source_capabilities`
-- [ ] capability-based adapter selection вместо обязательного ручного `source_type`
 - [x] единый нормализованный `RawItem` flow для `rss`, `scraping` и `ai_research`
 - [x] хранение и использование полного текста страницы-источника поверх короткого RSS summary
 - [x] отдельный enrichment-слой для `full_text`, `lead`, `tags`, если их удается извлечь
 - [x] базовый `AI extraction fallback` для article pages, где deterministic extractor не вытягивает `full_text`
-- [ ] усилить `web_search` fallback: несколько search-стратегий и разрешение брать `full_text` с любого надежного источника по тому же инфоповоду
-- [ ] сначала пробовать AI extraction по уже скачанному HTML без `web_search`
-- [ ] item-level enrichment pipeline: добирать только недостающие поля, а не перезапускать весь source flow
-- [ ] ограничить `web_search` budget rules: только top-priority материалы и только после провала обычного extraction
+- [x] сначала пробовать AI extraction по уже скачанному HTML без `web_search`
+- [x] усилить `web_search` fallback: несколько search-стратегий и разрешение брать `full_text` с любого надежного источника по тому же инфоповоду
+- [x] item-level enrichment pipeline: добирать только недостающие поля, а не перезапускать весь source flow
+- [x] ограничить `web_search` budget rules: только top-priority материалы и только после провала обычного extraction, плюс жесткий per-run cap на `web_search fallback`
 - [x] усиленный `AI preflight fallback`: проверка нескольких sample-новостей и `ready_ai`, если хотя бы одна статья даёт пригодный `full_text`
-- [ ] единая валидация источников в админке в зависимости от `source_type`
+- [x] единая валидация источников в админке в зависимости от `source_type`
 - [x] безопасная активация новых источников: только поддерживаемые adapter'ы могут уходить в `active`
 - [x] generic sitemap больше не пускаем в автоматический active-flow: для auto-pipeline доверяем только `rss`, `news_sitemap`, `scraping`, `ai_research`
 - [x] улучшенное состояние обхода источников: last successful fetch, last successful parse, error counters, retry policy
+- [x] таблица/сущность `source_capabilities` в API: capabilities собираются из `source_configs + source_sync_state` и доступны отдельно от сырых source-state полей
+- [x] capability-based adapter selection: runtime ingest выбирает effective adapter по `preferred_adapter/supports_*`, а не только по вручную сохраненному `source_type`
 - [ ] scheduler с фиксированными окнами, например `09:00 / 12:00 / 15:00 / 18:00`
 - [x] конфигурируемый ingest scheduler: `enabled`, `interval_minutes`, `last_run_at`, `next_run_at`
 - [x] настраиваемый scheduler batch-size на источник
@@ -707,17 +707,14 @@
 - [x] мягкий shortlist для enrichment scheduler: сначала более приоритетные и более неполные raw_items, но без жесткого отрезания свежих `low`
 - [x] editorial scheduler как отдельный автоматический этап после enrichment
 - [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
-- [ ] publish scheduler / publish rules как отдельный этап после editorial
 - [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
 - [ ] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`
 - [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
 - [x] duplicate diagnostics by stage: в UI видно, где новость стала дублем — при первичной загрузке, после enrichment или перед публикацией
-- [~] publish rules: базовые `publish_decision / publish_reason` уже есть в editorial-слое; дальше вынести их в отдельный publish scheduler и admin-control
 - [x] publish rules + отдельный publish scheduler: editorial теперь только готовит `ready_for_publish`, а отдельный publish-этап публикует только `publish_auto`
 - [x] явный pre-publish duplicate guard: draft отдельно сверяется с уже опубликованными статьями и получает `skip / hold / rewrite` с понятной причиной
 - [x] базовый блок наблюдаемости в `/admin`: последние прогоны, counters, last successful run, ошибки по этапам
-- [ ] ближайший приоритет: сначала observability и run history для всего pipeline, и только потом publish automation
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
@@ -725,6 +722,7 @@
 - [x] ранняя остановка по watermark для `rss` и `news sitemap`, чтобы старые новости не раздували `Найдено`
 - [x] усиленные понятные причины остановки по этапам pipeline в `studio`: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
 - [x] локальный `pipeline:loop` для полного автотеста цепочки `ingest -> enrichment -> editorial -> publish`
+- [x] очереди pipeline в `/admin`: видно, сколько новостей ждут `full text`, `editorial` и `publish`, и какие именно элементы стоят в очереди
 - [ ] production cron / external scheduler вместо локального shell-loop
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
 - [ ] production soak-test на идемпотентность: повторные циклы не должны заново тянуть `full_text`, генерировать второй draft или повторно публиковать материал
@@ -764,6 +762,8 @@
 - крутить локальный полный цикл по всем scheduler-этапам: `npm run pipeline:loop`
 - при необходимости форсировать запуск в обход `is_due`: `SCHEDULER_MODE=run npm run scheduler:tick`
 - при необходимости форсировать весь локальный pipeline в обход `is_due`: `PIPELINE_MODE=run npm run pipeline:tick`
+- разово дернуть последовательный prod-like цикл без ожидания интервалов: `npm run pipeline:serial-tick`
+- крутить последовательный prod-like цикл с паузой между полными проходами: `INTERVAL_SECONDS=300 npm run pipeline:serial-loop`
 - при необходимости поменять API URL: `EZBET_API_BASE_URL=http://localhost:8000 npm run scheduler:tick`
 - importance score пока rule-based и базовый
 - planner пока детерминированный, а не AI-assisted
@@ -1059,9 +1059,9 @@ npm run dev:web
 
 # Источники
 1. https://www.sport-express.ru/services/materials/news/se - RSS (Сбор новостей  - ОК. ФУЛЛ текст берется через веб-поиск)
-2. https://www.championat.com/sitemap/news.xml - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
-3. https://www.sports.ru (https://www.sports.ru/news) - scraping (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
-4. https://www.sovsport.ru (https://www.sovsport.ru/sitemap-news.xml) - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг/парсинг OK)
+2. https://www.championat.com/sitemap/news.xml - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
+3. https://www.sports.ru (https://www.sports.ru/news) - scraping (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
+4. https://www.sovsport.ru (https://www.sovsport.ru/sitemap-news.xml) - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
 5. https://www.sportsdaily.ru/news/ - scraping (Сбор новостей - ОК. ФУЛЛ текст берется через веб-поиск)
 
 # Убить процесс

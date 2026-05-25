@@ -13,6 +13,7 @@ from .ai_client import OpenAIEditorialClient
 from .config import get_openai_settings
 from .editorial import default_prompt_configs, run_editorial_cycle
 from .ingestion import (
+    _capability_supports_adapter,
     enrich_raw_item_content,
     ingest_sources as collect_source_items,
     ingest_sources_with_results,
@@ -53,6 +54,8 @@ from .models import (
     SchedulerSettings,
     SchedulerSettingsUpdateRequest,
     SourceCreateRequest,
+    SourceCapability,
+    SourceCapabilityListResponse,
     SourceListResponse,
     SourceProbeResponse,
     SourceUpdateRequest,
@@ -90,6 +93,7 @@ SCHEDULER_LOCK_KEY = 4815162342
 ENRICHMENT_SCHEDULER_LOCK_KEY = 4815162343
 EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
 PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
+ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 
@@ -158,6 +162,7 @@ def list_sources() -> SourceListResponse:
 def create_source(payload: SourceCreateRequest) -> SourceListResponse:
     try:
         source_type = payload.resolved_source_type or payload.source_type
+        _validate_source_create_request(payload, source_type)
         source = SourceItem(
             key=payload.key,
             title=payload.title,
@@ -168,8 +173,7 @@ def create_source(payload: SourceCreateRequest) -> SourceListResponse:
             notes=payload.notes,
         )
 
-        requires_precheck = source_type in {"scraping", "news_sitemap"}
-        if requires_precheck and payload.probe_ok:
+        if payload.probe_ok:
             draft_source = source.model_copy(update={"status": "draft"})
             repository.create_source_config(draft_source)
             repository.record_source_probe(
@@ -334,6 +338,15 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
 @app.get("/api/v1/source-states", response_model=SourceSyncStateListResponse)
 def list_source_states() -> SourceSyncStateListResponse:
     return SourceSyncStateListResponse(items=repository.list_source_sync_states())
+
+
+@app.get("/api/v1/source-capabilities", response_model=SourceCapabilityListResponse)
+def list_source_capabilities() -> SourceCapabilityListResponse:
+    sources = repository.list_source_configs()
+    states = repository.list_source_sync_states()
+    state_map = {state.source_key: state for state in states}
+    items = [_build_source_capability(source, state_map.get(source.key)) for source in sources]
+    return SourceCapabilityListResponse(items=items)
 
 
 @app.get("/api/v1/scheduler", response_model=SchedulerSettings)
@@ -1262,11 +1275,29 @@ def _run_publish_for_drafts(*, limit: int) -> int:
 
 
 def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
-    candidate_ids = [item.id for item in raw_items if not item.is_duplicate]
+    candidate_items = [item for item in raw_items if not item.is_duplicate]
+    candidate_ids = [item.id for item in candidate_items]
     if not candidate_ids:
         logger.info("Enrichment skipped: no non-duplicate raw items in batch")
         return (0, 0)
+    web_search_budget_ids = {
+        item.id
+        for item in sorted(
+            (
+                item
+                for item in candidate_items
+                if item.triage_label in {"high", "medium"}
+            ),
+            key=lambda item: (item.importance_score, item.published_at),
+            reverse=True,
+        )[:ENRICHMENT_WEB_SEARCH_CAP_PER_RUN]
+    }
     logger.info("Enrichment started: candidates=%s", len(candidate_ids))
+    logger.info(
+        "Enrichment web_search budget: cap=%s eligible=%s",
+        ENRICHMENT_WEB_SEARCH_CAP_PER_RUN,
+        len(web_search_budget_ids),
+    )
     enriched_count = 0
 
     def enrich_one(raw_item_id: str) -> None:
@@ -1276,7 +1307,11 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
             return
         before_has_any = bool((raw_item.full_text or "").strip() or (raw_item.lead or "").strip() or raw_item.tags)
         try:
-            enrich_raw_item_content(repository, raw_item)
+            enrich_raw_item_content(
+                repository,
+                raw_item,
+                allow_web_search_fallback=raw_item_id in web_search_budget_ids,
+            )
             updated_item = repository.get_raw_item(raw_item_id)
             if updated_item is not None and not updated_item.is_duplicate:
                 deduped_item = repository.recheck_raw_item_duplicate_after_enrichment(raw_item_id)
@@ -1318,6 +1353,100 @@ def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:
                 continue
     logger.info("Enrichment batch completed: candidates=%s", len(candidate_ids))
     return (len(candidate_ids), enriched_count)
+
+
+def _validate_source_create_request(payload: SourceCreateRequest, source_type: str) -> None:
+    if not source_type or source_type == "auto":
+        raise ValueError("Проверка не подтвердила подходящий тип источника. Сначала выполните preflight.")
+    if source_type == "sitemap":
+        raise ValueError(
+            "Обычный sitemap больше не используется в автоматическом новостном pipeline. "
+            "Нужен RSS, news sitemap, scraping или ai search."
+        )
+    if source_type not in {"rss", "news_sitemap", "scraping", "ai_research"}:
+        raise ValueError(f"Источник типа {source_type} нельзя активировать в текущем pipeline.")
+    if not payload.probe_ok:
+        raise ValueError("Сначала выполните успешную проверку источника.")
+    if payload.probe_item_count <= 0:
+        raise ValueError("Проверка источника не подтвердила ни одной новости.")
+
+    readiness = payload.probe_readiness or "unknown"
+    if source_type == "rss":
+        if not payload.supports_rss and payload.resolved_source_type != "rss":
+            raise ValueError("Проверка не подтвердила, что источник действительно отдает рабочий RSS.")
+        if readiness not in {"ready", "ready_ai", "partial", "feed_only"}:
+            raise ValueError(
+                "RSS-источник не прошел preflight: лента читается, но sample-новости пока выглядят слишком слабо."
+            )
+        return
+
+    if source_type == "news_sitemap":
+        if not payload.supports_news_sitemap and payload.resolved_source_type != "news_sitemap":
+            raise ValueError("Проверка не подтвердила рабочий news sitemap.")
+        if readiness not in {"ready", "ready_ai", "partial", "feed_only"}:
+            raise ValueError(
+                "News sitemap не прошел preflight: sample-новости не выглядят пригодными для auto-pipeline."
+            )
+        return
+
+    if source_type == "scraping":
+        if not payload.supports_scraping and payload.resolved_source_type != "scraping":
+            raise ValueError("Проверка не подтвердила рабочий scraping-источник.")
+        if readiness not in {"ready", "ready_ai", "partial"}:
+            raise ValueError(
+                "Scraping-источник не прошел preflight: страница пока больше похожа на хаб, ленту или служебный раздел."
+            )
+        return
+
+    if source_type == "ai_research" and readiness not in {"ready_ai", "partial"}:
+        raise ValueError(
+            "AI search-источник не прошел preflight: даже fallback-режим не подтвердил, что из него получится собирать новости."
+        )
+
+
+def _build_source_capability(source: SourceItem, state) -> SourceCapability:
+    readiness = state.last_probe_readiness if state is not None else "unknown"
+    preferred_adapter = state.preferred_adapter if state is not None else None
+    preferred_adapter_url = state.preferred_adapter_url if state is not None else None
+
+    effective_adapter = source.source_type
+    if state is not None:
+        if preferred_adapter and _capability_supports_adapter(state, preferred_adapter):
+            effective_adapter = preferred_adapter
+        elif _capability_supports_adapter(state, source.source_type):
+            effective_adapter = source.source_type
+        else:
+            for adapter in ("rss", "news_sitemap", "scraping", "ai_research"):
+                if _capability_supports_adapter(state, adapter):
+                    effective_adapter = adapter
+                    break
+
+    effective_url = (
+        preferred_adapter_url
+        if preferred_adapter_url and effective_adapter == preferred_adapter
+        else source.url
+    )
+
+    return SourceCapability(
+        source_key=source.key,
+        source_title=source.title,
+        configured_source_type=source.source_type,
+        configured_url=source.url,
+        preferred_adapter=preferred_adapter,
+        preferred_adapter_url=preferred_adapter_url,
+        effective_adapter=effective_adapter,
+        effective_url=effective_url,
+        readiness=readiness,
+        supports_rss=state.supports_rss if state is not None else False,
+        supports_news_sitemap=state.supports_news_sitemap if state is not None else False,
+        supports_sitemap=state.supports_sitemap if state is not None else False,
+        supports_scraping=state.supports_scraping if state is not None else False,
+        full_text_ok=state.last_probe_full_text_ok if state is not None else False,
+        lead_ok=state.last_probe_lead_ok if state is not None else False,
+        tags_count=state.last_probe_tags_count if state is not None else 0,
+        sample_title=state.last_probe_sample_title if state is not None else None,
+        sample_url=state.last_probe_sample_url if state is not None else None,
+    )
 
 
 @app.post("/api/v1/dev/reset", response_model=ResetResponse)

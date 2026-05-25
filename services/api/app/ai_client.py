@@ -563,15 +563,12 @@ class OpenAIEditorialClient:
         if not self.enabled or not self._should_enable_web_search_for_request():
             return None
 
-        search_profiles = [
-            {
-                "name": "title_summary",
-                "query_hint": (
-                    f'Find the same news story by title and facts: "{raw_title}". Summary facts: {raw_summary}'
-                ),
-                "restrict_to_source_domain": False,
-            },
-        ]
+        search_profiles = _build_article_search_profiles(
+            url=url,
+            source_title=source_title,
+            raw_title=raw_title,
+            raw_summary=raw_summary,
+        )
 
         instructions = (
             "Ты extraction-слой ezbet.ru. Если HTML исходной страницы недоступен, найди ту же новость через web search "
@@ -579,6 +576,7 @@ class OpenAIEditorialClient:
         )
 
         best_partial: ArticleExtractionResult | None = None
+        best_partial_score = -1
 
         for profile in search_profiles:
             input_text = (
@@ -655,8 +653,10 @@ class OpenAIEditorialClient:
             if full_text is not None:
                 return candidate
 
-            if best_partial is None and (lead is not None or tags):
+            partial_score = _score_partial_search_candidate(lead=lead, tags=tags, reference_urls=reference_urls)
+            if partial_score > best_partial_score and (lead is not None or tags):
                 best_partial = candidate
+                best_partial_score = partial_score
 
         return best_partial
 
@@ -889,6 +889,118 @@ def _clean_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _build_article_search_profiles(
+    *,
+    url: str,
+    source_title: str,
+    raw_title: str,
+    raw_summary: str,
+) -> list[dict[str, Any]]:
+    compact_title = _compress_search_text(raw_title, limit=180)
+    compact_summary = _compress_search_text(raw_summary, limit=260)
+    fact_keywords = _extract_fact_keywords(raw_title, raw_summary, limit=8)
+    fact_hint = ", ".join(fact_keywords)
+    host = urlsplit(url).netloc.lower()
+
+    profiles: list[dict[str, Any]] = [
+        {
+            "name": "same_domain_title_first",
+            "query_hint": (
+                f'Find the same news on the original source first. Domain: {host or source_title}. '
+                f'Use this title: "{compact_title}".'
+            ),
+            "restrict_to_source_domain": True,
+        },
+        {
+            "name": "title_plus_summary",
+            "query_hint": (
+                f'Find the same news story by title and facts. Title: "{compact_title}". '
+                f"Summary facts: {compact_summary}"
+            ),
+            "restrict_to_source_domain": False,
+        },
+    ]
+
+    if fact_hint:
+        profiles.append(
+            {
+                "name": "fact_keywords",
+                "query_hint": (
+                    "Find the same sports news story by factual keywords and entities, even if the original title "
+                    f"is noisy or transliterated. Keywords: {fact_hint}"
+                ),
+                "restrict_to_source_domain": False,
+            }
+        )
+
+    return profiles
+
+
+def _compress_search_text(value: str, *, limit: int) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip(" ,.;:!?")
+
+
+def _extract_fact_keywords(raw_title: str, raw_summary: str, *, limit: int) -> list[str]:
+    text = f"{raw_title} {raw_summary}"
+    candidates = re.findall(r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9'’.-]{2,}", text)
+    keywords: list[str] = []
+    seen: set[str] = set()
+    stopwords = {
+        "что",
+        "это",
+        "как",
+        "для",
+        "при",
+        "или",
+        "его",
+        "еще",
+        "after",
+        "with",
+        "from",
+        "this",
+        "that",
+        "have",
+        "will",
+        "been",
+        "news",
+        "sport",
+    }
+
+    for candidate in candidates:
+        lowered = candidate.lower()
+        if lowered in seen or lowered in stopwords:
+            continue
+        if len(lowered) <= 2:
+            continue
+        seen.add(lowered)
+        keywords.append(candidate)
+        if len(keywords) >= limit:
+            break
+
+    return keywords
+
+
+def _score_partial_search_candidate(
+    *,
+    lead: str | None,
+    tags: list[str],
+    reference_urls: list[str],
+) -> int:
+    score = 0
+    if lead:
+        score += 3
+        if len(lead) >= 80:
+            score += 2
+    if tags:
+        score += min(len(tags), 4)
+    if reference_urls:
+        score += min(len(reference_urls), 3)
+    return score
 
 
 def _truncate_for_llm(value: str, limit: int) -> str:

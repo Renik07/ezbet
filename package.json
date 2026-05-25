@@ -14,6 +14,8 @@
     "scheduler:loop": "sh ./scripts/scheduler-loop.sh",
     "pipeline:tick": "sh ./scripts/pipeline-tick.sh",
     "pipeline:loop": "sh ./scripts/pipeline-loop.sh",
+    "pipeline:serial-tick": "PIPELINE_MODE=run sh ./scripts/pipeline-tick.sh",
+    "pipeline:serial-loop": "PIPELINE_MODE=run sh ./scripts/pipeline-loop.sh",
     "build:web": "npm run build --workspace web",
     "lint:web": "npm run lint --workspace web"
   }

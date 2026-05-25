@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { getEditorialStudioData } from "@/lib/editorial";
+import { getEditorialStudioData, type DraftArticle, type RawItem } from "@/lib/editorial";
 
 import {
   activatePromptVersion,
@@ -83,6 +83,7 @@ export default async function AdminPage({
       : null;
   const {
     prompts,
+    rawItems,
     drafts,
     reviews,
     contentPlan,
@@ -100,6 +101,7 @@ export default async function AdminPage({
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
   const activeSources = sources.filter((source) => source.status === "active");
+  const pipelineQueues = buildPipelineQueues(rawItems, drafts);
 
   return (
     <main className="page-shell">
@@ -206,6 +208,68 @@ export default async function AdminPage({
               <p>После первого ingest, enrichment или editorial run здесь появятся записи со статусом, длительностью и счетчиками.</p>
             </article>
           )}
+        </div>
+      </section>
+
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Очереди pipeline</h2>
+            <p>
+              Здесь видно, какие новости уже ждут следующий этап: добор full text, генерацию материала или
+              автопубликацию. Это особенно полезно во время <code>pipeline:loop</code>, когда этапы идут по своему
+              расписанию.
+            </p>
+          </div>
+        </div>
+        <div className="stats-grid" style={{ marginBottom: 18 }}>
+          <div className="stat">
+            <strong>{pipelineQueues.waitingEnrichment.length}</strong>
+            <span>ждут full text</span>
+          </div>
+          <div className="stat">
+            <strong>{pipelineQueues.waitingEditorial.length}</strong>
+            <span>ждут editorial</span>
+          </div>
+          <div className="stat">
+            <strong>{pipelineQueues.waitingPublish.length}</strong>
+            <span>ждут publish</span>
+          </div>
+        </div>
+        <div className="admin-grid">
+          <article className="news-card">
+            <span>queue</span>
+            <h3>Ждут full text</h3>
+            <p className="footer-note">
+              Следующий enrichment: {formatDateTime(enrichmentScheduler.nextRunAt)}
+            </p>
+            {renderQueueList(
+              pipelineQueues.waitingEnrichment,
+              (item) => `${item.title} — ${item.sourceTitle}`
+            )}
+          </article>
+          <article className="news-card">
+            <span>queue</span>
+            <h3>Ждут editorial</h3>
+            <p className="footer-note">
+              Следующий editorial: {formatDateTime(editorialScheduler.nextRunAt)}
+            </p>
+            {renderQueueList(
+              pipelineQueues.waitingEditorial,
+              (item) => `${item.title} — ${item.sourceTitle}`
+            )}
+          </article>
+          <article className="news-card">
+            <span>queue</span>
+            <h3>Ждут publish</h3>
+            <p className="footer-note">
+              Следующий publish: {formatDateTime(publishScheduler.nextRunAt)}
+            </p>
+            {renderQueueList(
+              pipelineQueues.waitingPublish,
+              (item) => `${item.title} — ${item.sourceTitle}`
+            )}
+          </article>
         </div>
       </section>
 
@@ -1037,6 +1101,46 @@ function formatDateTime(value?: string) {
     dateStyle: "medium",
     timeStyle: "short"
   });
+}
+
+function buildPipelineQueues(rawItems: RawItem[], drafts: DraftArticle[]) {
+  const draftsByRawId = new Map(drafts.map((draft) => [draft.rawItemId, draft]));
+  const waitingEnrichment = rawItems.filter((item) => !item.isDuplicate && !item.fullText);
+  const waitingEditorial = rawItems.filter(
+    (item) => !item.isDuplicate && Boolean(item.fullText) && !draftsByRawId.has(item.id)
+  );
+  const waitingPublish = drafts.filter(
+    (draft) => draft.status === "ready_for_publish" && draft.publishDecision === "publish_auto"
+  );
+
+  return {
+    waitingEnrichment,
+    waitingEditorial,
+    waitingPublish
+  };
+}
+
+function renderQueueList<T>(items: T[], formatItem: (item: T) => string) {
+  if (!items.length) {
+    return <p className="footer-note">Сейчас пусто.</p>;
+  }
+
+  return (
+    <>
+      <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>
+        {items.slice(0, 6).map((item, index) => (
+          <li key={index} className="footer-note">
+            {formatItem(item)}
+          </li>
+        ))}
+      </ul>
+      {items.length > 6 ? (
+        <p className="footer-note" style={{ marginTop: 8 }}>
+          И ещё {items.length - 6}.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 function formatDuration(durationMs: number) {

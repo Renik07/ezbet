@@ -278,8 +278,9 @@ def ingest_sources_with_results(
 
     for source in sources:
         source_state = states.get(source.key)
+        runtime_source = _resolve_source_runtime(source, source_state)
         source_result = _collect_source_items_with_retry(
-            source,
+            runtime_source,
             timeout=timeout,
             max_retries=max_retries,
             ai_search_prompt=ai_search_prompt,
@@ -288,7 +289,7 @@ def ingest_sources_with_results(
         filtered_items = _filter_new_items(
             collected_items,
             source_state,
-            source.source_type,
+            runtime_source.source_type,
             known_external_ids=known_external_ids_map.get(source.key, set()),
             known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
         )
@@ -308,6 +309,59 @@ def ingest_sources_with_results(
     if limit is not None and not limit_per_source:
         return collected[:limit], results
     return collected, results
+
+
+def _resolve_source_runtime(source: SourceItem, state: SourceSyncState | None) -> SourceItem:
+    if state is None:
+        return source
+
+    effective_adapter = _select_effective_adapter(source, state)
+    effective_url = _select_effective_url(source, state, effective_adapter)
+    if effective_adapter == source.source_type and effective_url == source.url:
+        return source
+
+    return source.model_copy(
+        update={
+            "source_type": effective_adapter,
+            "url": effective_url,
+        }
+    )
+
+
+def _select_effective_adapter(source: SourceItem, state: SourceSyncState) -> str:
+    preferred = (state.preferred_adapter or "").strip()
+    if preferred and _capability_supports_adapter(state, preferred):
+        return preferred
+
+    if _capability_supports_adapter(state, source.source_type):
+        return source.source_type
+
+    for adapter in ("rss", "news_sitemap", "scraping", "ai_research"):
+        if _capability_supports_adapter(state, adapter):
+            return adapter
+
+    return source.source_type
+
+
+def _select_effective_url(source: SourceItem, state: SourceSyncState, effective_adapter: str) -> str:
+    preferred_url = (state.preferred_adapter_url or "").strip()
+    if preferred_url and effective_adapter == (state.preferred_adapter or "").strip():
+        return preferred_url
+    return source.url
+
+
+def _capability_supports_adapter(state: SourceSyncState, adapter: str) -> bool:
+    if adapter == "rss":
+        return state.supports_rss
+    if adapter == "news_sitemap":
+        return state.supports_news_sitemap
+    if adapter == "sitemap":
+        return state.supports_sitemap
+    if adapter == "scraping":
+        return state.supports_scraping
+    if adapter == "ai_research":
+        return state.last_probe_readiness in {"ready_ai", "partial"}
+    return False
 
 
 def raw_items_to_news(raw_items: Iterable[RawItem]) -> list[NewsItem]:
@@ -333,7 +387,12 @@ def raw_items_to_news(raw_items: Iterable[RawItem]) -> list[NewsItem]:
     return items
 
 
-def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> RawItem:
+def enrich_raw_item_content(
+    repository: "NewsRepository",
+    raw_item: RawItem,
+    *,
+    allow_web_search_fallback: bool = True,
+) -> RawItem:
     existing_full_text = (raw_item.full_text or "").strip()
     has_usable_full_text = _is_usable_full_text(existing_full_text, raw_item.summary)
     if (
@@ -342,37 +401,128 @@ def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> 
     ) or not raw_item.url:
         return raw_item
 
-    enrichment = extract_article_enrichment(raw_item.url, timeout=10)
-    if enrichment is not None and (
-        enrichment.title or enrichment.full_text or enrichment.lead or enrichment.tags
-    ):
-        normalized_title, normalized_summary = _resolve_enriched_raw_headline(
-            raw_item.title,
-            raw_item.summary,
-            enrichment.title,
-            enrichment.lead,
-            enrichment.full_text,
+    html = fetch_remote_document(raw_item.url, timeout=10)
+    direct_enrichment = _extract_article_enrichment_from_html(raw_item.url, html) if html else None
+    if direct_enrichment is not None and _is_usable_full_text(direct_enrichment.full_text, raw_item.summary):
+        return _persist_raw_item_enrichment(
+            repository,
+            raw_item,
+            title=direct_enrichment.title,
+            full_text=direct_enrichment.full_text,
+            lead=direct_enrichment.lead,
+            tags=direct_enrichment.tags,
+            full_text_source_url=raw_item.url,
+            full_text_source_title=raw_item.source_title,
+            reference_urls=[],
+            extraction_mode="direct_html",
+            enrichment_status="direct_html_ok",
         )
-        return (
-            repository.update_raw_item_enrichment(
-                raw_item.id,
-                title=normalized_title,
-                summary=normalized_summary,
-                full_text=enrichment.full_text,
-                lead=enrichment.lead,
+
+    ai_client = OpenAIEditorialClient()
+    ai_html_enrichment = (
+        ai_client.extract_article_enrichment(
+            url=raw_item.url,
+            source_title=raw_item.source_title,
+            raw_title=raw_item.title,
+            raw_summary=raw_item.summary,
+            html=html,
+            allow_web_search=False,
+        )
+        if ai_client.enabled and html
+        else None
+    )
+    if ai_html_enrichment is not None and _is_usable_full_text(ai_html_enrichment.full_text, raw_item.summary):
+        return _persist_raw_item_enrichment(
+            repository,
+            raw_item,
+            title=direct_enrichment.title if direct_enrichment is not None else None,
+            full_text=ai_html_enrichment.full_text,
+            lead=ai_html_enrichment.lead or (direct_enrichment.lead if direct_enrichment is not None else None),
+            tags=_merge_tags(
+                direct_enrichment.tags if direct_enrichment is not None else [],
+                ai_html_enrichment.tags,
+            ),
+            full_text_source_url=ai_html_enrichment.source_url or raw_item.url,
+            full_text_source_title=ai_html_enrichment.source_title or raw_item.source_title,
+            reference_urls=ai_html_enrichment.reference_urls,
+            extraction_mode=ai_html_enrichment.generation_mode,
+            enrichment_status="ai_html_ok",
+        )
+
+    local_partial = _choose_best_local_partial_enrichment(
+        direct_enrichment=direct_enrichment,
+        ai_html_enrichment=ai_html_enrichment,
+    )
+    if not ai_client.enabled:
+        if local_partial is None:
+            return raw_item
+        return _persist_raw_item_enrichment(
+            repository,
+            raw_item,
+            title=local_partial["title"],
+            full_text=local_partial["full_text"],
+            lead=local_partial["lead"],
+            tags=local_partial["tags"],
+            full_text_source_url=raw_item.url,
+            full_text_source_title=raw_item.source_title,
+            reference_urls=[],
+            extraction_mode=local_partial["extraction_mode"],
+            enrichment_status=local_partial["enrichment_status"],
+        )
+
+    if not allow_web_search_fallback:
+        if local_partial is not None:
+            return _persist_raw_item_enrichment(
+                repository,
+                raw_item,
+                title=local_partial["title"],
+                full_text=local_partial["full_text"],
+                lead=local_partial["lead"],
+                tags=local_partial["tags"],
                 full_text_source_url=raw_item.url,
                 full_text_source_title=raw_item.source_title,
                 reference_urls=[],
-                extraction_mode="direct_html",
-                enrichment_status="direct_html_ok",
-                tags=enrichment.tags,
+                extraction_mode=local_partial["extraction_mode"],
+                enrichment_status="search_skipped_run_cap",
+            )
+        return (
+            repository.update_raw_item_enrichment(
+                raw_item.id,
+                enrichment_status="search_skipped_run_cap",
+                enrichment_error=(
+                    "web_search fallback пропущен: в этом enrichment batch уже исчерпан лимит "
+                    "внешнего поиска."
+                ),
             )
             or raw_item
         )
 
-    ai_client = OpenAIEditorialClient()
-    if not ai_client.enabled:
-        return raw_item
+    if not _should_allow_web_search_fallback(raw_item):
+        if local_partial is not None:
+            return _persist_raw_item_enrichment(
+                repository,
+                raw_item,
+                title=local_partial["title"],
+                full_text=local_partial["full_text"],
+                lead=local_partial["lead"],
+                tags=local_partial["tags"],
+                full_text_source_url=raw_item.url,
+                full_text_source_title=raw_item.source_title,
+                reference_urls=[],
+                extraction_mode=local_partial["extraction_mode"],
+                enrichment_status="search_skipped_budget",
+            )
+        return (
+            repository.update_raw_item_enrichment(
+                raw_item.id,
+                enrichment_status="search_skipped_budget",
+                enrichment_error=(
+                    "web_search fallback пропущен по budget-правилу: для low-priority новости "
+                    "сначала используем только локальный extraction."
+                ),
+            )
+            or raw_item
+        )
 
     ai_search_enrichment = ai_client.extract_article_enrichment_via_search(
         url=raw_item.url,
@@ -381,20 +531,40 @@ def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> 
         raw_summary=raw_item.summary,
     )
     if ai_search_enrichment is None:
+        if local_partial is not None:
+            return _persist_raw_item_enrichment(
+                repository,
+                raw_item,
+                title=local_partial["title"],
+                full_text=local_partial["full_text"],
+                lead=local_partial["lead"],
+                tags=local_partial["tags"],
+                full_text_source_url=raw_item.url,
+                full_text_source_title=raw_item.source_title,
+                reference_urls=[],
+                extraction_mode=local_partial["extraction_mode"],
+                enrichment_status=local_partial["enrichment_status"],
+            )
         return (
             repository.update_raw_item_enrichment(
                 raw_item.id,
                 enrichment_status="search_no_match",
-                enrichment_error="Ни direct HTML extraction, ни web_search fallback не дали пригодный текст этой новости.",
+                enrichment_error="Ни direct parser, ни AI extraction по HTML, ни web_search fallback не дали пригодный текст этой новости.",
             )
             or raw_item
         )
 
     return (
-        repository.update_raw_item_enrichment(
-            raw_item.id,
+        _persist_raw_item_enrichment(
+            repository,
+            raw_item,
+            title=(direct_enrichment.title if direct_enrichment is not None else None),
             full_text=ai_search_enrichment.full_text,
-            lead=ai_search_enrichment.lead,
+            lead=ai_search_enrichment.lead or (local_partial["lead"] if local_partial is not None else None),
+            tags=_merge_tags(
+                local_partial["tags"] if local_partial is not None else [],
+                ai_search_enrichment.tags,
+            ),
             full_text_source_url=ai_search_enrichment.source_url,
             full_text_source_title=ai_search_enrichment.source_title,
             reference_urls=ai_search_enrichment.reference_urls,
@@ -402,7 +572,6 @@ def enrich_raw_item_content(repository: "NewsRepository", raw_item: RawItem) -> 
             enrichment_status=(
                 "web_search_brief_ok" if ai_search_enrichment.full_text else "search_partial_only"
             ),
-            tags=ai_search_enrichment.tags,
         )
         or raw_item
     )
@@ -1102,6 +1271,13 @@ def extract_article_enrichment(url: str | None, timeout: int = 10) -> ArticleEnr
     except SourceFetchError:
         return None
 
+    return _extract_article_enrichment_from_html(url, payload)
+
+
+def _extract_article_enrichment_from_html(url: str, payload: str | None) -> ArticleEnrichmentResult | None:
+    if not payload:
+        return None
+
     parser = _ArticleDocumentParser(url)
     try:
         parser.feed(payload)
@@ -1141,6 +1317,98 @@ def extract_article_enrichment(url: str | None, timeout: int = 10) -> ArticleEnr
     )
 
 
+def _merge_tags(*tag_groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in tag_groups:
+        for tag in group:
+            normalized = _normalize_whitespace(tag)
+            lowered = normalized.lower()
+            if not normalized or lowered in seen:
+                continue
+            seen.add(lowered)
+            merged.append(normalized)
+    return merged
+
+
+def _choose_best_local_partial_enrichment(
+    *,
+    direct_enrichment: ArticleEnrichmentResult | None,
+    ai_html_enrichment,
+) -> dict[str, str | list[str] | None] | None:
+    ai_lead = ai_html_enrichment.lead if ai_html_enrichment is not None else None
+    ai_tags = ai_html_enrichment.tags if ai_html_enrichment is not None else []
+    direct_title = direct_enrichment.title if direct_enrichment is not None else None
+    direct_full_text = direct_enrichment.full_text if direct_enrichment is not None else None
+    direct_lead = direct_enrichment.lead if direct_enrichment is not None else None
+    direct_tags = direct_enrichment.tags if direct_enrichment is not None else []
+
+    if ai_html_enrichment is not None and (
+        (ai_html_enrichment.full_text or "").strip() or (ai_lead or "").strip() or ai_tags
+    ):
+        return {
+            "title": direct_title,
+            "full_text": ai_html_enrichment.full_text,
+            "lead": ai_lead or direct_lead,
+            "tags": _merge_tags(direct_tags, ai_tags),
+            "extraction_mode": ai_html_enrichment.generation_mode,
+            "enrichment_status": "ai_html_partial_only",
+        }
+
+    if direct_enrichment is not None and (
+        (direct_full_text or "").strip() or (direct_lead or "").strip() or direct_tags
+    ):
+        return {
+            "title": direct_title,
+            "full_text": direct_full_text,
+            "lead": direct_lead,
+            "tags": direct_tags,
+            "extraction_mode": "direct_html",
+            "enrichment_status": "direct_html_partial_only",
+        }
+
+    return None
+
+
+def _persist_raw_item_enrichment(
+    repository: "NewsRepository",
+    raw_item: RawItem,
+    *,
+    title: str | None,
+    full_text: str | None,
+    lead: str | None,
+    tags: list[str],
+    full_text_source_url: str | None,
+    full_text_source_title: str | None,
+    reference_urls: list[str],
+    extraction_mode: str,
+    enrichment_status: str,
+) -> RawItem:
+    normalized_title, normalized_summary = _resolve_enriched_raw_headline(
+        raw_item.title,
+        raw_item.summary,
+        title,
+        lead,
+        full_text,
+    )
+    return (
+        repository.update_raw_item_enrichment(
+            raw_item.id,
+            title=normalized_title,
+            summary=normalized_summary,
+            full_text=full_text,
+            lead=lead,
+            full_text_source_url=full_text_source_url,
+            full_text_source_title=full_text_source_title,
+            reference_urls=reference_urls,
+            extraction_mode=extraction_mode,
+            enrichment_status=enrichment_status,
+            tags=tags,
+        )
+        or raw_item
+    )
+
+
 def _is_usable_full_text(value: str | None, source_summary: str | None = None) -> bool:
     if not value:
         return False
@@ -1159,6 +1427,10 @@ def _is_usable_full_text(value: str | None, source_summary: str | None = None) -
 
 def _is_usable_lead(value: str | None) -> bool:
     return bool(value and len(value.strip()) >= 40)
+
+
+def _should_allow_web_search_fallback(raw_item: RawItem) -> bool:
+    return raw_item.triage_label in {"high", "medium"} and raw_item.importance_score >= 48
 
 
 def extract_article_full_text(url: str | None, timeout: int = 10) -> str | None:

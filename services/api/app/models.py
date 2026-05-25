@@ -358,6 +358,31 @@ class SourceProbeResponse(BaseModel):
     sample_url: Optional[str] = Field(default=None, serialization_alias="sampleUrl")
 
 
+class SourceCapability(BaseModel):
+    source_key: str = Field(serialization_alias="sourceKey")
+    source_title: str = Field(serialization_alias="sourceTitle")
+    configured_source_type: str = Field(serialization_alias="configuredSourceType")
+    configured_url: str = Field(serialization_alias="configuredUrl")
+    preferred_adapter: Optional[str] = Field(default=None, serialization_alias="preferredAdapter")
+    preferred_adapter_url: Optional[str] = Field(default=None, serialization_alias="preferredAdapterUrl")
+    effective_adapter: str = Field(serialization_alias="effectiveAdapter")
+    effective_url: str = Field(serialization_alias="effectiveUrl")
+    readiness: str
+    supports_rss: bool = Field(default=False, serialization_alias="supportsRss")
+    supports_news_sitemap: bool = Field(default=False, serialization_alias="supportsNewsSitemap")
+    supports_sitemap: bool = Field(default=False, serialization_alias="supportsSitemap")
+    supports_scraping: bool = Field(default=False, serialization_alias="supportsScraping")
+    full_text_ok: bool = Field(default=False, serialization_alias="fullTextOk")
+    lead_ok: bool = Field(default=False, serialization_alias="leadOk")
+    tags_count: int = Field(default=0, serialization_alias="tagsCount")
+    sample_title: Optional[str] = Field(default=None, serialization_alias="sampleTitle")
+    sample_url: Optional[str] = Field(default=None, serialization_alias="sampleUrl")
+
+
+class SourceCapabilityListResponse(BaseModel):
+    items: list[SourceCapability]
+
+
 class SourceSyncStateListResponse(BaseModel):
     items: list[SourceSyncState]
 
