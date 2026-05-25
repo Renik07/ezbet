@@ -13,9 +13,14 @@ def _load_dotenv() -> None:
     if _DOTENV_LOADED:
         return
 
-    root_dir = Path(__file__).resolve().parents[3]
-    env_path = root_dir / ".env"
-    if not env_path.exists():
+    candidate_paths: list[Path] = []
+    current_file = Path(__file__).resolve()
+    for parent in current_file.parents:
+        candidate_paths.append(parent / ".env")
+    candidate_paths.append(Path.cwd() / ".env")
+
+    env_path = next((path for path in candidate_paths if path.exists()), None)
+    if env_path is None:
         _DOTENV_LOADED = True
         return
 
