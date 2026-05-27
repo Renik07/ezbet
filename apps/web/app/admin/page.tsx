@@ -97,7 +97,7 @@ export default async function AdminPage({
     pipelineRuns,
     isLive,
     liveError
-  } = await getEditorialStudioData();
+  } = await getEditorialStudioData({ includePromptLab: false });
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
   const activeSources = sources.filter((source) => source.status === "active");

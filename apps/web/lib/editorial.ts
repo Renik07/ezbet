@@ -624,8 +624,9 @@ async function loadStudioResource<T>(
   }
 }
 
-export async function getEditorialStudioData(): Promise<EditorialStudioData> {
+export async function getEditorialStudioData(options?: { includePromptLab?: boolean }): Promise<EditorialStudioData> {
   const baseUrl = resolveApiBaseUrl();
+  const includePromptLab = options?.includePromptLab ?? true;
 
   if (!baseUrl) {
     return {
@@ -712,7 +713,14 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       (payload) => (payload as { items: PipelineRun[] }).items,
       fallbackPipelineRuns
     ),
-    loadStudioResource(baseUrl, "/api/v1/prompt-lab/latest", (payload) => (payload as { item: PromptLabRun }).item, fallbackPromptLab)
+    includePromptLab
+      ? loadStudioResource(
+          baseUrl,
+          "/api/v1/prompt-lab/latest",
+          (payload) => (payload as { item: PromptLabRun }).item,
+          fallbackPromptLab
+        )
+      : Promise.resolve({ data: fallbackPromptLab, error: undefined })
   ]);
 
   const partialErrors = [
@@ -729,10 +737,11 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialSchedulerResult.error,
     publishSchedulerResult.error,
     pipelineRunsResult.error,
-    promptLabResult.error
+    includePromptLab ? promptLabResult.error : undefined
   ].filter((value): value is string => Boolean(value));
 
-  const isLive = partialErrors.length < 14;
+  const expectedResourceCount = includePromptLab ? 14 : 13;
+  const isLive = partialErrors.length < expectedResourceCount;
 
   return {
     prompts: promptsResult.data,
