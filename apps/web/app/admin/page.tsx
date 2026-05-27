@@ -4,9 +4,8 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { getEditorialStudioData, type DraftArticle, type RawItem } from "@/lib/editorial";
 
 import {
-  activatePromptVersion,
-  archivePromptVersion,
   createSourceNow,
+  cleanupPromptVersionsNow,
   deleteSourceNow,
   ingestRssTestBatchNow,
   probeNewSourceNow,
@@ -14,6 +13,7 @@ import {
   runEditorialSchedulerNow,
   runEnrichmentNow,
   runEnrichmentSchedulerNow,
+  runPromptLabNow,
   runPublishNow,
   runPublishSchedulerNow,
   runSchedulerNow,
@@ -153,6 +153,14 @@ export default async function AdminPage({
               className="button-primary"
               idleLabel="Запустить editorial run"
               pendingLabel="AI-редакция работает..."
+              disabled={!isLive}
+            />
+          </form>
+          <form action={runPromptLabNow}>
+            <PendingSubmitButton
+              className="button-primary"
+              idleLabel="TEMP prompt lab (3 новости)"
+              pendingLabel="Готовим prompt lab..."
               disabled={!isLive}
             />
           </form>
@@ -863,6 +871,14 @@ export default async function AdminPage({
             <h2>Prompt editors</h2>
             <p>Каждое сохранение создаёт новую версию prompt’а. При активации она сразу становится рабочей.</p>
           </div>
+          <form action={cleanupPromptVersionsNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Удалить старые версии"
+              pendingLabel="Чистим старые версии..."
+              disabled={!isLive}
+            />
+          </form>
         </div>
         <div className="admin-grid">
           {promptGroups.map((group) => (
@@ -918,51 +934,6 @@ export default async function AdminPage({
                   pendingLabel="Сохраняем prompt..."
                 />
               </form>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>Prompt history</h2>
-            <p>Здесь можно откатиться на прошлую версию или архивировать неактуальную.</p>
-          </div>
-        </div>
-        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {prompts.map((prompt) => (
-            <article key={prompt.id} className="news-card">
-              <span>
-                {prompt.agentKey} · v{prompt.version} · {prompt.status}
-              </span>
-              <h3>{prompt.name}</h3>
-              <p>{prompt.notes || prompt.systemPrompt}</p>
-              <p>
-                <strong>Model:</strong> {prompt.model}
-              </p>
-              <div className="button-row">
-                {prompt.status !== "active" ? (
-                  <form action={activatePromptVersion}>
-                    <input type="hidden" name="promptId" value={prompt.id} />
-                    <PendingSubmitButton
-                      className="button-secondary"
-                      idleLabel="Activate"
-                      pendingLabel="Activating..."
-                    />
-                  </form>
-                ) : null}
-                {prompt.status !== "active" && prompt.status !== "archived" ? (
-                  <form action={archivePromptVersion}>
-                    <input type="hidden" name="promptId" value={prompt.id} />
-                    <PendingSubmitButton
-                      className="button-secondary"
-                      idleLabel="Archive"
-                      pendingLabel="Archiving..."
-                    />
-                  </form>
-                ) : null}
-              </div>
             </article>
           ))}
         </div>
@@ -1107,6 +1078,12 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return detail ? `Editorial scheduler выполнен: ${detail}` : "Editorial scheduler выполнен.";
     case "editorial-scheduler-run-error":
       return detail ? `Editorial scheduler не выполнен: ${detail}` : "Editorial scheduler не выполнен.";
+    case "prompt-lab-run":
+      return detail
+        ? `TEMP prompt lab выполнен: ${detail} После стабилизации prompt-редактора этот флоу нужно удалить или заменить.`
+        : "TEMP prompt lab выполнен. После стабилизации prompt-редактора этот флоу нужно удалить или заменить.";
+    case "prompt-lab-run-error":
+      return detail ? `TEMP prompt lab не выполнен: ${detail}` : "TEMP prompt lab не выполнен.";
     case "publish-scheduler-saved":
       return "Настройки publish scheduler сохранены.";
     case "publish-scheduler-save-error":
@@ -1135,6 +1112,10 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return "Версия prompt’а отправлена в архив.";
     case "prompt-archive-error":
       return detail ? `Версия prompt’а не архивирована: ${detail}` : "Версия prompt’а не архивирована.";
+    case "prompt-cleanup":
+      return detail ? `Старые версии prompt’ов удалены: ${detail}` : "Старые версии prompt’ов удалены.";
+    case "prompt-cleanup-error":
+      return detail ? `Старые версии prompt’ов не удалены: ${detail}` : "Старые версии prompt’ов не удалены.";
     default:
       return null;
   }

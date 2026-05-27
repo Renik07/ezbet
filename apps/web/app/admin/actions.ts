@@ -99,6 +99,21 @@ export async function archivePromptVersion(formData: FormData) {
   redirect("/admin?notice=prompt-archived");
 }
 
+export async function cleanupPromptVersionsNow() {
+  let detail = "Удалено 0 старых версий.";
+  try {
+    const response = await apiPost("/api/v1/prompts/cleanup", {});
+    const payload = (await response.json()) as { deletedCount?: number };
+    detail = `Удалено ${payload.deletedCount ?? 0} старых версий.`;
+  } catch (error) {
+    redirectWithError("prompt-cleanup-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  redirect(`/admin?notice=prompt-cleanup&detail=${encodeURIComponent(detail)}`);
+}
+
 export async function runEditorialNow() {
   try {
     await apiPost("/api/v1/editorial/run?limit=10", {});
@@ -111,6 +126,26 @@ export async function runEditorialNow() {
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/admin?notice=editorial-run");
+}
+
+export async function runPromptLabNow() {
+  let detail = "Выбрано 0 новостей.";
+  try {
+    const response = await apiPost("/api/v1/prompt-lab/run?limit=3", {});
+    const payload = (await response.json()) as {
+      item?: { selectedCount?: number; freshCount?: number; reusedCount?: number };
+    };
+    const selected = payload.item?.selectedCount ?? 0;
+    const fresh = payload.item?.freshCount ?? 0;
+    const reused = payload.item?.reusedCount ?? 0;
+    detail = `Выбрано ${selected}, свежих ${fresh}, из пула ${reused}.`;
+  } catch (error) {
+    redirectWithError("prompt-lab-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  redirect(`/admin?notice=prompt-lab-run&detail=${encodeURIComponent(detail)}`);
 }
 
 export async function runContentPlannerNow() {

@@ -12,7 +12,13 @@ import psycopg
 
 from .ai_client import OpenAIEditorialClient
 from .config import get_openai_settings
-from .editorial import default_prompt_configs, run_editorial_cycle
+from .editorial import (
+    default_prompt_configs,
+    evaluate_quality_gate,
+    generate_draft,
+    review_draft,
+    run_editorial_cycle,
+)
 from .ingestion import (
     _capability_supports_adapter,
     enrich_raw_item_content,
@@ -49,8 +55,12 @@ from .models import (
     PublishSchedulerRunResponse,
     PublishSchedulerSettings,
     PublishSchedulerSettingsUpdateRequest,
+    PromptLabItem,
     PromptConfigCreateRequest,
+    PromptCleanupResponse,
     PromptConfigListResponse,
+    PromptLabRun,
+    PromptLabRunResponse,
     PromptStatusUpdateRequest,
     RecoveryAction,
     RecoveryStatusResponse,
@@ -916,6 +926,12 @@ def update_prompt_status(prompt_id: str, payload: PromptStatusUpdateRequest) -> 
     return PromptConfigListResponse(items=[prompt])
 
 
+@app.post("/api/v1/prompts/cleanup", response_model=PromptCleanupResponse)
+def cleanup_prompt_versions() -> PromptCleanupResponse:
+    deleted_count = repository.delete_archived_prompt_versions()
+    return PromptCleanupResponse(deleted_count=deleted_count)
+
+
 @app.get("/api/v1/drafts", response_model=DraftArticleListResponse)
 def list_drafts(
     limit: int = Query(default=20, ge=1, le=100),
@@ -930,6 +946,154 @@ def list_drafts(
 @app.get("/api/v1/reviews", response_model=EditorReviewListResponse)
 def list_reviews(limit: int = Query(default=20, ge=1, le=100)) -> EditorReviewListResponse:
     return EditorReviewListResponse(items=repository.list_reviews(limit))
+
+
+def _build_prompt_lab_candidates(limit: int) -> tuple[list[RawItem], int]:
+    sources = repository.list_active_sources()
+    selected: list[RawItem] = []
+    selected_ids: set[str] = set()
+    fresh_ids: set[str] = set()
+
+    if sources:
+        ai_search_prompt = repository.get_active_prompt("ai_search")
+        per_source_limit = max(1, (limit + len(sources) - 1) // len(sources))
+        fetched_items, _ = ingest_sources_with_results(
+            sources,
+            timeout=10,
+            limit=per_source_limit,
+            limit_per_source=True,
+            ai_search_prompt=ai_search_prompt,
+        )
+        fresh_candidates = [item for item in fetched_items if not item.is_duplicate]
+        if fresh_candidates:
+            repository.insert_raw_items(fresh_candidates)
+        for item in fresh_candidates:
+            stored = repository.get_raw_item(item.id) or item
+            if stored.is_duplicate or stored.id in selected_ids:
+                continue
+            selected.append(stored)
+            selected_ids.add(stored.id)
+            fresh_ids.add(stored.id)
+            if len(selected) >= limit:
+                return selected[:limit], len(fresh_ids)
+
+    recent_candidates = repository.list_recent_prompt_lab_raw_items(limit=max(limit * 4, 24))
+    for item in recent_candidates:
+        if item.is_duplicate or item.id in selected_ids:
+            continue
+        selected.append(item)
+        selected_ids.add(item.id)
+        if len(selected) >= limit:
+            break
+
+    return selected[:limit], len(fresh_ids & selected_ids)
+
+
+def _run_prompt_lab(limit: int) -> PromptLabRun:
+    writer_prompt = repository.get_active_prompt("writer")
+    editor_prompt = repository.get_active_prompt("editor")
+    ai_client = OpenAIEditorialClient()
+    selected_items, fresh_count = _build_prompt_lab_candidates(limit)
+    created_at = datetime.now(timezone.utc)
+    run_id = _run_id("prompt_lab")
+    lab_items: list[PromptLabItem] = []
+
+    for index, raw_item in enumerate(selected_items, start=1):
+        enriched_item = enrich_raw_item_content(repository, raw_item, allow_web_search_fallback=True)
+        stored_item = repository.get_raw_item(enriched_item.id) or enriched_item
+        draft = generate_draft(stored_item, writer_prompt, ai_client)
+        similarity_candidates = repository.list_article_similarity_candidates(
+            category=stored_item.normalized_category,
+            published_at=stored_item.published_at,
+            exclude_news_item_id=stored_item.external_id,
+            window_hours=24,
+            limit=20,
+        )
+        review = review_draft(draft, stored_item, editor_prompt, ai_client, similarity_candidates)
+        gate = evaluate_quality_gate(draft, stored_item, review, similarity_candidates)
+        lab_items.append(
+            PromptLabItem(
+                id=f"{run_id}:item:{index}",
+                run_id=run_id,
+                raw_item_id=stored_item.id,
+                source_title=stored_item.source_title,
+                source_url=stored_item.source_url,
+                raw_title=stored_item.title,
+                raw_summary=stored_item.summary,
+                raw_full_text=stored_item.full_text,
+                raw_lead=stored_item.lead,
+                raw_url=stored_item.url,
+                raw_published_at=stored_item.published_at,
+                importance_score=stored_item.importance_score,
+                triage_label=stored_item.triage_label,
+                writer_title=draft.title,
+                writer_dek=draft.dek,
+                writer_body=draft.body,
+                writer_model=draft.model,
+                writer_generation_mode=draft.generation_mode,
+                writer_prompt_id=writer_prompt.id,
+                writer_prompt_name=writer_prompt.name,
+                editor_summary=review.summary,
+                editor_notes=review.notes,
+                editor_model=review.model,
+                editor_prompt_id=editor_prompt.id,
+                editor_prompt_name=editor_prompt.name,
+                quality_gate_decision=gate.decision,
+                quality_gate_reason=gate.reason,
+                created_at=created_at,
+            )
+        )
+
+    return repository.replace_prompt_lab_run(
+        PromptLabRun(
+            id=run_id,
+            status="completed",
+            requested_limit=limit,
+            selected_count=len(lab_items),
+            fresh_count=fresh_count,
+            reused_count=max(0, len(lab_items) - fresh_count),
+            writer_prompt_id=writer_prompt.id,
+            writer_prompt_name=writer_prompt.name,
+            editor_prompt_id=editor_prompt.id,
+            editor_prompt_name=editor_prompt.name,
+            notes=(
+                "TEMP prompt lab flow for rapid prompt testing. "
+                "Remove or replace this path after prompt tuning is complete."
+            ),
+            created_at=created_at,
+            items=lab_items,
+        )
+    )
+
+
+@app.get("/api/v1/prompt-lab/latest", response_model=PromptLabRunResponse)
+def get_latest_prompt_lab_run() -> PromptLabRunResponse:
+    run = repository.get_latest_prompt_lab_run()
+    if run is None:
+        empty_run = PromptLabRun(
+            id="prompt-lab:empty",
+            status="idle",
+            requested_limit=3,
+            selected_count=0,
+            fresh_count=0,
+            reused_count=0,
+            writer_prompt_id="",
+            writer_prompt_name="",
+            editor_prompt_id="",
+            editor_prompt_name="",
+            notes=(
+                "TEMP prompt lab flow for rapid prompt testing. "
+                "Remove or replace this path after prompt tuning is complete."
+            ),
+            items=[],
+        )
+        return PromptLabRunResponse(item=empty_run)
+    return PromptLabRunResponse(item=run)
+
+
+@app.post("/api/v1/prompt-lab/run", response_model=PromptLabRunResponse)
+def run_prompt_lab(limit: int = Query(default=3, ge=1, le=12)) -> PromptLabRunResponse:
+    return PromptLabRunResponse(item=_run_prompt_lab(limit))
 
 
 @app.post("/api/v1/editorial/run", response_model=EditorialRunResponse)

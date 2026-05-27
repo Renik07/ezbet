@@ -23,6 +23,8 @@ from .models import (
     PipelineRun,
     PipelineSkippedItem,
     PipelineSourceBreakdownItem,
+    PromptLabItem,
+    PromptLabRun,
     PublishSchedulerSettings,
     PromptConfig,
     RawItem,
@@ -236,6 +238,58 @@ class NewsRepository:
                         reason TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompt_lab_runs (
+                        id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL DEFAULT 'completed',
+                        requested_limit INTEGER NOT NULL,
+                        selected_count INTEGER NOT NULL DEFAULT 0,
+                        fresh_count INTEGER NOT NULL DEFAULT 0,
+                        reused_count INTEGER NOT NULL DEFAULT 0,
+                        writer_prompt_id TEXT NOT NULL,
+                        writer_prompt_name TEXT NOT NULL,
+                        editor_prompt_id TEXT NOT NULL,
+                        editor_prompt_name TEXT NOT NULL,
+                        notes TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompt_lab_items (
+                        id TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL REFERENCES prompt_lab_runs(id) ON DELETE CASCADE,
+                        raw_item_id TEXT NOT NULL,
+                        source_title TEXT NOT NULL,
+                        source_url TEXT,
+                        raw_title TEXT NOT NULL,
+                        raw_summary TEXT NOT NULL,
+                        raw_full_text TEXT,
+                        raw_lead TEXT,
+                        raw_url TEXT,
+                        raw_published_at TIMESTAMPTZ NOT NULL,
+                        importance_score INTEGER NOT NULL DEFAULT 0,
+                        triage_label TEXT NOT NULL DEFAULT 'low',
+                        writer_title TEXT NOT NULL,
+                        writer_dek TEXT NOT NULL,
+                        writer_body TEXT NOT NULL,
+                        writer_model TEXT NOT NULL,
+                        writer_generation_mode TEXT NOT NULL,
+                        writer_prompt_id TEXT NOT NULL,
+                        writer_prompt_name TEXT NOT NULL,
+                        editor_summary TEXT NOT NULL,
+                        editor_notes TEXT NOT NULL DEFAULT '',
+                        editor_model TEXT NOT NULL,
+                        editor_prompt_id TEXT NOT NULL,
+                        editor_prompt_name TEXT NOT NULL,
+                        quality_gate_decision TEXT NOT NULL,
+                        quality_gate_reason TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
                 )
@@ -856,6 +910,8 @@ class NewsRepository:
     def reset_runtime_data(self) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("TRUNCATE TABLE prompt_lab_items")
+                cursor.execute("TRUNCATE TABLE prompt_lab_runs")
                 cursor.execute("TRUNCATE TABLE editor_reviews")
                 cursor.execute("TRUNCATE TABLE draft_articles")
                 cursor.execute("TRUNCATE TABLE content_plan_items")
@@ -2358,6 +2414,15 @@ class NewsRepository:
 
         return self.get_prompt(prompt_id)
 
+    def delete_archived_prompt_versions(self) -> int:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM prompt_configs WHERE status <> 'active'")
+                deleted_count = cursor.rowcount or 0
+            connection.commit()
+
+        return int(deleted_count)
+
     def maybe_activate_recommended_prompt(self, agent_key: str, recommended_prompt_id: str) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -2840,6 +2905,233 @@ class NewsRepository:
             return None
 
         return self._map_raw_row(row)
+
+    def list_recent_prompt_lab_raw_items(self, limit: int = 18) -> list[RawItem]:
+        statement = """
+            SELECT
+                id,
+                source_key,
+                source_title,
+                source_url,
+                category,
+                normalized_category,
+                external_id,
+                dedupe_key,
+                title,
+                summary,
+                lead,
+                url,
+                published_at,
+                fetched_at,
+                importance_score,
+                triage_label,
+                is_duplicate,
+                duplicate_of,
+                duplicate_stage,
+                duplicate_reason,
+                full_text,
+                full_text_source_url,
+                full_text_source_title,
+                reference_urls,
+                extraction_mode,
+                enrichment_status,
+                enrichment_error,
+                tags,
+                payload
+            FROM raw_items
+            WHERE is_duplicate = FALSE
+            ORDER BY fetched_at DESC, published_at DESC
+            LIMIT %s
+        """
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+        return [self._map_raw_row(row) for row in rows]
+
+    def replace_prompt_lab_run(self, run: PromptLabRun) -> PromptLabRun:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM prompt_lab_items")
+                cursor.execute("DELETE FROM prompt_lab_runs")
+                cursor.execute(
+                    """
+                    INSERT INTO prompt_lab_runs (
+                        id,
+                        status,
+                        requested_limit,
+                        selected_count,
+                        fresh_count,
+                        reused_count,
+                        writer_prompt_id,
+                        writer_prompt_name,
+                        editor_prompt_id,
+                        editor_prompt_name,
+                        notes,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run.id,
+                        run.status,
+                        run.requested_limit,
+                        run.selected_count,
+                        run.fresh_count,
+                        run.reused_count,
+                        run.writer_prompt_id,
+                        run.writer_prompt_name,
+                        run.editor_prompt_id,
+                        run.editor_prompt_name,
+                        run.notes,
+                        run.created_at,
+                    ),
+                )
+                for item in run.items:
+                    cursor.execute(
+                        """
+                        INSERT INTO prompt_lab_items (
+                            id,
+                            run_id,
+                            raw_item_id,
+                            source_title,
+                            source_url,
+                            raw_title,
+                            raw_summary,
+                            raw_full_text,
+                            raw_lead,
+                            raw_url,
+                            raw_published_at,
+                            importance_score,
+                            triage_label,
+                            writer_title,
+                            writer_dek,
+                            writer_body,
+                            writer_model,
+                            writer_generation_mode,
+                            writer_prompt_id,
+                            writer_prompt_name,
+                            editor_summary,
+                            editor_notes,
+                            editor_model,
+                            editor_prompt_id,
+                            editor_prompt_name,
+                            quality_gate_decision,
+                            quality_gate_reason,
+                            created_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        """,
+                        (
+                            item.id,
+                            item.run_id,
+                            item.raw_item_id,
+                            item.source_title,
+                            item.source_url,
+                            item.raw_title,
+                            item.raw_summary,
+                            item.raw_full_text,
+                            item.raw_lead,
+                            item.raw_url,
+                            item.raw_published_at,
+                            item.importance_score,
+                            item.triage_label,
+                            item.writer_title,
+                            item.writer_dek,
+                            item.writer_body,
+                            item.writer_model,
+                            item.writer_generation_mode,
+                            item.writer_prompt_id,
+                            item.writer_prompt_name,
+                            item.editor_summary,
+                            item.editor_notes,
+                            item.editor_model,
+                            item.editor_prompt_id,
+                            item.editor_prompt_name,
+                            item.quality_gate_decision,
+                            item.quality_gate_reason,
+                            item.created_at,
+                        ),
+                    )
+            connection.commit()
+
+        stored = self.get_latest_prompt_lab_run()
+        if stored is None:
+            raise LookupError(f"Prompt lab run {run.id} was not stored.")
+        return stored
+
+    def get_latest_prompt_lab_run(self) -> PromptLabRun | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        status,
+                        requested_limit,
+                        selected_count,
+                        fresh_count,
+                        reused_count,
+                        writer_prompt_id,
+                        writer_prompt_name,
+                        editor_prompt_id,
+                        editor_prompt_name,
+                        notes,
+                        created_at
+                    FROM prompt_lab_runs
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                )
+                run_row = cursor.fetchone()
+                if run_row is None:
+                    return None
+
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        run_id,
+                        raw_item_id,
+                        source_title,
+                        source_url,
+                        raw_title,
+                        raw_summary,
+                        raw_full_text,
+                        raw_lead,
+                        raw_url,
+                        raw_published_at,
+                        importance_score,
+                        triage_label,
+                        writer_title,
+                        writer_dek,
+                        writer_body,
+                        writer_model,
+                        writer_generation_mode,
+                        writer_prompt_id,
+                        writer_prompt_name,
+                        editor_summary,
+                        editor_notes,
+                        editor_model,
+                        editor_prompt_id,
+                        editor_prompt_name,
+                        quality_gate_decision,
+                        quality_gate_reason,
+                        created_at
+                    FROM prompt_lab_items
+                    WHERE run_id = %s
+                    ORDER BY created_at ASC, raw_published_at DESC
+                    """,
+                    (str(run_row[0]),),
+                )
+                item_rows = cursor.fetchall()
+
+        return self._map_prompt_lab_run_row(run_row, item_rows)
 
     def get_draft(self, draft_id: str) -> DraftArticle | None:
         statement = """
@@ -3953,6 +4245,61 @@ class NewsRepository:
             content_plan_reason=row[25],
             content_plan_priority_label=row[26],
             tags=list(row[27] or []),
+        )
+
+    @staticmethod
+    def _map_prompt_lab_item_row(row: tuple[object, ...]) -> PromptLabItem:
+        return PromptLabItem(
+            id=str(row[0]),
+            run_id=str(row[1]),
+            raw_item_id=str(row[2]),
+            source_title=str(row[3]),
+            source_url=row[4],
+            raw_title=str(row[5]),
+            raw_summary=str(row[6]),
+            raw_full_text=row[7],
+            raw_lead=row[8],
+            raw_url=row[9],
+            raw_published_at=row[10],
+            importance_score=int(row[11]),
+            triage_label=str(row[12]),
+            writer_title=str(row[13]),
+            writer_dek=str(row[14]),
+            writer_body=str(row[15]),
+            writer_model=str(row[16]),
+            writer_generation_mode=str(row[17]),
+            writer_prompt_id=str(row[18]),
+            writer_prompt_name=str(row[19]),
+            editor_summary=str(row[20]),
+            editor_notes=str(row[21]),
+            editor_model=str(row[22]),
+            editor_prompt_id=str(row[23]),
+            editor_prompt_name=str(row[24]),
+            quality_gate_decision=str(row[25]),
+            quality_gate_reason=str(row[26]),
+            created_at=row[27],
+        )
+
+    @classmethod
+    def _map_prompt_lab_run_row(
+        cls,
+        run_row: tuple[object, ...],
+        item_rows: list[tuple[object, ...]],
+    ) -> PromptLabRun:
+        return PromptLabRun(
+            id=str(run_row[0]),
+            status=str(run_row[1]),
+            requested_limit=int(run_row[2]),
+            selected_count=int(run_row[3]),
+            fresh_count=int(run_row[4]),
+            reused_count=int(run_row[5]),
+            writer_prompt_id=str(run_row[6]),
+            writer_prompt_name=str(run_row[7]),
+            editor_prompt_id=str(run_row[8]),
+            editor_prompt_name=str(run_row[9]),
+            notes=str(run_row[10]),
+            created_at=run_row[11],
+            items=[cls._map_prompt_lab_item_row(row) for row in item_rows],
         )
 
     @staticmethod
