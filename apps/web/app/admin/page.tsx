@@ -13,7 +13,6 @@ import {
   runEditorialSchedulerNow,
   runEnrichmentNow,
   runEnrichmentSchedulerNow,
-  runPromptLabNow,
   runPublishNow,
   runPublishSchedulerNow,
   runSchedulerNow,
@@ -156,7 +155,7 @@ export default async function AdminPage({
               disabled={!isLive}
             />
           </form>
-          <form action={runPromptLabNow}>
+          <form action="/admin/prompt-lab" method="post">
             <PendingSubmitButton
               className="button-primary"
               idleLabel="TEMP prompt lab (3 новости)"
