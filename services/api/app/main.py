@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import threading
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -113,6 +114,8 @@ PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
+PROMPT_LAB_LOCK = threading.Lock()
+PROMPT_LAB_RUNNING = False
 
 
 def _run_id(phase: str) -> str:
@@ -1066,6 +1069,77 @@ def _run_prompt_lab(limit: int) -> PromptLabRun:
     )
 
 
+def _start_prompt_lab_run(limit: int) -> PromptLabRun:
+    global PROMPT_LAB_RUNNING
+
+    with PROMPT_LAB_LOCK:
+        existing_run = repository.get_latest_prompt_lab_run()
+        if PROMPT_LAB_RUNNING and existing_run is not None and existing_run.status == "running":
+            return existing_run
+
+        writer_prompt = repository.get_active_prompt("writer")
+        editor_prompt = repository.get_active_prompt("editor")
+        created_at = datetime.now(timezone.utc)
+        run_id = _run_id("prompt_lab")
+        running_run = repository.replace_prompt_lab_run(
+            PromptLabRun(
+                id=run_id,
+                status="running",
+                requested_limit=limit,
+                selected_count=0,
+                fresh_count=0,
+                reused_count=0,
+                writer_prompt_id=writer_prompt.id,
+                writer_prompt_name=writer_prompt.name,
+                editor_prompt_id=editor_prompt.id,
+                editor_prompt_name=editor_prompt.name,
+                notes=(
+                    "TEMP prompt lab flow for rapid prompt testing is running in background. "
+                    "Refresh Studio in a few moments to see completed results. "
+                    "Remove or replace this path after prompt tuning is complete."
+                ),
+                created_at=created_at,
+                items=[],
+            )
+        )
+        PROMPT_LAB_RUNNING = True
+
+    def _worker() -> None:
+        global PROMPT_LAB_RUNNING
+        try:
+            _run_prompt_lab(limit)
+        except Exception:
+            logger.exception("Prompt lab run failed")
+            failed_run = repository.get_latest_prompt_lab_run()
+            if failed_run is not None and failed_run.id == run_id:
+                repository.replace_prompt_lab_run(
+                    PromptLabRun(
+                        id=run_id,
+                        status="error",
+                        requested_limit=limit,
+                        selected_count=failed_run.selected_count,
+                        fresh_count=failed_run.fresh_count,
+                        reused_count=failed_run.reused_count,
+                        writer_prompt_id=failed_run.writer_prompt_id,
+                        writer_prompt_name=failed_run.writer_prompt_name,
+                        editor_prompt_id=failed_run.editor_prompt_id,
+                        editor_prompt_name=failed_run.editor_prompt_name,
+                        notes=(
+                            "TEMP prompt lab failed in background. "
+                            "Check API logs and then rerun after fixing the cause."
+                        ),
+                        created_at=failed_run.created_at,
+                        items=[],
+                    )
+                )
+        finally:
+            with PROMPT_LAB_LOCK:
+                PROMPT_LAB_RUNNING = False
+
+    threading.Thread(target=_worker, daemon=True, name=f"prompt-lab-{run_id}").start()
+    return running_run
+
+
 @app.get("/api/v1/prompt-lab/latest", response_model=PromptLabRunResponse)
 def get_latest_prompt_lab_run() -> PromptLabRunResponse:
     run = repository.get_latest_prompt_lab_run()
@@ -1094,6 +1168,11 @@ def get_latest_prompt_lab_run() -> PromptLabRunResponse:
 @app.post("/api/v1/prompt-lab/run", response_model=PromptLabRunResponse)
 def run_prompt_lab(limit: int = Query(default=3, ge=1, le=12)) -> PromptLabRunResponse:
     return PromptLabRunResponse(item=_run_prompt_lab(limit))
+
+
+@app.post("/api/v1/prompt-lab/start", response_model=PromptLabRunResponse)
+def start_prompt_lab(limit: int = Query(default=3, ge=1, le=12)) -> PromptLabRunResponse:
+    return PromptLabRunResponse(item=_start_prompt_lab_run(limit))
 
 
 @app.post("/api/v1/editorial/run", response_model=EditorialRunResponse)

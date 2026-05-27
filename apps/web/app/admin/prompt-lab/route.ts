@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const response = await fetch(new URL("/api/v1/prompt-lab/run?limit=3", baseUrl).toString(), {
+    const response = await fetch(new URL("/api/v1/prompt-lab/start?limit=3", baseUrl).toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -44,13 +44,14 @@ export async function POST(request: Request) {
     }
 
     const payload = (await response.json()) as {
-      item?: { selectedCount?: number; freshCount?: number; reusedCount?: number };
+      item?: { status?: string; requestedLimit?: number };
     };
-
-    const selected = payload.item?.selectedCount ?? 0;
-    const fresh = payload.item?.freshCount ?? 0;
-    const reused = payload.item?.reusedCount ?? 0;
-    const detail = `Выбрано ${selected}, свежих ${fresh}, из пула ${reused}.`;
+    const status = payload.item?.status ?? "running";
+    const requested = payload.item?.requestedLimit ?? 3;
+    const detail =
+      status === "running"
+        ? `Фоновый запуск начат для ${requested} новостей. Откройте Studio через несколько секунд.`
+        : `Запуск принят со статусом ${status}.`;
 
     revalidatePath("/admin");
     revalidatePath("/studio");
