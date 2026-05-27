@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.client import IncompleteRead
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -279,20 +281,31 @@ def ingest_sources_with_results(
     for source in sources:
         source_state = states.get(source.key)
         runtime_source = _resolve_source_runtime(source, source_state)
-        source_result = _collect_source_items_with_retry(
-            runtime_source,
-            timeout=timeout,
-            max_retries=max_retries,
-            ai_search_prompt=ai_search_prompt,
-        )
-        collected_items = source_result.items
-        filtered_items = _filter_new_items(
-            collected_items,
-            source_state,
-            runtime_source.source_type,
-            known_external_ids=known_external_ids_map.get(source.key, set()),
-            known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
-        )
+        try:
+            source_result = _collect_source_items_with_retry(
+                runtime_source,
+                timeout=timeout,
+                max_retries=max_retries,
+                ai_search_prompt=ai_search_prompt,
+            )
+            collected_items = source_result.items
+            filtered_items = _filter_new_items(
+                collected_items,
+                source_state,
+                runtime_source.source_type,
+                known_external_ids=known_external_ids_map.get(source.key, set()),
+                known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
+            )
+        except Exception as exc:
+            source_result = SourceIngestionResult(
+                source=runtime_source,
+                items=[],
+                fetch_status="error",
+                parse_status="idle",
+                error=f"Unhandled source ingestion error: {exc}",
+                retry_count=max_retries,
+            )
+            filtered_items = []
         if limit is not None and limit_per_source:
             filtered_items = filtered_items[:limit]
         for item in filtered_items:
@@ -2661,17 +2674,42 @@ def _serialize_sitemap_payload(source: SourceItem, source_type: str, item_count:
 
 
 def _fetch_remote_document(url: str, timeout: int) -> str:
-    try:
-        with urlopen(url, timeout=timeout) as response:
-            if getattr(response, "status", 200) >= 400:
-                raise SourceFetchError(f"Fetch failed for {url}: HTTP {response.status}")
-            payload = response.read()
-    except HTTPError as exc:
-        raise SourceFetchError(f"Fetch failed for {url}: HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise SourceFetchError(f"Fetch failed for {url}: {exc.reason if hasattr(exc, 'reason') else exc}") from exc
+    last_error: Exception | None = None
 
-    return payload.decode("utf-8", errors="ignore")
+    for attempt in range(1, 4):
+        try:
+            with urlopen(url, timeout=timeout) as response:
+                if getattr(response, "status", 200) >= 400:
+                    raise SourceFetchError(f"Fetch failed for {url}: HTTP {response.status}")
+                payload = response.read()
+            return payload.decode("utf-8", errors="ignore")
+        except HTTPError as exc:
+            raise SourceFetchError(f"Fetch failed for {url}: HTTP {exc.code}") from exc
+        except IncompleteRead as exc:
+            last_error = exc
+            if attempt >= 3:
+                break
+            time.sleep(0.2 * attempt)
+        except URLError as exc:
+            last_error = exc
+            if attempt >= 3:
+                break
+            time.sleep(0.2 * attempt)
+        except OSError as exc:
+            last_error = exc
+            if attempt >= 3:
+                break
+            time.sleep(0.2 * attempt)
+
+    if isinstance(last_error, URLError):
+        raise SourceFetchError(
+            f"Fetch failed for {url}: {last_error.reason if hasattr(last_error, 'reason') else last_error}"
+        ) from last_error
+    if isinstance(last_error, IncompleteRead):
+        raise SourceFetchError(f"Fetch failed for {url}: incomplete response body after retries") from last_error
+    if isinstance(last_error, OSError):
+        raise SourceFetchError(f"Fetch failed for {url}: {last_error}") from last_error
+    raise SourceFetchError(f"Fetch failed for {url}: unknown network error")
 
 
 def _xml_local_name(tag: str) -> str:

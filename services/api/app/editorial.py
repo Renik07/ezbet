@@ -398,6 +398,16 @@ def evaluate_quality_gate(
     if any(marker in body for marker in blocked_markers):
         return QualityGateResult("hold", "Quality gate: обнаружен служебный или шаблонный текст MVP.")
 
+    verification_marker = detect_verification_style_marker(title=title, dek=dek, body=body)
+    if verification_marker is not None:
+        return QualityGateResult(
+            "hold",
+            (
+                "Quality gate: материал выглядит как служебный verification-ответ, "
+                f"а не как подтвержденная новость ({verification_marker})."
+            ),
+        )
+
     paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
 
     if title == raw_item.title and dek == raw_item.summary and draft.generation_mode == "template":
@@ -458,6 +468,28 @@ def evaluate_published_duplicate_guard(
 
 def normalize_gate_text(value: str) -> str:
     return " ".join(tokenize_text(value))
+
+
+def detect_verification_style_marker(*, title: str, dek: str, body: str) -> str | None:
+    haystack = f"{title}\n{dek}\n{body}".lower()
+    markers = (
+        "не найдено подтверждений",
+        "не нашли подтверждений",
+        "не выявила публикации",
+        "не выявил публикации",
+        "проверка сайта",
+        "рекомендуется уточнить",
+        "расширить поиск",
+        "прислать ссылку на первоисточник",
+        "прислать ссылку на источник",
+        "для проверки",
+        "не найдено на",
+        "не найдено в архиве",
+    )
+    for marker in markers:
+        if marker in haystack:
+            return marker
+    return None
 
 
 def compute_similarity(left: str, right: str) -> float:

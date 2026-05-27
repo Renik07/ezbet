@@ -1143,3 +1143,17 @@ npm run dev:infra
 npm run dev:api
 npm run dev:web
 npm run scheduler:tick (npm run scheduler:loop)
+
+
+# PROD
+cd /opt/ezbet
+git pull
+
+# LOGS
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "SSL|IncompleteRead|run_failed|scheduler_run_failed"
+docker compose -f docker-compose.prod.yml logs --since=12h api | grep pipeline_event
+docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "source_result|Unhandled source ingestion error|scheduler_run_failed|run_failed"
+
+# Cron
+0 */3 * * * curl -s -X POST http://localhost:8000/api/v1/pipeline/run >> /var/log/ezbet/pipeline-cron.log 2>&1

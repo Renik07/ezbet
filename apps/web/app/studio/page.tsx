@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
+export const dynamic = "force-dynamic";
+
 function formatExtractionMode(mode?: string) {
   switch (mode) {
     case "direct_html":

@@ -1333,7 +1333,7 @@ def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
         )
         return SchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
-    with psycopg.connect(repository.database_url) as connection:
+    with repository.connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (SCHEDULER_LOCK_KEY,))
             row = cursor.fetchone()
@@ -1482,7 +1482,7 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
         )
         return EnrichmentSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
-    with psycopg.connect(repository.database_url) as connection:
+    with repository.connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (ENRICHMENT_SCHEDULER_LOCK_KEY,))
             row = cursor.fetchone()
@@ -1644,7 +1644,7 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
         )
         return EditorialSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
-    with psycopg.connect(repository.database_url) as connection:
+    with repository.connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (EDITORIAL_SCHEDULER_LOCK_KEY,))
             row = cursor.fetchone()
@@ -1816,7 +1816,7 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
         )
         return PublishSchedulerRunResponse(ran=False, reason="not_due", next_run_at=settings.next_run_at)
 
-    with psycopg.connect(repository.database_url) as connection:
+    with repository.connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_try_advisory_lock(%s)", (PUBLISH_SCHEDULER_LOCK_KEY,))
             row = cursor.fetchone()

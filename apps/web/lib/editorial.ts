@@ -508,6 +508,26 @@ const fallbackPublishScheduler: PublishSchedulerSettings = {
 
 const fallbackPipelineRuns: PipelineRun[] = [];
 
+async function loadStudioResource<T>(
+  baseUrl: string,
+  path: string,
+  parse: (payload: unknown) => T,
+  fallback: T
+): Promise<{ data: T; error?: string }> {
+  try {
+    const response = await fetch(new URL(path, baseUrl).toString(), { cache: "no-store" });
+    if (!response.ok) {
+      return { data: fallback, error: `${path}: ${response.status}` };
+    }
+    return { data: parse(await response.json()), error: undefined };
+  } catch (error) {
+    return {
+      data: fallback,
+      error: `${path}: ${error instanceof Error ? error.message : "Unknown API error"}`
+    };
+  }
+}
+
 export async function getEditorialStudioData(): Promise<EditorialStudioData> {
   const baseUrl = resolveApiBaseUrl();
 
@@ -531,124 +551,106 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     };
   }
 
-  try {
-    const [
-      promptsResponse,
-      rawItemsResponse,
-      draftsResponse,
-      reviewsResponse,
-      contentPlanResponse,
-      statusResponse,
-      sourceStatesResponse,
-      sourcesResponse,
-      schedulerResponse,
-      enrichmentSchedulerResponse,
-      editorialSchedulerResponse,
-      publishSchedulerResponse,
-      pipelineRunsResponse
-    ] =
-      await Promise.all([
-      fetch(new URL("/api/v1/prompts", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/raw-items/preview?limit=50", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/drafts", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/reviews", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/content-plan", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/editorial/status", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/source-states", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/sources", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/scheduler", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/enrichment-scheduler", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/editorial-scheduler", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/publish-scheduler", baseUrl).toString(), { cache: "no-store" }),
-      fetch(new URL("/api/v1/pipeline-runs?limit=12", baseUrl).toString(), { cache: "no-store" })
-    ]);
+  const [
+    promptsResult,
+    rawItemsResult,
+    draftsResult,
+    reviewsResult,
+    contentPlanResult,
+    statusResult,
+    sourceStatesResult,
+    sourcesResult,
+    schedulerResult,
+    enrichmentSchedulerResult,
+    editorialSchedulerResult,
+    publishSchedulerResult,
+    pipelineRunsResult
+  ] = await Promise.all([
+    loadStudioResource(baseUrl, "/api/v1/prompts", (payload) => (payload as { items: PromptConfig[] }).items, fallbackPrompts),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/raw-items/preview?limit=50",
+      (payload) => (payload as { items: RawItem[] }).items,
+      fallbackRawItems
+    ),
+    loadStudioResource(baseUrl, "/api/v1/drafts", (payload) => (payload as { items: DraftArticle[] }).items, fallbackDrafts),
+    loadStudioResource(baseUrl, "/api/v1/reviews", (payload) => (payload as { items: EditorReview[] }).items, fallbackReviews),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/content-plan",
+      (payload) => (payload as { items: ContentPlanItem[] }).items,
+      fallbackContentPlan
+    ),
+    loadStudioResource(baseUrl, "/api/v1/editorial/status", (payload) => payload as EditorialStatus, fallbackEditorialStatus),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/source-states",
+      (payload) => (payload as { items: SourceSyncState[] }).items,
+      fallbackSourceStates
+    ),
+    loadStudioResource(baseUrl, "/api/v1/sources", (payload) => (payload as { items: SourceConfig[] }).items, fallbackSources),
+    loadStudioResource(baseUrl, "/api/v1/scheduler", (payload) => payload as SchedulerSettings, fallbackScheduler),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/enrichment-scheduler",
+      (payload) => payload as EnrichmentSchedulerSettings,
+      fallbackEnrichmentScheduler
+    ),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/editorial-scheduler",
+      (payload) => payload as EditorialSchedulerSettings,
+      fallbackEditorialScheduler
+    ),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/publish-scheduler",
+      (payload) => payload as PublishSchedulerSettings,
+      fallbackPublishScheduler
+    ),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/pipeline-runs?limit=12",
+      (payload) => (payload as { items: PipelineRun[] }).items,
+      fallbackPipelineRuns
+    )
+  ]);
 
-    if (
-      !promptsResponse.ok ||
-      !rawItemsResponse.ok ||
-      !draftsResponse.ok ||
-      !reviewsResponse.ok ||
-      !contentPlanResponse.ok ||
-      !statusResponse.ok ||
-      !sourceStatesResponse.ok ||
-      !sourcesResponse.ok ||
-      !schedulerResponse.ok ||
-      !enrichmentSchedulerResponse.ok ||
-      !editorialSchedulerResponse.ok ||
-      !publishSchedulerResponse.ok ||
-      !pipelineRunsResponse.ok
-    ) {
-      const responses: Array<[string, number]> = [
-        ["prompts", promptsResponse.status],
-        ["raw-items", rawItemsResponse.status],
-        ["drafts", draftsResponse.status],
-        ["reviews", reviewsResponse.status],
-        ["content-plan", contentPlanResponse.status],
-        ["status", statusResponse.status],
-        ["source-states", sourceStatesResponse.status],
-        ["sources", sourcesResponse.status],
-        ["scheduler", schedulerResponse.status],
-        ["enrichment-scheduler", enrichmentSchedulerResponse.status],
-        ["editorial-scheduler", editorialSchedulerResponse.status],
-        ["publish-scheduler", publishSchedulerResponse.status],
-        ["pipeline-runs", pipelineRunsResponse.status]
-      ];
-      const failedStatuses = responses
-        .filter(([, status]) => status >= 400)
-        .map(([name, status]) => `${name}: ${status}`)
-        .join(", ");
-      throw new Error(failedStatuses || "Editorial endpoints unavailable");
-    }
+  const partialErrors = [
+    promptsResult.error,
+    rawItemsResult.error,
+    draftsResult.error,
+    reviewsResult.error,
+    contentPlanResult.error,
+    statusResult.error,
+    sourceStatesResult.error,
+    sourcesResult.error,
+    schedulerResult.error,
+    enrichmentSchedulerResult.error,
+    editorialSchedulerResult.error,
+    publishSchedulerResult.error,
+    pipelineRunsResult.error
+  ].filter((value): value is string => Boolean(value));
 
-    const promptsPayload = (await promptsResponse.json()) as { items: PromptConfig[] };
-    const rawItemsPayload = (await rawItemsResponse.json()) as { items: RawItem[] };
-    const draftsPayload = (await draftsResponse.json()) as { items: DraftArticle[] };
-    const reviewsPayload = (await reviewsResponse.json()) as { items: EditorReview[] };
-    const contentPlanPayload = (await contentPlanResponse.json()) as { items: ContentPlanItem[] };
-    const statusPayload = (await statusResponse.json()) as EditorialStatus;
-    const sourceStatesPayload = (await sourceStatesResponse.json()) as { items: SourceSyncState[] };
-    const sourcesPayload = (await sourcesResponse.json()) as { items: SourceConfig[] };
-    const schedulerPayload = (await schedulerResponse.json()) as SchedulerSettings;
-    const enrichmentSchedulerPayload = (await enrichmentSchedulerResponse.json()) as EnrichmentSchedulerSettings;
-    const editorialSchedulerPayload = (await editorialSchedulerResponse.json()) as EditorialSchedulerSettings;
-    const publishSchedulerPayload = (await publishSchedulerResponse.json()) as PublishSchedulerSettings;
-    const pipelineRunsPayload = (await pipelineRunsResponse.json()) as { items: PipelineRun[] };
+  const isLive = partialErrors.length < 13;
 
-    return {
-      prompts: promptsPayload.items,
-      rawItems: rawItemsPayload.items,
-      drafts: draftsPayload.items,
-      reviews: reviewsPayload.items,
-      contentPlan: contentPlanPayload.items,
-      editorialStatus: statusPayload,
-      sourceStates: sourceStatesPayload.items,
-      sources: sourcesPayload.items,
-      scheduler: schedulerPayload,
-      enrichmentScheduler: enrichmentSchedulerPayload,
-      editorialScheduler: editorialSchedulerPayload,
-      publishScheduler: publishSchedulerPayload,
-      pipelineRuns: pipelineRunsPayload.items,
-      isLive: true
-    };
-  } catch (error) {
-    return {
-      prompts: fallbackPrompts,
-      rawItems: fallbackRawItems,
-      drafts: fallbackDrafts,
-      reviews: fallbackReviews,
-      contentPlan: fallbackContentPlan,
-      editorialStatus: fallbackEditorialStatus,
-      sourceStates: fallbackSourceStates,
-      sources: fallbackSources,
-      scheduler: fallbackScheduler,
-      enrichmentScheduler: fallbackEnrichmentScheduler,
-      editorialScheduler: fallbackEditorialScheduler,
-      publishScheduler: fallbackPublishScheduler,
-      pipelineRuns: fallbackPipelineRuns,
-      isLive: false,
-      liveError: error instanceof Error ? error.message : "Unknown API error."
-    };
-  }
+  return {
+    prompts: promptsResult.data,
+    rawItems: rawItemsResult.data,
+    drafts: draftsResult.data,
+    reviews: reviewsResult.data,
+    contentPlan: contentPlanResult.data,
+    editorialStatus: statusResult.data,
+    sourceStates: sourceStatesResult.data,
+    sources: sourcesResult.data,
+    scheduler: schedulerResult.data,
+    enrichmentScheduler: enrichmentSchedulerResult.data,
+    editorialScheduler: editorialSchedulerResult.data,
+    publishScheduler: publishSchedulerResult.data,
+    pipelineRuns: pipelineRunsResult.data,
+    isLive,
+    liveError: partialErrors.length ? partialErrors.join("; ") : undefined
+  };
 }
 
 export function buildRawDraftPairs(data: EditorialStudioData, limit = 10): RawDraftPair[] {

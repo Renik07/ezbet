@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -44,14 +45,46 @@ class PrefilterRawItemsResult:
     skipped_items: list[dict[str, str]]
 
 
+def _is_retryable_db_error(exc: psycopg.OperationalError) -> bool:
+    message = str(exc).lower()
+    transient_markers = (
+        "ssl syscall error: eof detected",
+        "ssl connection has been closed unexpectedly",
+        "server closed the connection unexpectedly",
+        "connection not open",
+        "connection reset by peer",
+        "could not receive data from server",
+        "terminating connection due to administrator command",
+    )
+    return any(marker in message for marker in transient_markers)
+
+
 class NewsRepository:
     """PostgreSQL-backed repository for the MVP news and editorial flow."""
 
     def __init__(self) -> None:
         self.database_url = get_database_url()
 
+    def connect(self) -> psycopg.Connection:
+        attempts = 0
+        last_error: psycopg.OperationalError | None = None
+
+        while attempts < 3:
+            attempts += 1
+            try:
+                return psycopg.connect(self.database_url)
+            except psycopg.OperationalError as exc:
+                last_error = exc
+                if attempts >= 3 or not _is_retryable_db_error(exc):
+                    raise
+                time.sleep(0.25 * attempts)
+
+        if last_error is not None:
+            raise last_error
+        raise psycopg.OperationalError("Database connection failed without error details.")
+
     def ensure_schema(self) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -565,7 +598,7 @@ class NewsRepository:
             connection.commit()
 
     def ensure_prompt_defaults(self, prompts: list[PromptConfig]) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 for prompt in prompts:
                     cursor.execute(
@@ -601,7 +634,7 @@ class NewsRepository:
             connection.commit()
 
     def ensure_source_defaults(self, sources: list[SourceItem]) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 for source in sources:
                     cursor.execute(
@@ -644,7 +677,7 @@ class NewsRepository:
             connection.commit()
 
     def list_source_configs(self) -> list[SourceItem]:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -669,7 +702,7 @@ class NewsRepository:
         ]
 
     def list_active_sources(self) -> list[SourceItem]:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -701,7 +734,7 @@ class NewsRepository:
         self._validate_source_config(source)
         self._validate_source_activation_readiness(source)
         try:
-            with psycopg.connect(self.database_url) as connection:
+            with self.connect() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """
@@ -753,7 +786,7 @@ class NewsRepository:
         source = self._normalize_source_config(source)
         self._validate_source_config(source)
         self._validate_source_activation_readiness(source)
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -790,14 +823,14 @@ class NewsRepository:
         return self.get_source_config(source.key)
 
     def delete_source_config(self, key: str) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("DELETE FROM source_sync_state WHERE source_key = %s", (key,))
                 cursor.execute("DELETE FROM source_configs WHERE key = %s", (key,))
             connection.commit()
 
     def get_source_config(self, key: str) -> SourceItem:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -821,7 +854,7 @@ class NewsRepository:
         )
 
     def reset_runtime_data(self) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("TRUNCATE TABLE editor_reviews")
                 cursor.execute("TRUNCATE TABLE draft_articles")
@@ -832,7 +865,7 @@ class NewsRepository:
             connection.commit()
 
     def sync_news_ai_review_flags(self) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -883,7 +916,7 @@ class NewsRepository:
 
         statement += " ORDER BY n.published_at DESC"
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
@@ -927,7 +960,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -960,7 +993,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -1015,7 +1048,7 @@ class NewsRepository:
         serialized_skipped_items = json.dumps(skipped_items or [], ensure_ascii=False)
         serialized_source_breakdown = json.dumps(source_breakdown or [], ensure_ascii=False)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     statement,
@@ -1115,7 +1148,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -1199,7 +1232,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -1224,7 +1257,7 @@ class NewsRepository:
               )
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -1254,7 +1287,7 @@ class NewsRepository:
             WHERE slug = %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (slug,))
                 row = cursor.fetchone()
@@ -1309,7 +1342,7 @@ class NewsRepository:
         statement += " ORDER BY published_at DESC LIMIT %s"
         params.append(limit)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
@@ -1340,7 +1373,7 @@ class NewsRepository:
 
         statement += " ORDER BY agent_key ASC, version DESC"
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, params)
                 rows = cursor.fetchall()
@@ -1385,7 +1418,7 @@ class NewsRepository:
             ORDER BY source_title ASC
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 rows = cursor.fetchall()
@@ -1422,7 +1455,7 @@ class NewsRepository:
         """
 
         known_by_source: dict[str, set[str]] = {key: set() for key in source_keys}
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (source_keys, per_source_limit))
                 rows = cursor.fetchall()
@@ -1461,7 +1494,7 @@ class NewsRepository:
         """
 
         known_by_source: dict[str, set[str]] = {key: set() for key in source_keys}
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (source_keys, per_source_limit))
                 rows = cursor.fetchall()
@@ -1492,7 +1525,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -1519,7 +1552,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -1547,7 +1580,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -1573,7 +1606,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -1615,7 +1648,7 @@ class NewsRepository:
                 updated_at = NOW()
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (enabled, interval_minutes, batch_size, run_enrichment, next_run_at))
             connection.commit()
@@ -1651,7 +1684,7 @@ class NewsRepository:
                 updated_at = NOW()
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
             connection.commit()
@@ -1687,7 +1720,7 @@ class NewsRepository:
                 updated_at = NOW()
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
             connection.commit()
@@ -1723,7 +1756,7 @@ class NewsRepository:
                 updated_at = NOW()
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (enabled, interval_minutes, batch_size, next_run_at))
             connection.commit()
@@ -1754,7 +1787,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     statement,
@@ -1781,7 +1814,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (status, error))
             connection.commit()
@@ -1810,7 +1843,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     statement,
@@ -1841,7 +1874,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (status, error))
             connection.commit()
@@ -1872,7 +1905,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     statement,
@@ -1904,7 +1937,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (status, error))
             connection.commit()
@@ -1931,7 +1964,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     statement,
@@ -1961,7 +1994,7 @@ class NewsRepository:
             WHERE id = 'default'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (status, error))
             connection.commit()
@@ -2024,7 +2057,7 @@ class NewsRepository:
         parse_ok = parse_status == "ok"
         overall_status = "ok" if (fetch_ok and parse_ok) else ("error" if error else parse_status)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2118,7 +2151,7 @@ class NewsRepository:
         sample_title: str | None = None,
         sample_url: str | None = None,
     ) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2205,7 +2238,7 @@ class NewsRepository:
             LIMIT 1
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (agent_key,))
                 row = cursor.fetchone()
@@ -2226,7 +2259,7 @@ class NewsRepository:
         notes: str = "",
         activate: bool = True,
     ) -> PromptConfig:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT COALESCE(MAX(version), 0) FROM prompt_configs WHERE agent_key = %s",
@@ -2292,7 +2325,7 @@ class NewsRepository:
             WHERE id = %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (prompt_id,))
                 row = cursor.fetchone()
@@ -2303,7 +2336,7 @@ class NewsRepository:
         return self._map_prompt_row(row)
 
     def set_prompt_status(self, prompt_id: str, status: str) -> PromptConfig:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT agent_key FROM prompt_configs WHERE id = %s", (prompt_id,))
                 row = cursor.fetchone()
@@ -2326,7 +2359,7 @@ class NewsRepository:
         return self.get_prompt(prompt_id)
 
     def maybe_activate_recommended_prompt(self, agent_key: str, recommended_prompt_id: str) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2411,7 +2444,7 @@ class NewsRepository:
         statement += " ORDER BY published_at DESC, updated_at DESC LIMIT %s"
         params.append(limit)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
@@ -2444,7 +2477,7 @@ class NewsRepository:
         statement += " ORDER BY priority_score DESC, updated_at DESC LIMIT %s"
         params.append(limit)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
@@ -2470,7 +2503,7 @@ class NewsRepository:
             WHERE id = %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (item_id,))
                 row = cursor.fetchone()
@@ -2497,7 +2530,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -2552,7 +2585,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -2600,7 +2633,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -2617,7 +2650,7 @@ class NewsRepository:
               AND d.raw_item_id IS NULL
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2655,7 +2688,7 @@ class NewsRepository:
             LIMIT %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
                 rows = cursor.fetchall()
@@ -2671,7 +2704,7 @@ class NewsRepository:
               AND publish_decision = 'publish_auto'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2688,7 +2721,7 @@ class NewsRepository:
               AND d.publish_decision = 'publish_auto'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2704,7 +2737,7 @@ class NewsRepository:
                OR d.status <> 'published'
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2720,7 +2753,7 @@ class NewsRepository:
               AND a.raw_item_id IS NULL
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2737,7 +2770,7 @@ class NewsRepository:
               AND n.id IS NULL
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2755,7 +2788,7 @@ class NewsRepository:
             ) duplicates
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement)
                 row = cursor.fetchone()
@@ -2798,7 +2831,7 @@ class NewsRepository:
             WHERE id = %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (raw_item_id,))
                 row = cursor.fetchone()
@@ -2835,7 +2868,7 @@ class NewsRepository:
             WHERE id = %s
         """
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (draft_id,))
                 row = cursor.fetchone()
@@ -2846,7 +2879,7 @@ class NewsRepository:
         return self._map_draft_row(row)
 
     def upsert_draft(self, draft: DraftArticle) -> DraftArticle:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2919,7 +2952,7 @@ class NewsRepository:
         return stored
 
     def upsert_review(self, review: EditorReview) -> EditorReview:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -2962,7 +2995,7 @@ class NewsRepository:
         return stored
 
     def upsert_content_plan_item(self, item: ContentPlanItem) -> ContentPlanItem:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3011,7 +3044,7 @@ class NewsRepository:
         return stored
 
     def set_content_plan_status(self, raw_item_id: str, status: str) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3034,7 +3067,7 @@ class NewsRepository:
         publish_decision: str | None = None,
         publish_reason: str | None = None,
     ) -> None:
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3070,7 +3103,7 @@ class NewsRepository:
         inserted = 0
         skipped_items: list[dict[str, str]] = []
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT dedupe_key, id, title FROM raw_items WHERE dedupe_key <> ''")
                 known_dedupe_map = {
@@ -3210,7 +3243,7 @@ class NewsRepository:
         if not dedupe_keys:
             return PrefilterRawItemsResult(fresh_items=items, skipped_items=[])
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3283,7 +3316,7 @@ class NewsRepository:
         ):
             return self.get_raw_item(raw_item_id)
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3336,7 +3369,7 @@ class NewsRepository:
             return item
 
         candidate_texts: dict[str, list[tuple[str, str, str]]] = {}
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3373,7 +3406,7 @@ class NewsRepository:
         if not duplicate_match:
             return item
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3400,7 +3433,7 @@ class NewsRepository:
     def upsert_many(self, items: list[NewsItem]) -> list[NewsItem]:
         added: list[NewsItem] = []
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 for item in items:
                     cursor.execute(
@@ -3456,7 +3489,7 @@ class NewsRepository:
             article_slug=article.slug,
         )
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3518,7 +3551,7 @@ class NewsRepository:
             updated_at=datetime.now(timezone.utc),
         )
 
-        with psycopg.connect(self.database_url) as connection:
+        with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
