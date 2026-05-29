@@ -23,8 +23,6 @@ from .models import (
     PipelineRun,
     PipelineSkippedItem,
     PipelineSourceBreakdownItem,
-    PromptLabItem,
-    PromptLabRun,
     PublishSchedulerSettings,
     PromptConfig,
     RawItem,
@@ -190,6 +188,9 @@ class NewsRepository:
                         title TEXT NOT NULL,
                         dek TEXT NOT NULL,
                         body TEXT NOT NULL,
+                        writer_title TEXT,
+                        writer_dek TEXT,
+                        writer_body TEXT,
                         category TEXT NOT NULL,
                         source_title TEXT NOT NULL,
                         source_url TEXT,
@@ -214,8 +215,12 @@ class NewsRepository:
                         id TEXT PRIMARY KEY,
                         draft_id TEXT NOT NULL UNIQUE,
                         status TEXT NOT NULL DEFAULT 'reviewed',
+                        decision TEXT NOT NULL DEFAULT 'approve',
                         summary TEXT NOT NULL,
                         notes TEXT NOT NULL DEFAULT '',
+                        revised_title TEXT,
+                        revised_dek TEXT,
+                        revised_body TEXT,
                         prompt_config_id TEXT NOT NULL,
                         prompt_name TEXT NOT NULL,
                         model TEXT NOT NULL,
@@ -238,58 +243,6 @@ class NewsRepository:
                         reason TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prompt_lab_runs (
-                        id TEXT PRIMARY KEY,
-                        status TEXT NOT NULL DEFAULT 'completed',
-                        requested_limit INTEGER NOT NULL,
-                        selected_count INTEGER NOT NULL DEFAULT 0,
-                        fresh_count INTEGER NOT NULL DEFAULT 0,
-                        reused_count INTEGER NOT NULL DEFAULT 0,
-                        writer_prompt_id TEXT NOT NULL,
-                        writer_prompt_name TEXT NOT NULL,
-                        editor_prompt_id TEXT NOT NULL,
-                        editor_prompt_name TEXT NOT NULL,
-                        notes TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                    """
-                )
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS prompt_lab_items (
-                        id TEXT PRIMARY KEY,
-                        run_id TEXT NOT NULL REFERENCES prompt_lab_runs(id) ON DELETE CASCADE,
-                        raw_item_id TEXT NOT NULL,
-                        source_title TEXT NOT NULL,
-                        source_url TEXT,
-                        raw_title TEXT NOT NULL,
-                        raw_summary TEXT NOT NULL,
-                        raw_full_text TEXT,
-                        raw_lead TEXT,
-                        raw_url TEXT,
-                        raw_published_at TIMESTAMPTZ NOT NULL,
-                        importance_score INTEGER NOT NULL DEFAULT 0,
-                        triage_label TEXT NOT NULL DEFAULT 'low',
-                        writer_title TEXT NOT NULL,
-                        writer_dek TEXT NOT NULL,
-                        writer_body TEXT NOT NULL,
-                        writer_model TEXT NOT NULL,
-                        writer_generation_mode TEXT NOT NULL,
-                        writer_prompt_id TEXT NOT NULL,
-                        writer_prompt_name TEXT NOT NULL,
-                        editor_summary TEXT NOT NULL,
-                        editor_notes TEXT NOT NULL DEFAULT '',
-                        editor_model TEXT NOT NULL,
-                        editor_prompt_id TEXT NOT NULL,
-                        editor_prompt_name TEXT NOT NULL,
-                        quality_gate_decision TEXT NOT NULL,
-                        quality_gate_reason TEXT NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
                 )
@@ -497,6 +450,27 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS publish_reason TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS writer_title TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS writer_dek TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS writer_body TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS decision TEXT NOT NULL DEFAULT 'approve'"
+                )
+                cursor.execute(
+                    "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS revised_title TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS revised_dek TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS revised_body TEXT"
                 )
                 cursor.execute(
                     "ALTER TABLE source_configs ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'rss'"
@@ -910,14 +884,18 @@ class NewsRepository:
     def reset_runtime_data(self) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("TRUNCATE TABLE prompt_lab_items")
-                cursor.execute("TRUNCATE TABLE prompt_lab_runs")
-                cursor.execute("TRUNCATE TABLE editor_reviews")
-                cursor.execute("TRUNCATE TABLE draft_articles")
-                cursor.execute("TRUNCATE TABLE content_plan_items")
-                cursor.execute("TRUNCATE TABLE news_items")
-                cursor.execute("TRUNCATE TABLE raw_items")
-                cursor.execute("TRUNCATE TABLE source_sync_state")
+                cursor.execute(
+                    """
+                    TRUNCATE TABLE
+                        editor_reviews,
+                        draft_articles,
+                        content_plan_items,
+                        news_items,
+                        raw_items,
+                        source_sync_state
+                    RESTART IDENTITY CASCADE
+                    """
+                )
             connection.commit()
 
     def sync_news_ai_review_flags(self) -> None:
@@ -2476,6 +2454,9 @@ class NewsRepository:
                 title,
                 dek,
                 body,
+                writer_title,
+                writer_dek,
+                writer_body,
                 category,
                 source_title,
                 source_url,
@@ -2584,8 +2565,12 @@ class NewsRepository:
                 id,
                 draft_id,
                 status,
+                decision,
                 summary,
                 notes,
+                revised_title,
+                revised_dek,
+                revised_body,
                 prompt_config_id,
                 prompt_name,
                 model,
@@ -2730,6 +2715,9 @@ class NewsRepository:
                 title,
                 dek,
                 body,
+                writer_title,
+                writer_dek,
+                writer_body,
                 category,
                 source_title,
                 source_url,
@@ -2906,233 +2894,6 @@ class NewsRepository:
 
         return self._map_raw_row(row)
 
-    def list_recent_prompt_lab_raw_items(self, limit: int = 18) -> list[RawItem]:
-        statement = """
-            SELECT
-                id,
-                source_key,
-                source_title,
-                source_url,
-                category,
-                normalized_category,
-                external_id,
-                dedupe_key,
-                title,
-                summary,
-                lead,
-                url,
-                published_at,
-                fetched_at,
-                importance_score,
-                triage_label,
-                is_duplicate,
-                duplicate_of,
-                duplicate_stage,
-                duplicate_reason,
-                full_text,
-                full_text_source_url,
-                full_text_source_title,
-                reference_urls,
-                extraction_mode,
-                enrichment_status,
-                enrichment_error,
-                tags,
-                payload
-            FROM raw_items
-            WHERE is_duplicate = FALSE
-            ORDER BY fetched_at DESC, published_at DESC
-            LIMIT %s
-        """
-
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
-                rows = cursor.fetchall()
-
-        return [self._map_raw_row(row) for row in rows]
-
-    def replace_prompt_lab_run(self, run: PromptLabRun) -> PromptLabRun:
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM prompt_lab_items")
-                cursor.execute("DELETE FROM prompt_lab_runs")
-                cursor.execute(
-                    """
-                    INSERT INTO prompt_lab_runs (
-                        id,
-                        status,
-                        requested_limit,
-                        selected_count,
-                        fresh_count,
-                        reused_count,
-                        writer_prompt_id,
-                        writer_prompt_name,
-                        editor_prompt_id,
-                        editor_prompt_name,
-                        notes,
-                        created_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        run.id,
-                        run.status,
-                        run.requested_limit,
-                        run.selected_count,
-                        run.fresh_count,
-                        run.reused_count,
-                        run.writer_prompt_id,
-                        run.writer_prompt_name,
-                        run.editor_prompt_id,
-                        run.editor_prompt_name,
-                        run.notes,
-                        run.created_at,
-                    ),
-                )
-                for item in run.items:
-                    cursor.execute(
-                        """
-                        INSERT INTO prompt_lab_items (
-                            id,
-                            run_id,
-                            raw_item_id,
-                            source_title,
-                            source_url,
-                            raw_title,
-                            raw_summary,
-                            raw_full_text,
-                            raw_lead,
-                            raw_url,
-                            raw_published_at,
-                            importance_score,
-                            triage_label,
-                            writer_title,
-                            writer_dek,
-                            writer_body,
-                            writer_model,
-                            writer_generation_mode,
-                            writer_prompt_id,
-                            writer_prompt_name,
-                            editor_summary,
-                            editor_notes,
-                            editor_model,
-                            editor_prompt_id,
-                            editor_prompt_name,
-                            quality_gate_decision,
-                            quality_gate_reason,
-                            created_at
-                        )
-                        VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s
-                        )
-                        """,
-                        (
-                            item.id,
-                            item.run_id,
-                            item.raw_item_id,
-                            item.source_title,
-                            item.source_url,
-                            item.raw_title,
-                            item.raw_summary,
-                            item.raw_full_text,
-                            item.raw_lead,
-                            item.raw_url,
-                            item.raw_published_at,
-                            item.importance_score,
-                            item.triage_label,
-                            item.writer_title,
-                            item.writer_dek,
-                            item.writer_body,
-                            item.writer_model,
-                            item.writer_generation_mode,
-                            item.writer_prompt_id,
-                            item.writer_prompt_name,
-                            item.editor_summary,
-                            item.editor_notes,
-                            item.editor_model,
-                            item.editor_prompt_id,
-                            item.editor_prompt_name,
-                            item.quality_gate_decision,
-                            item.quality_gate_reason,
-                            item.created_at,
-                        ),
-                    )
-            connection.commit()
-
-        stored = self.get_latest_prompt_lab_run()
-        if stored is None:
-            raise LookupError(f"Prompt lab run {run.id} was not stored.")
-        return stored
-
-    def get_latest_prompt_lab_run(self) -> PromptLabRun | None:
-        with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT
-                        id,
-                        status,
-                        requested_limit,
-                        selected_count,
-                        fresh_count,
-                        reused_count,
-                        writer_prompt_id,
-                        writer_prompt_name,
-                        editor_prompt_id,
-                        editor_prompt_name,
-                        notes,
-                        created_at
-                    FROM prompt_lab_runs
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """
-                )
-                run_row = cursor.fetchone()
-                if run_row is None:
-                    return None
-
-                cursor.execute(
-                    """
-                    SELECT
-                        id,
-                        run_id,
-                        raw_item_id,
-                        source_title,
-                        source_url,
-                        raw_title,
-                        raw_summary,
-                        raw_full_text,
-                        raw_lead,
-                        raw_url,
-                        raw_published_at,
-                        importance_score,
-                        triage_label,
-                        writer_title,
-                        writer_dek,
-                        writer_body,
-                        writer_model,
-                        writer_generation_mode,
-                        writer_prompt_id,
-                        writer_prompt_name,
-                        editor_summary,
-                        editor_notes,
-                        editor_model,
-                        editor_prompt_id,
-                        editor_prompt_name,
-                        quality_gate_decision,
-                        quality_gate_reason,
-                        created_at
-                    FROM prompt_lab_items
-                    WHERE run_id = %s
-                    ORDER BY created_at ASC, raw_published_at DESC
-                    """,
-                    (str(run_row[0]),),
-                )
-                item_rows = cursor.fetchall()
-
-        return self._map_prompt_lab_run_row(run_row, item_rows)
-
     def get_draft(self, draft_id: str) -> DraftArticle | None:
         statement = """
             SELECT
@@ -3141,6 +2902,9 @@ class NewsRepository:
                 title,
                 dek,
                 body,
+                writer_title,
+                writer_dek,
+                writer_body,
                 category,
                 source_title,
                 source_url,
@@ -3181,6 +2945,9 @@ class NewsRepository:
                         title,
                         dek,
                         body,
+                        writer_title,
+                        writer_dek,
+                        writer_body,
                         category,
                         source_title,
                         source_url,
@@ -3195,11 +2962,14 @@ class NewsRepository:
                         model,
                         generation_mode
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         title = EXCLUDED.title,
                         dek = EXCLUDED.dek,
                         body = EXCLUDED.body,
+                        writer_title = COALESCE(draft_articles.writer_title, EXCLUDED.writer_title),
+                        writer_dek = COALESCE(draft_articles.writer_dek, EXCLUDED.writer_dek),
+                        writer_body = COALESCE(draft_articles.writer_body, EXCLUDED.writer_body),
                         category = EXCLUDED.category,
                         source_title = EXCLUDED.source_title,
                         source_url = EXCLUDED.source_url,
@@ -3221,6 +2991,9 @@ class NewsRepository:
                         draft.title,
                         draft.dek,
                         draft.body,
+                        draft.writer_title,
+                        draft.writer_dek,
+                        draft.writer_body,
                         draft.category,
                         draft.source_title,
                         draft.source_url,
@@ -3252,17 +3025,25 @@ class NewsRepository:
                         id,
                         draft_id,
                         status,
+                        decision,
                         summary,
                         notes,
+                        revised_title,
+                        revised_dek,
+                        revised_body,
                         prompt_config_id,
                         prompt_name,
                         model
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (draft_id) DO UPDATE SET
                         status = EXCLUDED.status,
+                        decision = EXCLUDED.decision,
                         summary = EXCLUDED.summary,
                         notes = EXCLUDED.notes,
+                        revised_title = EXCLUDED.revised_title,
+                        revised_dek = EXCLUDED.revised_dek,
+                        revised_body = EXCLUDED.revised_body,
                         prompt_config_id = EXCLUDED.prompt_config_id,
                         prompt_name = EXCLUDED.prompt_name,
                         model = EXCLUDED.model,
@@ -3272,8 +3053,12 @@ class NewsRepository:
                         review.id,
                         review.draft_id,
                         review.status,
+                        review.decision,
                         review.summary,
                         review.notes,
+                        review.revised_title,
+                        review.revised_dek,
+                        review.revised_body,
                         review.prompt_config_id,
                         review.prompt_name,
                         review.model,
@@ -4248,61 +4033,6 @@ class NewsRepository:
         )
 
     @staticmethod
-    def _map_prompt_lab_item_row(row: tuple[object, ...]) -> PromptLabItem:
-        return PromptLabItem(
-            id=str(row[0]),
-            run_id=str(row[1]),
-            raw_item_id=str(row[2]),
-            source_title=str(row[3]),
-            source_url=row[4],
-            raw_title=str(row[5]),
-            raw_summary=str(row[6]),
-            raw_full_text=row[7],
-            raw_lead=row[8],
-            raw_url=row[9],
-            raw_published_at=row[10],
-            importance_score=int(row[11]),
-            triage_label=str(row[12]),
-            writer_title=str(row[13]),
-            writer_dek=str(row[14]),
-            writer_body=str(row[15]),
-            writer_model=str(row[16]),
-            writer_generation_mode=str(row[17]),
-            writer_prompt_id=str(row[18]),
-            writer_prompt_name=str(row[19]),
-            editor_summary=str(row[20]),
-            editor_notes=str(row[21]),
-            editor_model=str(row[22]),
-            editor_prompt_id=str(row[23]),
-            editor_prompt_name=str(row[24]),
-            quality_gate_decision=str(row[25]),
-            quality_gate_reason=str(row[26]),
-            created_at=row[27],
-        )
-
-    @classmethod
-    def _map_prompt_lab_run_row(
-        cls,
-        run_row: tuple[object, ...],
-        item_rows: list[tuple[object, ...]],
-    ) -> PromptLabRun:
-        return PromptLabRun(
-            id=str(run_row[0]),
-            status=str(run_row[1]),
-            requested_limit=int(run_row[2]),
-            selected_count=int(run_row[3]),
-            fresh_count=int(run_row[4]),
-            reused_count=int(run_row[5]),
-            writer_prompt_id=str(run_row[6]),
-            writer_prompt_name=str(run_row[7]),
-            editor_prompt_id=str(run_row[8]),
-            editor_prompt_name=str(run_row[9]),
-            notes=str(run_row[10]),
-            created_at=run_row[11],
-            items=[cls._map_prompt_lab_item_row(row) for row in item_rows],
-        )
-
-    @staticmethod
     def _map_prompt_row(row: tuple[object, ...]) -> PromptConfig:
         return PromptConfig(
             id=str(row[0]),
@@ -4476,21 +4206,24 @@ class NewsRepository:
             title=str(row[2]),
             dek=str(row[3]),
             body=str(row[4]),
-            category=str(row[5]),
-            source_title=str(row[6]),
-            source_url=row[7],
-            published_at=row[8],
-            status=str(row[9]),
-            review_status=str(row[10]),
-            review_summary=row[11],
-            publish_decision=str(row[12]),
-            publish_reason=row[13],
-            prompt_config_id=str(row[14]),
-            prompt_name=str(row[15]),
-            model=str(row[16]),
-            generation_mode=str(row[17]),
-            created_at=row[18],
-            updated_at=row[19],
+            writer_title=row[5],
+            writer_dek=row[6],
+            writer_body=row[7],
+            category=str(row[8]),
+            source_title=str(row[9]),
+            source_url=row[10],
+            published_at=row[11],
+            status=str(row[12]),
+            review_status=str(row[13]),
+            review_summary=row[14],
+            publish_decision=str(row[15]),
+            publish_reason=row[16],
+            prompt_config_id=str(row[17]),
+            prompt_name=str(row[18]),
+            model=str(row[19]),
+            generation_mode=str(row[20]),
+            created_at=row[21],
+            updated_at=row[22],
         )
 
     @staticmethod
@@ -4499,12 +4232,16 @@ class NewsRepository:
             id=str(row[0]),
             draft_id=str(row[1]),
             status=str(row[2]),
-            summary=str(row[3]),
-            notes=str(row[4]),
-            prompt_config_id=str(row[5]),
-            prompt_name=str(row[6]),
-            model=str(row[7]),
-            created_at=row[8],
+            decision=str(row[3]),
+            summary=str(row[4]),
+            notes=str(row[5]),
+            revised_title=row[6],
+            revised_dek=row[7],
+            revised_body=row[8],
+            prompt_config_id=str(row[9]),
+            prompt_name=str(row[10]),
+            model=str(row[11]),
+            created_at=row[12],
         )
 
     @staticmethod

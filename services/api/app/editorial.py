@@ -57,10 +57,11 @@ def default_prompt_configs() -> list[PromptConfig]:
             system_prompt=(
                 "Ты выпускающий редактор ezbet.ru. Проверяй новостной текст как живой редактор: "
                 "смотри на точность, естественность, плотность фактов и отсутствие воды. "
-                "Не переписывай ради красоты: твоя цель — понять, готов ли текст к публикации."
+                "Если материал уже хороший, оставляй его как есть. Если нужны правки, сразу возвращай "
+                "исправленную финальную версию без лишней воды и без домыслов."
             ),
             user_prompt_template=(
-                "Проверь черновик и верни JSON с keys: summary, notes.\n"
+                "Проверь черновик и верни JSON с keys: decision, summary, notes, revised_title, revised_dek, revised_body.\n"
                 "Что проверить:\n"
                 "- нет ли домыслов сверх source\n"
                 "- не слишком ли текст шаблонный или AI-похожий по тону\n"
@@ -69,11 +70,15 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "- не повторяет ли title источник почти дословно; если повторяет, это минус\n"
                 "- если у source есть содержательный full_text, не был ли он слишком сильно сжат\n"
                 "- если данных мало, прямо скажи, что лучше оставить материал коротким\n"
+                "- decision: approve | light_edit | rewrite\n"
+                "- approve: правки не нужны, revised_* оставь пустыми\n"
+                "- light_edit: нужны точечные правки, верни полную исправленную версию\n"
+                "- rewrite: нужен заметно более сильный текст, верни полную исправленную версию\n"
                 "- если нужен rewrite, в notes коротко объясни почему"
             ),
             model="editorial-default-v2",
             provider="internal",
-            notes="Recommended default editor prompt focused on rewritten headlines and preserving source detail.",
+            notes="Recommended default editor prompt that can approve, lightly edit, or fully rewrite the draft.",
         ),
         PromptConfig(
             id="prompt:ai-search:v1",
@@ -114,7 +119,6 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
     writer_prompt = repository.get_active_prompt("writer")
     editor_prompt = repository.get_active_prompt("editor")
     raw_candidates = repository.list_planned_raw_items_for_drafts(limit=limit)
-    rewrite_enabled = False
 
     generated: list[DraftArticle] = []
     reviews: list[EditorReview] = []
@@ -133,6 +137,16 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
         )
         review = review_draft(stored_draft, raw_item, editor_prompt, ai_client, similarity_candidates)
         stored_review = repository.upsert_review(review)
+        editorial_draft = apply_editor_review(stored_draft, stored_review)
+        if editorial_draft.id != stored_draft.id or (
+            editorial_draft.title != stored_draft.title
+            or editorial_draft.dek != stored_draft.dek
+            or editorial_draft.body != stored_draft.body
+            or editorial_draft.generation_mode != stored_draft.generation_mode
+        ):
+            stored_draft = repository.upsert_draft(editorial_draft)
+        else:
+            stored_draft = editorial_draft
         quality_gate = evaluate_quality_gate(stored_draft, raw_item, stored_review, similarity_candidates)
 
         if quality_gate.decision == "pass":
@@ -145,49 +159,6 @@ def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[lis
                 publish_reason=quality_gate.reason,
             )
             repository.set_content_plan_status(raw_item.id, "ready_to_publish")
-        elif quality_gate.decision == "rewrite" and rewrite_enabled:
-            rewritten_draft = rewrite_draft(stored_draft, raw_item, writer_prompt, ai_client, quality_gate.reason)
-            if rewritten_draft is not None:
-                stored_draft = repository.upsert_draft(rewritten_draft)
-                second_review = review_draft(
-                    stored_draft,
-                    raw_item,
-                    editor_prompt,
-                    ai_client,
-                    similarity_candidates,
-                )
-                stored_review = repository.upsert_review(second_review)
-                second_gate = evaluate_quality_gate(stored_draft, raw_item, stored_review, similarity_candidates)
-                if second_gate.decision == "pass":
-                    repository.set_draft_review_status(
-                        stored_draft.id,
-                        review_status="reviewed",
-                        status="ready_for_publish",
-                        review_summary=stored_review.summary,
-                        publish_decision="publish_auto",
-                        publish_reason=second_gate.reason,
-                    )
-                    repository.set_content_plan_status(raw_item.id, "ready_to_publish")
-                else:
-                    repository.set_draft_review_status(
-                        stored_draft.id,
-                        review_status="quality_hold",
-                        status="hold",
-                        review_summary=second_gate.reason,
-                        publish_decision="publish_hold",
-                        publish_reason=second_gate.reason,
-                    )
-                    repository.set_content_plan_status(raw_item.id, "hold")
-            else:
-                repository.set_draft_review_status(
-                    stored_draft.id,
-                    review_status="quality_rewrite",
-                    status="rewrite_needed",
-                    review_summary=quality_gate.reason,
-                    publish_decision="publish_hold",
-                    publish_reason=quality_gate.reason,
-                )
-                repository.set_content_plan_status(raw_item.id, "rewrite_needed")
         elif quality_gate.decision == "rewrite":
             repository.set_draft_review_status(
                 stored_draft.id,
@@ -269,6 +240,9 @@ def generate_draft(
         title=title,
         dek=dek,
         body=body,
+        writer_title=title,
+        writer_dek=dek,
+        writer_body=body,
         category=raw_item.normalized_category,
         source_title=raw_item.source_title,
         source_url=raw_item.url,
@@ -304,6 +278,9 @@ def rewrite_draft(
         title=rewritten.title,
         dek=rewritten.dek,
         body=rewritten.body,
+        writer_title=draft.writer_title,
+        writer_dek=draft.writer_dek,
+        writer_body=draft.writer_body,
         category=draft.category,
         source_title=draft.source_title,
         source_url=draft.source_url,
@@ -348,25 +325,108 @@ def review_draft(
     fallback_summary = "Черновик выровнен по тону, структура читается, явных фактических расширений не добавлено."
     generated = ai_client.review_draft(draft, raw_item, prompt)
     if generated is None:
+        decision = "approve"
         summary = fallback_summary
         joined_notes = " ".join(notes)
+        revised_title = None
+        revised_dek = None
+        revised_body = None
         model = prompt.model
     else:
+        decision = generated.decision
         summary = generated.summary
         joined_notes = generated.notes
+        revised_title = generated.revised_title
+        revised_dek = generated.revised_dek
+        revised_body = generated.revised_body
         model = generated.model
+
+    if is_trivial_editor_revision(draft, decision, revised_title, revised_dek, revised_body):
+        decision = "approve"
+        revised_title = None
+        revised_dek = None
+        revised_body = None
 
     return EditorReview(
         id=f"review:{draft.id}",
         draft_id=draft.id,
         status="reviewed",
+        decision=decision,
         summary=summary,
         notes=joined_notes,
+        revised_title=revised_title,
+        revised_dek=revised_dek,
+        revised_body=revised_body,
         prompt_config_id=prompt.id,
         prompt_name=prompt.name,
         model=model,
         created_at=datetime.now(timezone.utc),
     )
+
+
+def apply_editor_review(draft: DraftArticle, review: EditorReview) -> DraftArticle:
+    if review.decision not in {"light_edit", "rewrite"}:
+        return draft
+
+    revised_title = (review.revised_title or "").strip()
+    revised_dek = (review.revised_dek or "").strip()
+    revised_body = (review.revised_body or "").strip()
+    if not revised_title or not revised_dek or not revised_body:
+        return draft
+
+    mode_suffix = "editor_light_edit" if review.decision == "light_edit" else "editor_rewrite"
+    generation_mode = draft.generation_mode
+    if mode_suffix not in generation_mode:
+        generation_mode = f"{generation_mode}_{mode_suffix}"
+
+    return DraftArticle(
+        id=draft.id,
+        raw_item_id=draft.raw_item_id,
+        title=revised_title,
+        dek=revised_dek,
+        body=revised_body,
+        writer_title=draft.writer_title or draft.title,
+        writer_dek=draft.writer_dek or draft.dek,
+        writer_body=draft.writer_body or draft.body,
+        category=draft.category,
+        source_title=draft.source_title,
+        source_url=draft.source_url,
+        published_at=draft.published_at,
+        status=draft.status,
+        review_status=draft.review_status,
+        review_summary=draft.review_summary,
+        publish_decision=draft.publish_decision,
+        publish_reason=draft.publish_reason,
+        prompt_config_id=draft.prompt_config_id,
+        prompt_name=draft.prompt_name,
+        model=draft.model,
+        generation_mode=generation_mode,
+        created_at=draft.created_at,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def is_trivial_editor_revision(
+    draft: DraftArticle,
+    decision: str,
+    revised_title: str | None,
+    revised_dek: str | None,
+    revised_body: str | None,
+) -> bool:
+    if decision not in {"light_edit", "rewrite"}:
+        return False
+    if not revised_title or not revised_dek or not revised_body:
+        return False
+
+    title_changed = normalize_gate_text(revised_title) != normalize_gate_text(draft.title)
+    dek_changed = normalize_gate_text(revised_dek) != normalize_gate_text(draft.dek)
+    body_similarity = compute_similarity(revised_body, draft.body)
+
+    original_body_length = max(len(draft.body.strip()), 1)
+    revised_body_length = len(revised_body.strip())
+    body_length_delta = abs(revised_body_length - original_body_length) / original_body_length
+
+    return not title_changed and not dek_changed and body_similarity >= 0.97 and body_length_delta <= 0.08
 
 
 def evaluate_quality_gate(
@@ -417,9 +477,67 @@ def evaluate_quality_gate(
     if repeated_paragraphs:
         return QualityGateResult("rewrite", "Quality gate: в тексте обнаружены повторяющиеся абзацы.")
 
+    semantic_repetition = detect_semantic_repetition(paragraphs)
+    if semantic_repetition is not None:
+        return QualityGateResult("rewrite", f"Quality gate: {semantic_repetition}")
+
+    informative_sentence_count = count_informative_sentences(body)
+    source_fact_units = estimate_source_fact_units(raw_item)
+
+    if informative_sentence_count == 0:
+        return QualityGateResult("hold", "Quality gate: в тексте не хватает самостоятельной фактуры для публикации.")
+
+    if informative_sentence_count == 1:
+        weak_news_marker = detect_weak_news_marker(title=title, dek=dek, body=body)
+        if source_fact_units >= 3:
+            return QualityGateResult(
+                "rewrite",
+                "Quality gate: материал слишком сильно сжал содержательный источник и потерял фактуру.",
+            )
+        if weak_news_marker is not None and raw_item.triage_label != "high":
+            return QualityGateResult(
+                "hold",
+                (
+                    "Quality gate: материал выглядит как слабый однофактовый инфоповод "
+                    f"без достаточной новостной ценности ({weak_news_marker})."
+                ),
+            )
+        if raw_item.triage_label == "low":
+            return QualityGateResult(
+                "hold",
+                "Quality gate: low-priority материал получился слишком бедным по фактам для автопубликации.",
+            )
+
     source_similarity = compute_similarity(f"{draft.title} {draft.dek} {body}", f"{raw_item.title} {raw_item.summary}")
     if source_similarity >= 0.82:
         return QualityGateResult("rewrite", "Quality gate: итоговый текст слишком близок к исходному source summary.")
+
+    editor_signal = detect_editor_quality_signal(review)
+    if editor_signal == "повтор":
+        # Strong repetition inside the body is already handled above via paragraph/sentence checks.
+        # A generic editor note about repetition should not by itself force rewrite for otherwise
+        # serviceable articles with enough fact density.
+        if informative_sentence_count <= 1:
+            return QualityGateResult(
+                "hold",
+                "Quality gate: editor review сигнализирует о повторе в слишком бедном по фактам материале.",
+            )
+        if raw_item.triage_label == "low" and source_fact_units <= 2:
+            return QualityGateResult(
+                "hold",
+                "Quality gate: editor review сигнализирует о повторе в слабом low-priority материале.",
+            )
+        editor_signal = None
+    if editor_signal is not None and raw_item.triage_label != "high":
+        if source_fact_units >= 3 or informative_sentence_count <= 1:
+            return QualityGateResult(
+                "rewrite",
+                f"Quality gate: editor review сигнализирует о проблеме качества ({editor_signal}).",
+            )
+        return QualityGateResult(
+            "hold",
+            f"Quality gate: editor review сигнализирует о пограничном качестве материала ({editor_signal}).",
+        )
 
     duplicate_guard = evaluate_published_duplicate_guard(draft, similarity_candidates)
     if duplicate_guard is not None:
@@ -525,6 +643,114 @@ def unique_paragraphs(value: str) -> list[str]:
         unique.append(paragraph)
 
     return unique
+
+
+def split_sentences(value: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def is_informative_sentence(value: str) -> bool:
+    normalized = normalize_gate_text(value)
+    tokens = normalized.split()
+    if len(tokens) < 5:
+        return False
+
+    weak_starts = (
+        "по его словам",
+        "по ее словам",
+        "при этом",
+        "кроме того",
+        "таким образом",
+    )
+    if any(normalized.startswith(prefix) for prefix in weak_starts) and len(tokens) < 8:
+        return False
+
+    return True
+
+
+def count_informative_sentences(value: str) -> int:
+    seen: set[str] = set()
+    count = 0
+
+    for sentence in split_sentences(value):
+        normalized = normalize_gate_text(sentence)
+        if not normalized or normalized in seen or not is_informative_sentence(sentence):
+            continue
+        seen.add(normalized)
+        count += 1
+
+    return count
+
+
+def estimate_source_fact_units(raw_item: RawItem) -> int:
+    if raw_item.full_text:
+        paragraphs = unique_paragraphs(raw_item.full_text)
+        if paragraphs:
+            return max(len(paragraphs), count_informative_sentences(raw_item.full_text))
+    return count_informative_sentences(f"{raw_item.title}. {raw_item.summary}")
+
+
+def detect_semantic_repetition(paragraphs: list[str]) -> str | None:
+    if len(paragraphs) < 2:
+        return None
+
+    for left_index, left in enumerate(paragraphs):
+        for right in paragraphs[left_index + 1 :]:
+            if compute_similarity(left, right) >= 0.88:
+                return "в разных абзацах повторяется одна и та же мысль почти без новых фактов"
+
+    normalized_sentences: list[str] = []
+    for paragraph in paragraphs:
+        for sentence in split_sentences(paragraph):
+            normalized = normalize_gate_text(sentence)
+            if normalized:
+                normalized_sentences.append(normalized)
+
+    if len(set(normalized_sentences)) <= 1 and len(normalized_sentences) > 1:
+        return "текст повторяет одну и ту же мысль несколькими предложениями"
+
+    return None
+
+
+def detect_weak_news_marker(*, title: str, dek: str, body: str) -> str | None:
+    haystack = f"{title}\n{dek}\n{body}".lower()
+    markers = (
+        "поздравил",
+        "поздравление",
+        "поздравила",
+        "сказал",
+        "заявил",
+        "отметил",
+        "прокомментировал",
+        "высказался",
+        "поделился мнением",
+    )
+    for marker in markers:
+        if marker in haystack:
+            return marker
+    return None
+
+
+def detect_editor_quality_signal(review: EditorReview) -> str | None:
+    haystack = f"{review.summary}\n{review.notes}".lower()
+    markers = (
+        "нужен rewrite",
+        "требует rewrite",
+        "мало фактов",
+        "мало деталей",
+        "слишком шаблон",
+        "слишком сжат",
+        "повтор",
+        "вод",
+    )
+    for marker in markers:
+        if marker in haystack:
+            return marker
+    return None
 
 
 def build_dek(raw_item: RawItem) -> str:

@@ -130,6 +130,9 @@ class DraftArticle(BaseModel):
     title: str
     dek: str
     body: str
+    writer_title: Optional[str] = Field(default=None, serialization_alias="writerTitle")
+    writer_dek: Optional[str] = Field(default=None, serialization_alias="writerDek")
+    writer_body: Optional[str] = Field(default=None, serialization_alias="writerBody")
     category: str
     source_title: str = Field(serialization_alias="sourceTitle")
     source_url: Optional[str] = Field(default=None, serialization_alias="sourceUrl")
@@ -157,8 +160,12 @@ class EditorReview(BaseModel):
     id: str
     draft_id: str = Field(serialization_alias="draftId")
     status: str = "reviewed"
+    decision: str = "approve"
     summary: str
     notes: str = ""
+    revised_title: Optional[str] = Field(default=None, serialization_alias="revisedTitle")
+    revised_dek: Optional[str] = Field(default=None, serialization_alias="revisedDek")
+    revised_body: Optional[str] = Field(default=None, serialization_alias="revisedBody")
     prompt_config_id: str = Field(serialization_alias="promptConfigId")
     prompt_name: str = Field(serialization_alias="promptName")
     model: str
@@ -629,60 +636,6 @@ class EditorReviewListResponse(BaseModel):
 class ContentPlanListResponse(BaseModel):
     items: list[ContentPlanItem]
 
-
-class PromptLabItem(BaseModel):
-    id: str
-    run_id: str = Field(serialization_alias="runId")
-    raw_item_id: str = Field(serialization_alias="rawItemId")
-    source_title: str = Field(serialization_alias="sourceTitle")
-    source_url: Optional[str] = Field(default=None, serialization_alias="sourceUrl")
-    raw_title: str = Field(serialization_alias="rawTitle")
-    raw_summary: str = Field(serialization_alias="rawSummary")
-    raw_full_text: Optional[str] = Field(default=None, serialization_alias="rawFullText")
-    raw_lead: Optional[str] = Field(default=None, serialization_alias="rawLead")
-    raw_url: Optional[str] = Field(default=None, serialization_alias="rawUrl")
-    raw_published_at: datetime = Field(serialization_alias="rawPublishedAt")
-    importance_score: int = Field(serialization_alias="importanceScore")
-    triage_label: str = Field(serialization_alias="triageLabel")
-    writer_title: str = Field(serialization_alias="writerTitle")
-    writer_dek: str = Field(serialization_alias="writerDek")
-    writer_body: str = Field(serialization_alias="writerBody")
-    writer_model: str = Field(serialization_alias="writerModel")
-    writer_generation_mode: str = Field(serialization_alias="writerGenerationMode")
-    writer_prompt_id: str = Field(serialization_alias="writerPromptId")
-    writer_prompt_name: str = Field(serialization_alias="writerPromptName")
-    editor_summary: str = Field(serialization_alias="editorSummary")
-    editor_notes: str = Field(serialization_alias="editorNotes")
-    editor_model: str = Field(serialization_alias="editorModel")
-    editor_prompt_id: str = Field(serialization_alias="editorPromptId")
-    editor_prompt_name: str = Field(serialization_alias="editorPromptName")
-    quality_gate_decision: str = Field(serialization_alias="qualityGateDecision")
-    quality_gate_reason: str = Field(serialization_alias="qualityGateReason")
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        serialization_alias="createdAt",
-    )
-
-
-class PromptLabRun(BaseModel):
-    id: str
-    status: str
-    requested_limit: int = Field(serialization_alias="requestedLimit")
-    selected_count: int = Field(serialization_alias="selectedCount")
-    fresh_count: int = Field(serialization_alias="freshCount")
-    reused_count: int = Field(serialization_alias="reusedCount")
-    writer_prompt_id: str = Field(serialization_alias="writerPromptId")
-    writer_prompt_name: str = Field(serialization_alias="writerPromptName")
-    editor_prompt_id: str = Field(serialization_alias="editorPromptId")
-    editor_prompt_name: str = Field(serialization_alias="editorPromptName")
-    notes: str = ""
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        serialization_alias="createdAt",
-    )
-    items: list[PromptLabItem] = Field(default_factory=list)
-
-
 class EditorialRunResponse(BaseModel):
     generated: int
     reviewed: int
@@ -706,7 +659,3 @@ class EditorialStatusResponse(BaseModel):
 
 class ResetResponse(BaseModel):
     cleared: bool
-
-
-class PromptLabRunResponse(BaseModel):
-    item: PromptLabRun

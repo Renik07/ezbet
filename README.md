@@ -706,8 +706,9 @@
 - [x] post-enrichment duplicate recheck: после нормализации `title/summary/full_text` свежая новость еще раз проходит cross-source near-duplicate проверку
 - [x] мягкий shortlist для enrichment scheduler: сначала более приоритетные и более неполные raw_items, но без жесткого отрезания свежих `low`
 - [x] editorial scheduler как отдельный автоматический этап после enrichment
-- [ ] после этапа тестов вернуть более строгий shortlist для planner/editorial, чтобы в auto-pipeline не шли все `low` подряд
+- [x] вернуть более строгий shortlist для planner/editorial: `high/medium` идут в приоритете, а `low` попадают только как ограниченный fallback, чтобы auto-pipeline не забивался слабыми новостями подряд
 - [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
+- [x] временный `TEMP Prompt Lab` flow и связанные с ним route/UI notices удалены; это был тестовый контур, а не часть финального production-flow
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
 - [x] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`: единый `pipeline_event`-формат для ingest / enrichment / editorial / publish / scheduler / pipeline-run
 - [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
@@ -728,6 +729,7 @@
 - [x] near-duplicate matching v3: fallback вне одной категории и translit-aware нормализация текста перед similarity-check
 - [ ] calibrate prioritization / shortlist: проверить, что важные новости реально получают приоритет, а слабые не съедают batch
 - [ ] calibrate editorial / publish decisions: проверить, что quality gate и publish rules не дают ложных `hold / skip / rewrite`
+- [ ] после деплоя наблюдать за усиленным `quality gate`: слабые/пустые/повторяющиеся тексты должны уходить в `hold / rewrite`, но валидные короткие новости не должны массово выпадать
 - [x] production cron / external scheduler вместо локального shell-loop: внешний cron может дергать один endpoint `/api/v1/pipeline/tick` или `scripts/pipeline-cron.sh`
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
 - [x] production soak-test на идемпотентность: есть endpoint `GET /api/v1/monitoring/idempotency`, который проверяет ключевые инварианты draft/article/news publish-цепочки перед controlled prod run

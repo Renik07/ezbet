@@ -121,6 +121,19 @@ function formatPublishDecision(decision?: string) {
   }
 }
 
+function formatEditorDecision(decision?: string) {
+  switch (decision) {
+    case "approve":
+      return "оставить как есть";
+    case "light_edit":
+      return "точечная правка";
+    case "rewrite":
+      return "переписать";
+    default:
+      return decision ?? "нет решения";
+  }
+}
+
 function describePipelineState(rawItem: {
   isDuplicate: boolean;
   duplicateOf?: string;
@@ -333,7 +346,7 @@ function describeEditorialState(rawItem: {
 
 export default async function StudioPage() {
   const data = await getEditorialStudioData();
-  const { prompts, drafts, reviews, contentPlan, editorialStatus, isLive, promptLab } = data;
+  const { prompts, drafts, reviews, contentPlan, editorialStatus, isLive } = data;
   const activePrompts = prompts.filter((prompt) => prompt.status === "active");
   const rawDraftPairs = buildRawDraftPairs(data, 10);
 
@@ -370,121 +383,6 @@ export default async function StudioPage() {
           <p style={{ margin: "6px 0 0 0" }}>
             Web search: <strong>{editorialStatus.webSearchEnabled ? "on" : "off"}</strong>
           </p>
-        </div>
-      </section>
-
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>TEMP Prompt Lab</h2>
-            <p>
-              Временный тестовый флоу для быстрого сравнения prompt-версий. Он не публикует материалы в live news и
-              после стабилизации редакционного слоя должен быть удалён или заменён.
-            </p>
-          </div>
-        </div>
-        <div className="section-card" style={{ marginBottom: 18 }}>
-          <p style={{ margin: 0 }}>
-            Последний запуск: <strong>{promptLab.status}</strong> · выбрано <strong>{promptLab.selectedCount}</strong> ·
-            свежих <strong>{promptLab.freshCount}</strong> · из пула <strong>{promptLab.reusedCount}</strong>
-          </p>
-          <p style={{ margin: "6px 0 0" }}>
-            Writer: <strong>{promptLab.writerPromptName || "не выбран"}</strong> · Editor:{" "}
-            <strong>{promptLab.editorPromptName || "не выбран"}</strong>
-          </p>
-          {promptLab.notes ? <p className="footer-note">{promptLab.notes}</p> : null}
-        </div>
-        <div className="compare-grid">
-          {promptLab.items.length ? (
-            promptLab.items.map((item) => (
-              <article key={item.id} className="compare-card">
-                <div className="compare-panel">
-                  <span>RAW INPUT</span>
-                  <h3>{item.rawTitle}</h3>
-                  <div className="compare-block">
-                    <strong>Original title</strong>
-                    <p>{item.rawTitle}</p>
-                  </div>
-                  <div className="compare-block">
-                    <strong>Original summary</strong>
-                    <p>{item.rawSummary}</p>
-                  </div>
-                  <div className="compare-block">
-                    <strong>Original links</strong>
-                    <p>
-                      Оригинал:{" "}
-                      {item.rawUrl ? (
-                        <a href={item.rawUrl} target="_blank" rel="noreferrer">
-                          открыть исходную новость
-                        </a>
-                      ) : (
-                        "ссылка не сохранена"
-                      )}
-                    </p>
-                    {item.sourceUrl ? (
-                      <p>
-                        Источник:{" "}
-                        <a href={item.sourceUrl} target="_blank" rel="noreferrer">
-                          открыть сайт источника
-                        </a>
-                      </p>
-                    ) : null}
-                  </div>
-                  {item.rawLead ? (
-                    <div className="compare-block">
-                      <strong>Original lead</strong>
-                      <p>{item.rawLead}</p>
-                    </div>
-                  ) : null}
-                  {item.rawFullText ? (
-                    <div className="compare-block">
-                      <strong>Original article/full text</strong>
-                      {item.rawFullText.split("\n\n").map((paragraph, index) => (
-                        <p key={`${item.id}-raw-full-${index}`}>{paragraph}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="compare-panel">
-                  <span>WRITER + EDITOR</span>
-                  <h3>{item.writerTitle}</h3>
-                  <div className="compare-block">
-                    <strong>Writer title</strong>
-                    <p>{item.writerTitle}</p>
-                  </div>
-                  <div className="compare-block">
-                    <strong>Writer dek</strong>
-                    <p>{item.writerDek}</p>
-                  </div>
-                  <div className="compare-block">
-                    <strong>Writer article</strong>
-                    {item.writerBody.split("\n\n").map((paragraph, index) => (
-                      <p key={`${item.id}-writer-${index}`}>{paragraph}</p>
-                    ))}
-                  </div>
-                  <div className="compare-block">
-                    <strong>Editor review</strong>
-                    <p>{item.editorSummary}</p>
-                    <p>{item.editorNotes}</p>
-                  </div>
-                  <div className="compare-block">
-                    <strong>Quality gate</strong>
-                    <p>
-                      {item.qualityGateDecision}: {item.qualityGateReason}
-                    </p>
-                  </div>
-                  <p className="footer-note">
-                    Сейчас `Editor Editorial v3` в проекте работает как review-слой и не пишет отдельную вторую статью.
-                  </p>
-                </div>
-              </article>
-            ))
-          ) : (
-            <article className="news-card">
-              <h3>Пока нет test run</h3>
-              <p>Запустите TEMP prompt lab из админки, чтобы увидеть side-by-side сравнение raw input и writer/editor результата.</p>
-            </article>
-          )}
         </div>
       </section>
 
@@ -621,12 +519,12 @@ export default async function StudioPage() {
                 <span>{draft ? `AI DRAFT · ${draft.generationMode}` : "AI DRAFT PENDING"}</span>
                 <h3>{draft?.title ?? "Черновик ещё не создан"}</h3>
                 <div className="compare-block">
-                  <strong>AI title</strong>
-                  <p>{draft?.title ?? "Для этой новости пока нет draft-версии."}</p>
+                  <strong>Writer title</strong>
+                  <p>{draft?.writerTitle ?? draft?.title ?? "Для этой новости пока нет draft-версии."}</p>
                 </div>
                 <div className="compare-block">
-                  <strong>AI dek</strong>
-                  <p>{draft?.dek ?? "Запустите editorial run, чтобы получить AI-версию."}</p>
+                  <strong>Writer dek</strong>
+                  <p>{draft?.writerDek ?? draft?.dek ?? "Запустите editorial run, чтобы получить AI-версию."}</p>
                 </div>
                 {draft?.status === "fallback_only" ? (
                   <p className="source-card-error">
@@ -657,10 +555,10 @@ export default async function StudioPage() {
                   {draft?.publishReason ? <p>Причина publish decision: {draft.publishReason}</p> : null}
                 </div>
                 <div className="compare-block">
-                  <strong>AI full text</strong>
+                  <strong>Writer draft</strong>
                   <div className="compare-text-surface">
-                    {draft?.body ? (
-                      draft.body
+                    {draft?.writerBody || draft?.body ? (
+                      (draft?.writerBody ?? draft?.body ?? "")
                         .split("\n\n")
                         .filter(Boolean)
                         .map((paragraph, index) => <p key={`${draft.id}-${index}`}>{paragraph}</p>)
@@ -669,6 +567,19 @@ export default async function StudioPage() {
                     )}
                   </div>
                 </div>
+                {draft && draft.writerBody && (draft.writerTitle !== draft.title || draft.writerDek !== draft.dek || draft.writerBody !== draft.body) ? (
+                  <div className="compare-block">
+                    <strong>Editor final version</strong>
+                    <p><strong>Title:</strong> {draft.title}</p>
+                    <p><strong>Dek:</strong> {draft.dek}</p>
+                    <div className="compare-text-surface">
+                      {draft.body
+                        .split("\n\n")
+                        .filter(Boolean)
+                        .map((paragraph, index) => <p key={`${draft.id}-editor-${index}`}>{paragraph}</p>)}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </article>
           ))}
@@ -789,10 +700,13 @@ export default async function StudioPage() {
         <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
           {reviews.map((review) => (
             <article key={review.id} className="news-card">
-              <span>{review.status}</span>
+              <span>{review.status} · {formatEditorDecision(review.decision)}</span>
               <h3>{review.promptName}</h3>
               <p>{review.summary}</p>
               <p>{review.notes}</p>
+              {review.revisedTitle && review.revisedDek && review.revisedBody ? (
+                <p className="footer-note">Editor вернул исправленную финальную версию для этого черновика.</p>
+              ) : null}
             </article>
           ))}
         </div>

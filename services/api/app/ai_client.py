@@ -25,8 +25,12 @@ class DraftGenerationResult:
 
 @dataclass
 class ReviewGenerationResult:
+    decision: str
     summary: str
     notes: str
+    revised_title: str | None
+    revised_dek: str | None
+    revised_body: str | None
     model: str
     generation_mode: str
 
@@ -137,7 +141,7 @@ class OpenAIEditorialClient:
         lead_block = f"source_lead: {raw_item.lead}\n" if raw_item.lead else ""
         tags_block = f"source_tags: {', '.join(raw_item.tags)}\n" if raw_item.tags else ""
         input_text = (
-            "Return only valid JSON with keys summary and notes.\n"
+            "Return only valid JSON with keys decision, summary, notes, revised_title, revised_dek, revised_body.\n"
             f"source_title: {raw_item.source_title}\n"
             f"source_summary: {raw_item.summary}\n"
             f"{lead_block}"
@@ -146,10 +150,26 @@ class OpenAIEditorialClient:
             f"draft_title: {draft.title}\n"
             f"draft_dek: {draft.dek}\n"
             f"draft_body: {draft.body}\n"
-            "Constraints: review in Russian, mention whether the draft stays close to the source, "
-            "and if data is thin, recommend a manual source check."
+            "Rules:\n"
+            "- decision must be one of: approve, light_edit, rewrite\n"
+            "- approve: the draft is already good enough; revised_* must be null or omitted\n"
+            "- light_edit: only local editorial fixes are needed; return full revised_title, revised_dek, revised_body\n"
+            "- rewrite: the draft needs a substantial rewrite; return full revised_title, revised_dek, revised_body\n"
+            "- review in Russian\n"
+            "- mention whether the draft stays close to the source\n"
+            "- if data is thin, say directly that the material should stay short\n"
+            "- do not invent facts beyond the source"
         )
-        instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
+        instructions = (
+            f"{prompt.system_prompt}\n\n"
+            f"{prompt.user_prompt_template}\n\n"
+            "Сначала оцени качество текста как редактор. Если правки не нужны, выбери approve. "
+            "Approve должен быть выбором по умолчанию, если текст фактически точный, читаемый и любые правки были бы лишь вкусовой микрополировкой. "
+            "Не переписывай материал только ради легкой стилистической шлифовки. "
+            "Не считай проблемой само по себе то, что dek частично перекликается с первым абзацем, если body дальше добавляет факты и не топчется на месте. "
+            "Если нужны точечные правки без полной переработки, выбери light_edit и верни полную исправленную версию. "
+            "Если текст нужно заметно переписать, выбери rewrite и тоже верни полную исправленную версию."
+        )
 
         try:
             payload = self._create_response(instructions=instructions, input_text=input_text)
@@ -157,14 +177,25 @@ class OpenAIEditorialClient:
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
+        decision = _clean_text(data.get("decision"))
         summary = _clean_text(data.get("summary"))
         notes = _clean_text(data.get("notes"))
+        revised_title = _clean_text(data.get("revised_title")) or None
+        revised_dek = _clean_text(data.get("revised_dek")) or None
+        revised_body = _clean_text(data.get("revised_body")) or None
+        normalized_decision = _normalize_editor_decision(decision, revised_title, revised_dek, revised_body)
         if not summary or not notes:
+            return None
+        if normalized_decision in {"light_edit", "rewrite"} and not (revised_title and revised_dek and revised_body):
             return None
 
         return ReviewGenerationResult(
+            decision=normalized_decision,
             summary=summary,
             notes=notes,
+            revised_title=revised_title,
+            revised_dek=revised_dek,
+            revised_body=revised_body,
             model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}",
         )
@@ -896,6 +927,20 @@ def _clean_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _normalize_editor_decision(
+    decision: str,
+    revised_title: str | None,
+    revised_dek: str | None,
+    revised_body: str | None,
+) -> str:
+    normalized = decision.strip().lower()
+    if normalized in {"approve", "light_edit", "rewrite"}:
+        return normalized
+    if revised_title and revised_dek and revised_body:
+        return "light_edit"
+    return "approve"
 
 
 def _build_article_search_profiles(

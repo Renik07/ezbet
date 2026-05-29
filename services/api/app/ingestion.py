@@ -1098,10 +1098,7 @@ def _parse_news_sitemap_document(
     if root_name == "sitemapindex":
         nested_entries: list[dict[str, object]] = []
         seen_urls: set[str] = set()
-        for node in root:
-            if _xml_local_name(node.tag) != "sitemap":
-                continue
-            loc = _find_child_text(node, {"loc"})
+        for loc, _ in _sorted_sitemapindex_children(root):
             if not loc or loc in seen_urls:
                 continue
             seen_urls.add(loc)
@@ -1178,10 +1175,7 @@ def _parse_generic_sitemap_document(
     if root_name == "sitemapindex":
         nested_entries: list[dict[str, object]] = []
         seen_sitemaps: set[str] = set()
-        for node in root:
-            if _xml_local_name(node.tag) != "sitemap":
-                continue
-            loc = _find_child_text(node, {"loc"})
+        for loc, _ in _sorted_sitemapindex_children(root):
             normalized_loc = _normalize_url(loc) if loc else None
             if not normalized_loc or normalized_loc in seen_sitemaps:
                 continue
@@ -1238,6 +1232,39 @@ def _parse_generic_sitemap_document(
         )
 
     return entries
+
+
+def _sorted_sitemapindex_children(root: ElementTree.Element) -> list[tuple[str, datetime | None]]:
+    children: list[tuple[str, datetime | None]] = []
+    for node in root:
+        if _xml_local_name(node.tag) != "sitemap":
+            continue
+        loc = _find_child_text(node, {"loc"})
+        if not loc:
+            continue
+        lastmod = _try_parse_datetime(_find_child_text(node, {"lastmod"}) or "")
+        children.append((loc, lastmod))
+
+    children.sort(
+        key=lambda item: (
+            item[1] is not None,
+            item[1] or datetime.min.replace(tzinfo=timezone.utc),
+            _extract_sitemap_order_hint(item[0]),
+            item[0],
+        ),
+        reverse=True,
+    )
+    return children
+
+
+def _extract_sitemap_order_hint(url: str) -> int:
+    numbers = re.findall(r"\d+", url)
+    if not numbers:
+        return -1
+    try:
+        return int(numbers[-1])
+    except ValueError:
+        return -1
 
 def _discover_ai_research_candidates_from_listing(
     source: SourceItem,

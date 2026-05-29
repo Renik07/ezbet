@@ -11,6 +11,7 @@ import {
   probeNewSourceNow,
   resetDatabaseNow,
   runEditorialSchedulerNow,
+  runManualPipelineNow,
   runEnrichmentNow,
   runEnrichmentSchedulerNow,
   runPublishNow,
@@ -96,7 +97,7 @@ export default async function AdminPage({
     pipelineRuns,
     isLive,
     liveError
-  } = await getEditorialStudioData({ includePromptLab: false });
+  } = await getEditorialStudioData();
   const promptGroups = groupPrompts(prompts);
   const sourceStateMap = new Map(sourceStates.map((state) => [state.sourceKey, state]));
   const activeSources = sources.filter((source) => source.status === "active");
@@ -152,14 +153,6 @@ export default async function AdminPage({
               className="button-primary"
               idleLabel="Запустить editorial run"
               pendingLabel="AI-редакция работает..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action="/admin/prompt-lab" method="post">
-            <PendingSubmitButton
-              className="button-primary"
-              idleLabel="TEMP prompt lab (3 новости)"
-              pendingLabel="Готовим prompt lab..."
               disabled={!isLive}
             />
           </form>
@@ -374,6 +367,14 @@ export default async function AdminPage({
               текущего source-state, а не всю ленту заново.
             </p>
           </div>
+          <form action={runManualPipelineNow}>
+            <PendingSubmitButton
+              className="button-primary"
+              idleLabel="Прогнать ingest -> full text -> editorial"
+              pendingLabel="Прогоняем pipeline..."
+              disabled={!isLive}
+            />
+          </form>
         </div>
         <div className="admin-grid" style={{ gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)" }}>
           <article className="news-card">
@@ -1077,12 +1078,14 @@ function getNoticeMessage(notice?: string, detail?: string) {
       return detail ? `Editorial scheduler выполнен: ${detail}` : "Editorial scheduler выполнен.";
     case "editorial-scheduler-run-error":
       return detail ? `Editorial scheduler не выполнен: ${detail}` : "Editorial scheduler не выполнен.";
-    case "prompt-lab-run":
+    case "manual-pipeline-run":
       return detail
-        ? `TEMP prompt lab выполнен: ${detail} После стабилизации prompt-редактора этот флоу нужно удалить или заменить.`
-        : "TEMP prompt lab выполнен. После стабилизации prompt-редактора этот флоу нужно удалить или заменить.";
-    case "prompt-lab-run-error":
-      return detail ? `TEMP prompt lab не выполнен: ${detail}` : "TEMP prompt lab не выполнен.";
+        ? `Ручной pipeline ingest -> enrichment -> editorial выполнен: ${detail}`
+        : "Ручной pipeline ingest -> enrichment -> editorial выполнен.";
+    case "manual-pipeline-run-error":
+      return detail
+        ? `Ручной pipeline ingest -> enrichment -> editorial не выполнен: ${detail}`
+        : "Ручной pipeline ingest -> enrichment -> editorial не выполнен.";
     case "publish-scheduler-saved":
       return "Настройки publish scheduler сохранены.";
     case "publish-scheduler-save-error":

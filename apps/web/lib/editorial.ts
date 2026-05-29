@@ -52,6 +52,9 @@ export type DraftArticle = {
   title: string;
   dek: string;
   body: string;
+  writerTitle?: string;
+  writerDek?: string;
+  writerBody?: string;
   category: string;
   sourceTitle: string;
   sourceUrl?: string;
@@ -73,8 +76,12 @@ export type EditorReview = {
   id: string;
   draftId: string;
   status: string;
+  decision: string;
   summary: string;
   notes: string;
+  revisedTitle?: string;
+  revisedDek?: string;
+  revisedBody?: string;
   promptConfigId: string;
   promptName: string;
   model: string;
@@ -232,53 +239,6 @@ export type PipelineRun = {
   error?: string;
 };
 
-export type PromptLabItem = {
-  id: string;
-  runId: string;
-  rawItemId: string;
-  sourceTitle: string;
-  sourceUrl?: string;
-  rawTitle: string;
-  rawSummary: string;
-  rawFullText?: string;
-  rawLead?: string;
-  rawUrl?: string;
-  rawPublishedAt: string;
-  importanceScore: number;
-  triageLabel: string;
-  writerTitle: string;
-  writerDek: string;
-  writerBody: string;
-  writerModel: string;
-  writerGenerationMode: string;
-  writerPromptId: string;
-  writerPromptName: string;
-  editorSummary: string;
-  editorNotes: string;
-  editorModel: string;
-  editorPromptId: string;
-  editorPromptName: string;
-  qualityGateDecision: string;
-  qualityGateReason: string;
-  createdAt: string;
-};
-
-export type PromptLabRun = {
-  id: string;
-  status: string;
-  requestedLimit: number;
-  selectedCount: number;
-  freshCount: number;
-  reusedCount: number;
-  writerPromptId: string;
-  writerPromptName: string;
-  editorPromptId: string;
-  editorPromptName: string;
-  notes: string;
-  createdAt: string;
-  items: PromptLabItem[];
-};
-
 export type EditorialStudioData = {
   prompts: PromptConfig[];
   rawItems: RawItem[];
@@ -293,7 +253,6 @@ export type EditorialStudioData = {
   editorialScheduler: EditorialSchedulerSettings;
   publishScheduler: PublishSchedulerSettings;
   pipelineRuns: PipelineRun[];
-  promptLab: PromptLabRun;
   isLive: boolean;
   liveError?: string;
 };
@@ -365,6 +324,10 @@ const fallbackDrafts: DraftArticle[] = [
     dek: "Fallback-черновик показывает, как будет выглядеть AI-редакция на следующем этапе.",
     body:
       "Сначала ingestion собирает новость и сохраняет ее в raw_items.\n\nЗатем editorial-слой превращает короткий summary в компактный черновик.\n\nПосле review такой материал можно либо отправить в публикацию, либо отдать редактору на ручную доработку.",
+    writerTitle: "Черновик статьи для MVP-редакции",
+    writerDek: "Fallback-черновик показывает, как будет выглядеть AI-редакция на следующем этапе.",
+    writerBody:
+      "Сначала ingestion собирает новость и сохраняет ее в raw_items.\n\nЗатем editorial-слой превращает короткий summary в компактный черновик.\n\nПосле review такой материал можно либо отправить в публикацию, либо отдать редактору на ручную доработку.",
     category: "general",
     sourceTitle: "fallback source",
     sourceUrl: "https://example.com",
@@ -388,6 +351,7 @@ const fallbackReviews: EditorReview[] = [
     id: "review:fallback:1",
     draftId: "draft:fallback:1",
     status: "reviewed",
+    decision: "approve",
     summary: "Структура читается, factual expansion не замечен.",
     notes: "Fallback review",
     promptConfigId: "prompt:editor:v1",
@@ -555,54 +519,6 @@ const fallbackPublishScheduler: PublishSchedulerSettings = {
 };
 
 const fallbackPipelineRuns: PipelineRun[] = [];
-const fallbackPromptLab: PromptLabRun = {
-  id: "prompt-lab:fallback",
-  status: "idle",
-  requestedLimit: 3,
-  selectedCount: 1,
-  freshCount: 0,
-  reusedCount: 1,
-  writerPromptId: "prompt:writer:v1",
-  writerPromptName: "Writer MVP v1",
-  editorPromptId: "prompt:editor:v1",
-  editorPromptName: "Editor MVP v1",
-  notes: "TEMP prompt lab flow for rapid prompt testing. Remove or replace this path after prompt tuning is complete.",
-  createdAt: "2026-05-05T10:00:00.000Z",
-  items: [
-    {
-      id: "prompt-lab:fallback:item:1",
-      runId: "prompt-lab:fallback",
-      rawItemId: "raw:fallback:1",
-      sourceTitle: "fallback source",
-      sourceUrl: "https://example.com",
-      rawTitle: "Исходная RSS-новость для compare-режима",
-      rawSummary: "Это fallback summary, который показывает, как мы будем сравнивать сырой RSS-вход и итоговый AI draft.",
-      rawFullText:
-        "Это fallback full text. Здесь должен быть полный текст исходной новости или полный текст, вытянутый со страницы-источника.",
-      rawLead: "Fallback lead для demo prompt lab.",
-      rawUrl: "https://example.com/news/1",
-      rawPublishedAt: "2026-05-03T00:00:00.000Z",
-      importanceScore: 72,
-      triageLabel: "medium",
-      writerTitle: "Черновик статьи для MVP-редакции",
-      writerDek: "Fallback-черновик показывает, как будет выглядеть AI-редакция на следующем этапе.",
-      writerBody:
-        "Сначала ingestion собирает новость и сохраняет ее в raw_items.\n\nЗатем writer prompt превращает короткий summary в читабельный черновик.",
-      writerModel: "local-editor-mvp",
-      writerGenerationMode: "template",
-      writerPromptId: "prompt:writer:v1",
-      writerPromptName: "Writer MVP v1",
-      editorSummary: "Структура читается, factual expansion не замечен.",
-      editorNotes: "Editor prompt в текущем флоу только ревьюит текст и не пишет отдельную вторую статью.",
-      editorModel: "local-editor-mvp",
-      editorPromptId: "prompt:editor:v1",
-      editorPromptName: "Editor MVP v1",
-      qualityGateDecision: "hold",
-      qualityGateReason: "Fallback preview не публикуется автоматически.",
-      createdAt: "2026-05-05T10:00:00.000Z"
-    }
-  ]
-};
 
 async function loadStudioResource<T>(
   baseUrl: string,
@@ -624,9 +540,8 @@ async function loadStudioResource<T>(
   }
 }
 
-export async function getEditorialStudioData(options?: { includePromptLab?: boolean }): Promise<EditorialStudioData> {
+export async function getEditorialStudioData(): Promise<EditorialStudioData> {
   const baseUrl = resolveApiBaseUrl();
-  const includePromptLab = options?.includePromptLab ?? true;
 
   if (!baseUrl) {
     return {
@@ -643,7 +558,6 @@ export async function getEditorialStudioData(options?: { includePromptLab?: bool
       editorialScheduler: fallbackEditorialScheduler,
       publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
-      promptLab: fallbackPromptLab,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
     };
@@ -662,8 +576,7 @@ export async function getEditorialStudioData(options?: { includePromptLab?: bool
     enrichmentSchedulerResult,
     editorialSchedulerResult,
     publishSchedulerResult,
-    pipelineRunsResult,
-    promptLabResult
+    pipelineRunsResult
   ] = await Promise.all([
     loadStudioResource(baseUrl, "/api/v1/prompts", (payload) => (payload as { items: PromptConfig[] }).items, fallbackPrompts),
     loadStudioResource(
@@ -712,15 +625,7 @@ export async function getEditorialStudioData(options?: { includePromptLab?: bool
       "/api/v1/pipeline-runs?limit=12",
       (payload) => (payload as { items: PipelineRun[] }).items,
       fallbackPipelineRuns
-    ),
-    includePromptLab
-      ? loadStudioResource(
-          baseUrl,
-          "/api/v1/prompt-lab/latest",
-          (payload) => (payload as { item: PromptLabRun }).item,
-          fallbackPromptLab
-        )
-      : Promise.resolve({ data: fallbackPromptLab, error: undefined })
+    )
   ]);
 
   const partialErrors = [
@@ -736,11 +641,10 @@ export async function getEditorialStudioData(options?: { includePromptLab?: bool
     enrichmentSchedulerResult.error,
     editorialSchedulerResult.error,
     publishSchedulerResult.error,
-    pipelineRunsResult.error,
-    includePromptLab ? promptLabResult.error : undefined
+    pipelineRunsResult.error
   ].filter((value): value is string => Boolean(value));
 
-  const expectedResourceCount = includePromptLab ? 14 : 13;
+  const expectedResourceCount = 13;
   const isLive = partialErrors.length < expectedResourceCount;
 
   return {
@@ -757,7 +661,6 @@ export async function getEditorialStudioData(options?: { includePromptLab?: bool
     editorialScheduler: editorialSchedulerResult.data,
     publishScheduler: publishSchedulerResult.data,
     pipelineRuns: pipelineRunsResult.data,
-    promptLab: promptLabResult.data,
     isLive,
     liveError: partialErrors.length ? partialErrors.join("; ") : undefined
   };

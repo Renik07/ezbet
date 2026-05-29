@@ -128,26 +128,6 @@ export async function runEditorialNow() {
   redirect("/admin?notice=editorial-run");
 }
 
-export async function runPromptLabNow() {
-  let detail = "Выбрано 0 новостей.";
-  try {
-    const response = await apiPost("/api/v1/prompt-lab/run?limit=3", {});
-    const payload = (await response.json()) as {
-      item?: { selectedCount?: number; freshCount?: number; reusedCount?: number };
-    };
-    const selected = payload.item?.selectedCount ?? 0;
-    const fresh = payload.item?.freshCount ?? 0;
-    const reused = payload.item?.reusedCount ?? 0;
-    detail = `Выбрано ${selected}, свежих ${fresh}, из пула ${reused}.`;
-  } catch (error) {
-    redirectWithError("prompt-lab-run-error", error);
-  }
-
-  revalidatePath("/admin");
-  revalidatePath("/studio");
-  redirect(`/admin?notice=prompt-lab-run&detail=${encodeURIComponent(detail)}`);
-}
-
 export async function runContentPlannerNow() {
   try {
     await apiPost("/api/v1/content-plan/run?limit=10", {});
@@ -326,6 +306,58 @@ export async function runEditorialSchedulerNow() {
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=editorial-scheduler-run&detail=${encodeURIComponent(detail)}`);
+}
+
+export async function runManualPipelineNow() {
+  let detail = "Сбор 0 · enrichment 0/0 · editorial 0/0/0.";
+  try {
+    const schedulerResponse = await apiPost("/api/v1/scheduler/run", {});
+    const schedulerPayload = (await schedulerResponse.json()) as {
+      ran?: boolean;
+      reason?: string;
+      rawItems?: number;
+      ingested?: number;
+    };
+    if (!schedulerPayload.ran) {
+      throw new Error(`Scheduler не запустился: ${schedulerPayload.reason ?? "unknown"}`);
+    }
+
+    const enrichmentResponse = await apiPost("/api/v1/enrichment-scheduler/run", {});
+    const enrichmentPayload = (await enrichmentResponse.json()) as {
+      ran?: boolean;
+      reason?: string;
+      processed?: number;
+      enriched?: number;
+    };
+    if (!enrichmentPayload.ran) {
+      throw new Error(`Enrichment scheduler не запустился: ${enrichmentPayload.reason ?? "unknown"}`);
+    }
+
+    const editorialResponse = await apiPost("/api/v1/editorial-scheduler/run", {});
+    const editorialPayload = (await editorialResponse.json()) as {
+      ran?: boolean;
+      reason?: string;
+      planned?: number;
+      generated?: number;
+      reviewed?: number;
+    };
+    if (!editorialPayload.ran) {
+      throw new Error(`Editorial scheduler не запустился: ${editorialPayload.reason ?? "unknown"}`);
+    }
+
+    detail =
+      `Сбор ${schedulerPayload.rawItems ?? schedulerPayload.ingested ?? 0} · ` +
+      `enrichment ${enrichmentPayload.processed ?? 0}/${enrichmentPayload.enriched ?? 0} · ` +
+      `editorial ${editorialPayload.planned ?? 0}/${editorialPayload.generated ?? 0}/${editorialPayload.reviewed ?? 0}.`;
+  } catch (error) {
+    redirectWithError("manual-pipeline-run-error", error);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect(`/admin?notice=manual-pipeline-run&detail=${encodeURIComponent(detail)}`);
 }
 
 export async function savePublishSchedulerSettingsNow(formData: FormData) {
