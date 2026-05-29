@@ -309,46 +309,14 @@ export async function runEditorialSchedulerNow() {
 }
 
 export async function runManualPipelineNow() {
-  let detail = "Сбор 0 · enrichment 0/0 · editorial 0/0/0.";
+  let detail = "Pipeline запущен в фоне. Обновите Admin или Studio через несколько секунд.";
   try {
-    const schedulerResponse = await apiPost("/api/v1/scheduler/run", {});
-    const schedulerPayload = (await schedulerResponse.json()) as {
-      ran?: boolean;
-      reason?: string;
-      rawItems?: number;
-      ingested?: number;
-    };
-    if (!schedulerPayload.ran) {
-      throw new Error(`Scheduler не запустился: ${schedulerPayload.reason ?? "unknown"}`);
+    const response = await apiPost("/api/v1/pipeline/start", {});
+    const payload = (await response.json()) as { started?: boolean; reason?: string; message?: string };
+    if (!payload.started) {
+      throw new Error(`Pipeline не запустился: ${payload.message ?? payload.reason ?? "unknown"}`);
     }
-
-    const enrichmentResponse = await apiPost("/api/v1/enrichment-scheduler/run", {});
-    const enrichmentPayload = (await enrichmentResponse.json()) as {
-      ran?: boolean;
-      reason?: string;
-      processed?: number;
-      enriched?: number;
-    };
-    if (!enrichmentPayload.ran) {
-      throw new Error(`Enrichment scheduler не запустился: ${enrichmentPayload.reason ?? "unknown"}`);
-    }
-
-    const editorialResponse = await apiPost("/api/v1/editorial-scheduler/run", {});
-    const editorialPayload = (await editorialResponse.json()) as {
-      ran?: boolean;
-      reason?: string;
-      planned?: number;
-      generated?: number;
-      reviewed?: number;
-    };
-    if (!editorialPayload.ran) {
-      throw new Error(`Editorial scheduler не запустился: ${editorialPayload.reason ?? "unknown"}`);
-    }
-
-    detail =
-      `Сбор ${schedulerPayload.rawItems ?? schedulerPayload.ingested ?? 0} · ` +
-      `enrichment ${enrichmentPayload.processed ?? 0}/${enrichmentPayload.enriched ?? 0} · ` +
-      `editorial ${editorialPayload.planned ?? 0}/${editorialPayload.generated ?? 0}/${editorialPayload.reviewed ?? 0}.`;
+    detail = payload.message ?? detail;
   } catch (error) {
     redirectWithError("manual-pipeline-run-error", error);
   }

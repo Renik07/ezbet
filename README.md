@@ -1150,9 +1150,9 @@ npm run scheduler:tick (npm run scheduler:loop)
 # PROD
 cd /opt/ezbet
 git pull
+docker compose -f docker-compose.prod.yml up -d --build
 
 # LOGS
-docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "SSL|IncompleteRead|run_failed|scheduler_run_failed"
 docker compose -f docker-compose.prod.yml logs --since=12h api | grep pipeline_event
 docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "source_result|Unhandled source ingestion error|scheduler_run_failed|run_failed"

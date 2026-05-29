@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import threading
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -107,6 +108,8 @@ PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
+PIPELINE_RUN_LOCK = threading.Lock()
+PIPELINE_RUN_RUNNING = False
 
 
 def _run_id(phase: str) -> str:
@@ -864,6 +867,44 @@ def run_pipeline_tick() -> PipelineSchedulerRunResponse:
 @app.post("/api/v1/pipeline/run", response_model=PipelineSchedulerRunResponse)
 def run_pipeline_now() -> PipelineSchedulerRunResponse:
     return _run_pipeline_scheduler(force=True)
+
+
+@app.post("/api/v1/pipeline/start")
+def start_pipeline_now() -> dict[str, object]:
+    global PIPELINE_RUN_RUNNING
+
+    with PIPELINE_RUN_LOCK:
+        if PIPELINE_RUN_RUNNING:
+            return {
+                "started": False,
+                "reason": "already_running",
+                "message": "Pipeline уже выполняется в фоне.",
+            }
+        PIPELINE_RUN_RUNNING = True
+
+    started_at = datetime.now(timezone.utc)
+
+    def _worker() -> None:
+        global PIPELINE_RUN_RUNNING
+        try:
+            _run_pipeline_scheduler(force=True)
+        except Exception:
+            logger.exception("Background pipeline run failed")
+        finally:
+            with PIPELINE_RUN_LOCK:
+                PIPELINE_RUN_RUNNING = False
+
+    threading.Thread(
+        target=_worker,
+        daemon=True,
+        name=f"pipeline-run-{started_at.strftime('%Y%m%d%H%M%S%f')}",
+    ).start()
+    return {
+        "started": True,
+        "reason": "background_started",
+        "message": "Pipeline запущен в фоне. Обновите Admin или Studio через несколько секунд.",
+        "startedAt": started_at.isoformat(),
+    }
 
 
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
