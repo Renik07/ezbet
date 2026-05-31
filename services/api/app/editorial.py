@@ -438,11 +438,6 @@ def evaluate_quality_gate(
     title = draft.title.strip()
     dek = draft.dek.strip()
     body = draft.body.strip()
-    summary = raw_item.summary.strip()
-    source_title = raw_item.title.strip()
-    source_full_text_paragraphs = unique_paragraphs(raw_item.full_text or "")
-    source_full_text = " ".join(source_full_text_paragraphs)
-
     if not title or not dek or not body:
         return QualityGateResult("hold", "Quality gate: отсутствует обязательная часть материала.")
 
@@ -470,30 +465,21 @@ def evaluate_quality_gate(
 
     paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
 
-    if title == raw_item.title and dek == raw_item.summary and draft.generation_mode == "template":
-        return QualityGateResult("rewrite", "Quality gate: материал слишком близок к сырому RSS и требует rewrite pass.")
-
     repeated_paragraphs = len(set(paragraphs)) != len(paragraphs)
     if repeated_paragraphs:
         return QualityGateResult("rewrite", "Quality gate: в тексте обнаружены повторяющиеся абзацы.")
 
     semantic_repetition = detect_semantic_repetition(paragraphs)
-    if semantic_repetition is not None:
+    if semantic_repetition is not None and len(paragraphs) <= 2 and raw_item.triage_label == "low":
         return QualityGateResult("rewrite", f"Quality gate: {semantic_repetition}")
 
     informative_sentence_count = count_informative_sentences(body)
-    source_fact_units = estimate_source_fact_units(raw_item)
 
     if informative_sentence_count == 0:
         return QualityGateResult("hold", "Quality gate: в тексте не хватает самостоятельной фактуры для публикации.")
 
     if informative_sentence_count == 1:
         weak_news_marker = detect_weak_news_marker(title=title, dek=dek, body=body)
-        if source_fact_units >= 3:
-            return QualityGateResult(
-                "rewrite",
-                "Quality gate: материал слишком сильно сжал содержательный источник и потерял фактуру.",
-            )
         if weak_news_marker is not None and raw_item.triage_label != "high":
             return QualityGateResult(
                 "hold",
@@ -507,37 +493,6 @@ def evaluate_quality_gate(
                 "hold",
                 "Quality gate: low-priority материал получился слишком бедным по фактам для автопубликации.",
             )
-
-    source_similarity = compute_similarity(f"{draft.title} {draft.dek} {body}", f"{raw_item.title} {raw_item.summary}")
-    if source_similarity >= 0.82:
-        return QualityGateResult("rewrite", "Quality gate: итоговый текст слишком близок к исходному source summary.")
-
-    editor_signal = detect_editor_quality_signal(review)
-    if editor_signal == "повтор":
-        # Strong repetition inside the body is already handled above via paragraph/sentence checks.
-        # A generic editor note about repetition should not by itself force rewrite for otherwise
-        # serviceable articles with enough fact density.
-        if informative_sentence_count <= 1:
-            return QualityGateResult(
-                "hold",
-                "Quality gate: editor review сигнализирует о повторе в слишком бедном по фактам материале.",
-            )
-        if raw_item.triage_label == "low" and source_fact_units <= 2:
-            return QualityGateResult(
-                "hold",
-                "Quality gate: editor review сигнализирует о повторе в слабом low-priority материале.",
-            )
-        editor_signal = None
-    if editor_signal is not None and raw_item.triage_label != "high":
-        if source_fact_units >= 3 or informative_sentence_count <= 1:
-            return QualityGateResult(
-                "rewrite",
-                f"Quality gate: editor review сигнализирует о проблеме качества ({editor_signal}).",
-            )
-        return QualityGateResult(
-            "hold",
-            f"Quality gate: editor review сигнализирует о пограничном качестве материала ({editor_signal}).",
-        )
 
     duplicate_guard = evaluate_published_duplicate_guard(draft, similarity_candidates)
     if duplicate_guard is not None:

@@ -369,7 +369,7 @@
 
 - не делать ставку на ненадежные `AI detectors`
 - ориентироваться не на "маскировку под человека", а на полезность, оригинальность и качество текста
-- если quality gate не пройден, материал отправляется на `rewrite pass` или в fallback-режим
+- если quality gate не пройден, материал уходит в `rewrite_needed / hold / fallback_only`; отдельный `rewrite-pass` не используется, потому что роль повторной правки уже покрывает `Editor`
 
 ### 5.7 SEO Agent
 
@@ -631,7 +631,8 @@
 - [x] prompt management в админке
 - [x] read-only studio для просмотра prompts, drafts и reviews
 - [x] quality gate после writer/editor
-- [x] rewrite pass для слабых или слишком шаблонных текстов
+  Сейчас это узкий guardrail для auto-publish: он ловит template fallback, служебный/verification-мусор, явные повторы, совсем пустые тексты и near-duplicate перед публикацией, но не должен заново играть роль второго редактора поверх `Editor`.
+- [x] повторная правка текста уже встроена в связку `Writer -> Editor`: `Editor` может `approve`, `light_edit` или `rewrite` без отдельного `rewrite-pass`
 - [x] similarity check между draft и source summary
 - [x] similarity check между опубликованными материалами
 
@@ -707,10 +708,13 @@
 - [x] мягкий shortlist для enrichment scheduler: сначала более приоритетные и более неполные raw_items, но без жесткого отрезания свежих `low`
 - [x] editorial scheduler как отдельный автоматический этап после enrichment
 - [x] вернуть более строгий shortlist для planner/editorial: `high/medium` идут в приоритете, а `low` попадают только как ограниченный fallback, чтобы auto-pipeline не забивался слабыми новостями подряд
-- [ ] вернуть rewrite-pass в editorial scheduler после этапа тестов; сейчас он временно отключен, чтобы не раздувать длительность одного прогона
+- [x] отдельный `rewrite-pass` сознательно не возвращаем: повторную правку уже выполняет `Editor`, а третий текстовый проход только усложнил бы pipeline без явной пользы
+- [x] `Editor` теперь чаще оставляет хороший writer-draft без правок: `approve` стал дефолтным выбором, а косметические `light_edit` без реальных изменений схлопываются обратно в `approve`
+- [x] `quality gate` сознательно сужен до роли guardrail: он больше не дублирует редакторскую оценку качества поверх `Editor`, а в основном ловит garbage/template/verification, совсем пустые тексты и pre-publish duplicates
 - [x] временный `TEMP Prompt Lab` flow и связанные с ним route/UI notices удалены; это был тестовый контур, а не часть финального production-flow
 - [x] базовая run history по pipeline-этапам: ingest / enrichment / editorial
 - [x] structured logging по этапам с `run_id`, `source`, `counts`, `duration`, `status`, `error_reason`: единый `pipeline_event`-формат для ingest / enrichment / editorial / publish / scheduler / pipeline-run
+- [x] ручной запуск полного pipeline из `/admin` переведен в background-start: кнопка не держит браузер открытым до конца долгого `ingest -> enrichment -> editorial` прогона
 - [~] per-item diagnostics: базовый слой уже есть в `/studio` (duplicate, enrichment, content plan, editorial/publish state); дальше добавить причины именно непопадания в auto-publish rules
 - [x] duplicate diagnostics by stage: в UI видно, где новость стала дублем — при первичной загрузке, после enrichment или перед публикацией
 - [x] publish rules + отдельный publish scheduler: editorial теперь только готовит `ready_for_publish`, а отдельный publish-этап публикует только `publish_auto`
@@ -719,8 +723,11 @@
 - [x] importance scoring v2: лучше учитывать свежесть, источник, сущности и тип инфоповода
 - [x] shortlist AI rerank только для верхних кандидатов, а не для всего потока
 - [x] dedup v2: near-duplicate detection по недавнему окну, а не только по URL/title
+- [x] duplicate windows для `ingest` и `after_enrichment` сужены до `24h`, чтобы hourly production-flow не сравнивал лишний исторический хвост
+- [x] exact dedupe по `dedupe_key` больше не читает всю историю `raw_items` в память: lookup идет только по ключам текущего batch и опирается на индекс `raw_items.dedupe_key`
 - [x] свести `template fallback` к аварийному режиму, а не к обычному пути публикации
 - [x] ранняя остановка по watermark для `rss` и `news sitemap`, чтобы старые новости не раздували `Найдено`
+- [x] для `championat-news` добавлен фильтр по спортивным top-level разделам URL, чтобы news sitemap не тащил lifestyle/health/games-контент в основной sports-flow
 - [x] усиленные понятные причины остановки по этапам pipeline в `studio`: почему `full_text` не получен, почему `editorial` не стартовал, почему `publish` не случился
 - [x] локальный `pipeline:loop` для полного автотеста цепочки `ingest -> enrichment -> editorial -> publish`
 - [x] очереди pipeline в `/admin`: видно, сколько новостей ждут `full text`, `editorial` и `publish`, и какие именно элементы стоят в очереди

@@ -107,6 +107,47 @@ PREFERRED_URL_SEGMENTS = {
     "match",
 }
 
+CHAMPIONAT_ALLOWED_TOP_LEVEL_SECTIONS = {
+    "football",
+    "hockey",
+    "basketball",
+    "tennis",
+    "boxing",
+    "mma",
+    "auto",
+    "f1",
+    "biathlon",
+    "skiing",
+    "figure-skating",
+    "volleyball",
+    "handball",
+    "athletics",
+    "swimming",
+    "chess",
+    "other",
+}
+
+CHAMPIONAT_BLOCKED_TOP_LEVEL_SECTIONS = {
+    "lifestyle",
+    "health",
+    "medicine",
+    "food",
+    "travel",
+    "science",
+    "tech",
+    "technology",
+    "business",
+    "auto-world",
+    "esports",
+    "cybersport",
+    "games",
+    "game",
+    "movies",
+    "music",
+    "showbiz",
+    "culture",
+}
+
 ARTICLE_CONTAINER_TERMS = (
     "article",
     "story",
@@ -1133,6 +1174,8 @@ def _parse_news_sitemap_document(
         normalized_url = _normalize_url(loc) if loc else None
         if not normalized_url or normalized_url in seen_urls:
             continue
+        if not _is_allowed_news_sitemap_article_url(source, normalized_url):
+            continue
 
         news_node = _find_child(node, {"news"})
         title = _find_child_text(news_node, {"title"}) if news_node is not None else None
@@ -1162,6 +1205,34 @@ def _parse_news_sitemap_document(
         )
 
     return entries
+
+
+def _is_allowed_news_sitemap_article_url(source: SourceItem, url: str) -> bool:
+    normalized_source_key = source.key.strip().lower()
+    if normalized_source_key == "championat-news":
+        return _is_allowed_championat_news_url(url)
+    return True
+
+
+def _is_allowed_championat_news_url(url: str) -> bool:
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if "championat.com" not in host:
+        return True
+
+    segments = [segment for segment in parts.path.strip("/").lower().split("/") if segment]
+    if not segments:
+        return False
+
+    top_level = segments[0]
+    if top_level in CHAMPIONAT_BLOCKED_TOP_LEVEL_SECTIONS:
+        return False
+    if top_level in CHAMPIONAT_ALLOWED_TOP_LEVEL_SECTIONS:
+        return True
+
+    # Championship article urls often start with the sports section.
+    # Unknown top-level sections are treated conservatively and skipped.
+    return False
 
 
 def _parse_generic_sitemap_document(

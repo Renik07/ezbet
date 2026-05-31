@@ -263,6 +263,13 @@ class NewsRepository:
                 )
                 cursor.execute(
                     """
+                    CREATE INDEX IF NOT EXISTS idx_raw_items_dedupe_key
+                    ON raw_items (dedupe_key)
+                    WHERE dedupe_key <> ''
+                    """
+                )
+                cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS source_sync_state (
                         source_key TEXT PRIMARY KEY,
                         source_title TEXT NOT NULL,
@@ -558,6 +565,13 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS dedupe_key TEXT NOT NULL DEFAULT ''"
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_raw_items_dedupe_key
+                    ON raw_items (dedupe_key)
+                    WHERE dedupe_key <> ''
+                    """
                 )
                 cursor.execute(
                     "ALTER TABLE raw_items ADD COLUMN IF NOT EXISTS importance_score INTEGER NOT NULL DEFAULT 0"
@@ -3179,15 +3193,25 @@ class NewsRepository:
     def insert_raw_items(self, items: list[RawItem]) -> InsertRawItemsResult:
         inserted = 0
         skipped_items: list[dict[str, str]] = []
+        dedupe_keys = sorted({item.dedupe_key for item in items if item.dedupe_key})
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT dedupe_key, id, title FROM raw_items WHERE dedupe_key <> ''")
-                known_dedupe_map = {
-                    str(row[0]): (str(row[1]), str(row[2] or ""))
-                    for row in cursor.fetchall()
-                }
-                recent_similarity_candidates = self._load_recent_dedup_candidates(cursor, window_hours=48)
+                known_dedupe_map: dict[str, tuple[str, str]] = {}
+                if dedupe_keys:
+                    cursor.execute(
+                        """
+                        SELECT dedupe_key, id, title
+                        FROM raw_items
+                        WHERE dedupe_key = ANY(%s)
+                        """,
+                        (dedupe_keys,),
+                    )
+                    known_dedupe_map = {
+                        str(row[0]): (str(row[1]), str(row[2] or ""))
+                        for row in cursor.fetchall()
+                    }
+                recent_similarity_candidates = self._load_recent_dedup_candidates(cursor, window_hours=24)
                 pending_similarity_candidates: dict[str, list[tuple[str, str, str]]] = {}
 
                 for item in items:
@@ -3439,7 +3463,7 @@ class NewsRepository:
         self,
         raw_item_id: str,
         *,
-        window_hours: int = 72,
+        window_hours: int = 24,
     ) -> RawItem | None:
         item = self.get_raw_item(raw_item_id)
         if item is None or item.is_duplicate:
