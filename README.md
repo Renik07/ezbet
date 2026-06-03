@@ -1167,6 +1167,9 @@ npm run dev:api
 npm run dev:web
 npm run scheduler:tick (npm run scheduler:loop)
 
+# ENV
+cd /opt/ezbet
+nano .env.save
 
 # PROD
 cd /opt/ezbet
