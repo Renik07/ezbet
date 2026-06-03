@@ -17,7 +17,7 @@ services:
       OPENAI_WEB_SEARCH_LIVE: ${OPENAI_WEB_SEARCH_LIVE:-true}
       OPENAI_WEB_SEARCH_CONTEXT_SIZE: ${OPENAI_WEB_SEARCH_CONTEXT_SIZE:-medium}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   web:
     build:
@@ -30,7 +30,14 @@ services:
       EZBET_ADMIN_PASSWORD: ${EZBET_ADMIN_PASSWORD}
       EZBET_ADMIN_SESSION_SECRET: ${EZBET_ADMIN_SESSION_SECRET}
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN}
-    ports:
-      - "3000:3000"
     depends_on:
       - api
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro

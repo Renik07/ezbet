@@ -992,6 +992,11 @@ Production env checklist перед первым controlled prod-run:
 
 Позже можно вынести `Postgres` и storage в managed services.
 
+Текущий `docker-compose.prod.yml` рассчитан именно на такой контур:
+- наружу публикуется `nginx` на `80`
+- `web` доступен внутри docker-сети и обслуживается через reverse proxy
+- `api` проброшен только на `127.0.0.1:8000` для локальной server-side связи и отладки на сервере
+
 ### Почему такой деплой хорош для старта
 
 - недорого
