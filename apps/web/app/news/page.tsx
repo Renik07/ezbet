@@ -1,7 +1,7 @@
+import Link from "next/link";
 import { NewsCard } from "@/components/news-card";
 import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
-import Link from "next/link";
 
 const NEWS_PER_PAGE = 20;
 
@@ -65,9 +65,9 @@ export default async function NewsPage({
           {totalPages > 1 ? (
             <div className="pagination-row">
               {currentPage > 1 ? (
-                <Link className="button-secondary" href={buildNewsPageHref(currentPage - 1, query)}>
+                <a className="button-secondary" href={buildNewsPageHref(currentPage - 1, query)}>
                   Назад
-                </Link>
+                </a>
               ) : (
                 <span className="button-secondary is-disabled" aria-disabled="true">
                   Назад
@@ -77,9 +77,9 @@ export default async function NewsPage({
                 Страница {currentPage} из {totalPages}
               </span>
               {currentPage < totalPages ? (
-                <Link className="button-secondary" href={buildNewsPageHref(currentPage + 1, query)}>
+                <a className="button-secondary" href={buildNewsPageHref(currentPage + 1, query)}>
                   Вперед
-                </Link>
+                </a>
               ) : (
                 <span className="button-secondary is-disabled" aria-disabled="true">
                   Вперед

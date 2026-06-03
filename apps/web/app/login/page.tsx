@@ -29,13 +29,13 @@ export default async function LoginPage({
   searchParams?: Promise<LoginSearchParams>;
 }) {
   const params = (await searchParams) ?? {};
+  const nextRoute = params.next?.startsWith("/studio") ? "/studio" : "/admin";
 
   if (await isAdminAuthenticated()) {
-    redirect(params.next && params.next.startsWith("/") ? params.next : "/admin");
+    redirect(nextRoute);
   }
 
   const notice = getLoginNotice(params.notice);
-  const nextPath = params.next && params.next.startsWith("/") ? params.next : "/admin";
   const authConfigured = isAdminAuthConfigured();
 
   return (
@@ -51,7 +51,7 @@ export default async function LoginPage({
           </p>
         ) : null}
         <form className="prompt-form" action={loginAdminNow} style={{ marginTop: 24 }}>
-          <input type="hidden" name="next" value={nextPath} />
+          <input type="hidden" name="next" value={nextRoute} />
           <label className="field">
             <span>Логин</span>
             <input name="username" autoComplete="username" required />

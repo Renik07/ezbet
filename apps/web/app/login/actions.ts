@@ -6,6 +6,7 @@ import { createAdminSession, isAdminAuthConfigured, validateAdminCredentials } f
 
 export async function loginAdminNow(formData: FormData) {
   const nextPath = String(formData.get("next") ?? "/admin") || "/admin";
+  const nextRoute = nextPath.startsWith("/studio") ? "/studio" : "/admin";
   const username = String(formData.get("username") ?? "").trim();
   const password = String(formData.get("password") ?? "");
 
@@ -15,9 +16,9 @@ export async function loginAdminNow(formData: FormData) {
 
   const isValid = await validateAdminCredentials(username, password);
   if (!isValid) {
-    redirect(`/login?notice=${encodeURIComponent("invalid-credentials")}&next=${encodeURIComponent(nextPath)}`);
+    redirect(`/login?notice=${encodeURIComponent("invalid-credentials")}&next=${encodeURIComponent(nextRoute)}`);
   }
 
   await createAdminSession();
-  redirect(nextPath.startsWith("/") ? nextPath : "/admin");
+  redirect(nextRoute);
 }

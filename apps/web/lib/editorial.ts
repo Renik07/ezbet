@@ -140,6 +140,7 @@ export type SourceSyncState = {
   supportsSitemap: boolean;
   supportsScraping: boolean;
   lastProbeFullTextOk: boolean;
+  lastProbeFullTextMethod?: string;
   lastProbeLeadOk: boolean;
   lastProbeTagsCount: number;
   lastProbeSampleTitle?: string;
@@ -314,6 +315,7 @@ const fallbackRawItems: RawItem[] = [
     publishedAt: "2026-05-03T00:00:00.000Z",
     fetchedAt: "2026-05-03T00:00:00.000Z",
     importanceScore: 72,
+    scoreBreakdown: ["База: +18", "Свежесть: +28", "Категория: +6", "Итог: 72/100"],
     triageLabel: "medium",
     isDuplicate: false
   }
@@ -417,6 +419,7 @@ const fallbackSourceStates: SourceSyncState[] = [
     supportsSitemap: false,
     supportsScraping: false,
     lastProbeFullTextOk: true,
+    lastProbeFullTextMethod: "direct_parser",
     lastProbeLeadOk: true,
     lastProbeTagsCount: 3,
     lastProbeSampleTitle: "Пример новости Sports.ru",
@@ -449,6 +452,7 @@ const fallbackSourceStates: SourceSyncState[] = [
     supportsSitemap: false,
     supportsScraping: true,
     lastProbeFullTextOk: true,
+    lastProbeFullTextMethod: "direct_parser",
     lastProbeLeadOk: true,
     lastProbeTagsCount: 2,
     lastProbeSampleTitle: "Пример новости Спорт-Экспресс",
@@ -482,7 +486,7 @@ const fallbackSources: SourceConfig[] = [
 const fallbackScheduler: SchedulerSettings = {
   enabled: false,
   intervalMinutes: 60,
-  batchSize: 5,
+  batchSize: 100,
   runEnrichment: false,
   lastStatus: "idle",
   lastFoundCount: 0,
@@ -494,7 +498,7 @@ const fallbackScheduler: SchedulerSettings = {
 const fallbackEnrichmentScheduler: EnrichmentSchedulerSettings = {
   enabled: false,
   intervalMinutes: 60,
-  batchSize: 10,
+  batchSize: 20,
   lastStatus: "idle",
   lastProcessedCount: 0,
   lastEnrichedCount: 0,
@@ -504,7 +508,7 @@ const fallbackEnrichmentScheduler: EnrichmentSchedulerSettings = {
 const fallbackEditorialScheduler: EditorialSchedulerSettings = {
   enabled: false,
   intervalMinutes: 60,
-  batchSize: 5,
+  batchSize: 10,
   lastStatus: "idle",
   lastPlannedCount: 0,
   lastGeneratedCount: 0,
@@ -515,7 +519,7 @@ const fallbackEditorialScheduler: EditorialSchedulerSettings = {
 const fallbackPublishScheduler: PublishSchedulerSettings = {
   enabled: false,
   intervalMinutes: 60,
-  batchSize: 5,
+  batchSize: 10,
   lastStatus: "idle",
   lastPublishedCount: 0,
   updatedAt: "2026-05-05T10:00:00.000Z"
