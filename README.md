@@ -739,6 +739,7 @@
 - [ ] после деплоя наблюдать за усиленным `quality gate`: слабые/пустые/повторяющиеся тексты должны уходить в `hold / rewrite`, но валидные короткие новости не должны массово выпадать
 - [x] admin moderation для опубликованных новостей: базовый `soft delete / unpublish / hide` уже есть в `/studio`, скрытая новость исчезает из `/news` и отдает `404` по прямому URL; дальше можно расширить это до более полного moderation UX
 - [x] auth для `/admin` и `/studio`: добавлена одна общая страница входа/сессия, чтобы у посторонних не было доступа к админке, studio и ручным pipeline-действиям
+- [ ] после перевода production на домен и HTTPS вернуть `EZBET_ADMIN_SECURE_COOKIE=true`; текущее `false` допустимо только как временный режим для входа по IP через обычный `http`
 - [x] redesign `/studio` как редакторский workspace, а не дубликат `/news`: отдельными секциями вынесены `Needs attention`, `Ready to publish`, `Edited by editor` и `Published`, а глубокий raw/debug compare-слой оставлен ниже как diagnostics
 - [x] production cron / external scheduler вместо локального shell-loop: внешний cron может дергать один endpoint `/api/v1/pipeline/tick` или `scripts/pipeline-cron.sh`
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
@@ -815,12 +816,15 @@ Production env checklist перед первым controlled prod-run:
 - `EZBET_ADMIN_PASSWORD`
 - `EZBET_ADMIN_SESSION_SECRET`
 - `EZBET_ADMIN_API_TOKEN`
+- `EZBET_ADMIN_SECURE_COOKIE`
 
 2. Рекомендуемые значения для первого прод-теста:
 - `OPENAI_TIMEOUT_SECONDS=45`
 - `OPENAI_WEB_SEARCH_ENABLED=true`
 - `OPENAI_WEB_SEARCH_LIVE=true`
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium`
+- если production пока открыт по IP и без HTTPS: `EZBET_ADMIN_SECURE_COOKIE=false`
+- после прикрутки домена и HTTPS обязательно вернуть: `EZBET_ADMIN_SECURE_COOKIE=true`
 
 3. Базовые operational limits на старте:
 - `ingest batch`: `100` на источник
@@ -1174,7 +1178,7 @@ npm run scheduler:tick (npm run scheduler:loop)
 
 # ENV
 cd /opt/ezbet
-nano .env.save
+nano .env
 
 # PROD
 cd /opt/ezbet

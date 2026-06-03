@@ -18,6 +18,17 @@ type ParsedSession = {
   signature: string;
 };
 
+function isAdminSessionCookieSecure() {
+  const override = process.env.EZBET_ADMIN_SECURE_COOKIE?.trim().toLowerCase();
+  if (override === "false" || override === "0" || override === "no") {
+    return false;
+  }
+  if (override === "true" || override === "1" || override === "yes") {
+    return true;
+  }
+  return process.env.NODE_ENV === "production";
+}
+
 function getAdminAuthConfig(): AdminAuthConfig | null {
   const username = process.env.EZBET_ADMIN_USERNAME?.trim();
   const password = process.env.EZBET_ADMIN_PASSWORD?.trim();
@@ -118,7 +129,7 @@ export async function createAdminSession() {
 
   cookieStore.set(ADMIN_SESSION_COOKIE, encodeSession({ username: config.username, expiresAt, signature }), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isAdminSessionCookieSecure(),
     sameSite: "lax",
     path: "/",
     maxAge: ADMIN_SESSION_TTL_SECONDS
@@ -129,7 +140,7 @@ export async function clearAdminSession() {
   const cookieStore = await cookies();
   cookieStore.set(ADMIN_SESSION_COOKIE, "", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isAdminSessionCookieSecure(),
     sameSite: "lax",
     path: "/",
     maxAge: 0
