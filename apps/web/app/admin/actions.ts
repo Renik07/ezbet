@@ -3,14 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { resolveApiBaseUrl } from "@/lib/api";
+import { resolveAdminApiToken, resolveApiBaseUrl } from "@/lib/api";
+import { requireAdminSession } from "@/lib/auth";
 
 function redirectWithError(notice: string, error: unknown) {
   const detail = extractApiErrorMessage(error);
   redirect(`/admin?notice=${notice}&detail=${encodeURIComponent(detail)}`);
 }
 
-async function apiPost(path: string, body: Record<string, unknown>) {
+async function apiPost(path: string, body: Record<string, unknown>, nextPath = "/admin") {
+  await requireAdminSession(nextPath);
   const baseUrl = resolveApiBaseUrl();
   if (!baseUrl) {
     throw new Error("API base URL is not configured.");
@@ -19,7 +21,8 @@ async function apiPost(path: string, body: Record<string, unknown>) {
   const response = await fetch(new URL(path, baseUrl).toString(), {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...(resolveAdminApiToken() ? { "x-admin-token": resolveAdminApiToken() as string } : {})
     },
     body: JSON.stringify(body),
     cache: "no-store"
@@ -385,6 +388,7 @@ export async function runPublishSchedulerNow() {
 }
 
 export async function createSourceNow(formData: FormData) {
+  const tab = String(formData.get("tab") ?? "sources");
   const requestedSourceType = String(formData.get("resolvedSourceType") ?? formData.get("sourceType") ?? "auto");
   const sourceKey = String(formData.get("key") ?? "");
   const title = String(formData.get("title") ?? "");
@@ -402,6 +406,7 @@ export async function createSourceNow(formData: FormData) {
   const supportsSitemap = String(formData.get("supportsSitemap") ?? "") === "true";
   const supportsScraping = String(formData.get("supportsScraping") ?? "") === "true";
   const fullTextOk = String(formData.get("fullTextOk") ?? "") === "true";
+  const fullTextMethod = String(formData.get("fullTextMethod") ?? "");
   const leadOk = String(formData.get("leadOk") ?? "") === "true";
   const tagsCount = Number(formData.get("tagsCount") ?? 0);
   const probeItemCount = Number(formData.get("probeItemCount") ?? 0);
@@ -439,26 +444,31 @@ export async function createSourceNow(formData: FormData) {
       supportsSitemap,
       supportsScraping,
       fullTextOk,
+      fullTextMethod: fullTextMethod || null,
       leadOk,
       tagsCount,
       sampleTitle: sampleTitle || null,
       sampleUrl: sampleUrl || null
     });
   } catch (error) {
-    redirect(`/admin?notice=source-save-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`);
+    redirect(
+      `/admin?tab=${encodeURIComponent(tab)}&notice=source-save-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`
+    );
   }
 
   revalidatePath("/admin");
-  redirect("/admin?notice=source-created");
+  redirect(`/admin?tab=${encodeURIComponent(tab)}&notice=source-created`);
 }
 
 export async function probeNewSourceNow(formData: FormData) {
+  const tab = String(formData.get("tab") ?? "sources");
   const sourceKey = String(formData.get("key") ?? "");
   const title = String(formData.get("title") ?? "");
   const url = String(formData.get("url") ?? "");
   const sourceType = String(formData.get("sourceType") ?? "auto");
   const notes = String(formData.get("notes") ?? "");
   const params = new URLSearchParams({
+    tab,
     sourceKey,
     sourceTitle: title,
     sourceUrl: url,
@@ -497,6 +507,9 @@ export async function probeNewSourceNow(formData: FormData) {
     }
     params.set("probeCount", String(result.itemCount ?? 0));
     params.set("probeFullTextOk", String(Boolean(result.fullTextOk)));
+    if (result.fullTextMethod) {
+      params.set("probeFullTextMethod", String(result.fullTextMethod));
+    }
     params.set("probeLeadOk", String(Boolean(result.leadOk)));
     params.set("probeTagsCount", String(result.tagsCount ?? 0));
     if (result.sampleTitle) {
@@ -536,25 +549,59 @@ export async function updateSourceNow(formData: FormData) {
 }
 
 export async function deleteSourceNow(formData: FormData) {
+  const tab = String(formData.get("tab") ?? "sources");
   const sourceKey = String(formData.get("sourceKey") ?? "");
   try {
     await apiPost(`/api/v1/sources/${sourceKey}/delete`, {});
   } catch (error) {
-    redirectWithError("source-delete-error", error);
+    redirect(
+      `/admin?tab=${encodeURIComponent(tab)}&notice=source-delete-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`
+    );
   }
 
   revalidatePath("/admin");
-  redirect("/admin?notice=source-deleted");
+  redirect(`/admin?tab=${encodeURIComponent(tab)}&notice=source-deleted`);
 }
 
 export async function probeSourceNow(formData: FormData) {
+  const tab = String(formData.get("tab") ?? "sources");
   const sourceKey = String(formData.get("sourceKey") ?? "");
   try {
     await apiPost(`/api/v1/sources/${sourceKey}/probe`, {});
   } catch (error) {
-    redirectWithError("source-probe-error", error);
+    redirect(
+      `/admin?tab=${encodeURIComponent(tab)}&notice=source-probe-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`
+    );
   }
 
   revalidatePath("/admin");
-  redirect("/admin?notice=source-probed");
+  redirect(`/admin?tab=${encodeURIComponent(tab)}&notice=source-probed`);
+}
+
+export async function hidePublishedNewsNow(formData: FormData) {
+  const newsItemId = String(formData.get("newsItemId") ?? "");
+  try {
+    await apiPost(`/api/v1/news/${encodeURIComponent(newsItemId)}/hide`, {}, "/studio");
+  } catch (error) {
+    redirect(`/studio?notice=hide-news-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`);
+  }
+
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect("/studio?notice=news-hidden");
+}
+
+export async function unhidePublishedNewsNow(formData: FormData) {
+  const newsItemId = String(formData.get("newsItemId") ?? "");
+  try {
+    await apiPost(`/api/v1/news/${encodeURIComponent(newsItemId)}/unhide`, {}, "/studio");
+  } catch (error) {
+    redirect(`/studio?notice=unhide-news-error&detail=${encodeURIComponent(extractApiErrorMessage(error))}`);
+  }
+
+  revalidatePath("/studio");
+  revalidatePath("/news");
+  revalidatePath("/");
+  redirect("/studio?notice=news-unhidden");
 }

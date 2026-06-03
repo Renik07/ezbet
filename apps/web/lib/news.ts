@@ -8,6 +8,7 @@ export type NewsItem = {
   publishedAt: string;
   source: string;
   link?: string;
+  visibility?: string;
   aiReviewed?: boolean;
   articleSlug?: string;
 };
@@ -44,6 +45,7 @@ const fallbackNews: NewsItem[] = [
     category: "Беттинг",
     publishedAt: "2026-04-29T09:15:00.000Z",
     source: "ezbet ingest",
+    visibility: "public",
     aiReviewed: true,
     articleSlug: "fallback-rpl-window-1"
   },
@@ -55,6 +57,7 @@ const fallbackNews: NewsItem[] = [
     category: "Баскетбол",
     publishedAt: "2026-04-29T08:20:00.000Z",
     source: "demo source",
+    visibility: "public",
     aiReviewed: false,
     link: "https://example.com/fallback-nba"
   },
@@ -66,6 +69,7 @@ const fallbackNews: NewsItem[] = [
     category: "Футбол",
     publishedAt: "2026-04-29T07:45:00.000Z",
     source: "demo source",
+    visibility: "public",
     aiReviewed: false,
     link: "https://example.com/fallback-ucl"
   }

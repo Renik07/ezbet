@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true });
+  const featuredNews = news.slice(0, 12);
 
   return (
     <main className="page-shell">
@@ -89,8 +90,10 @@ export default async function HomePage() {
           <Link href="/news">Вся лента</Link>
         </div>
         <div className="news-grid">
-          {news.map((item) => (
-            <NewsCard key={item.id} item={item} />
+          {featuredNews.map((item, index) => (
+            <div key={item.id} className={index >= 8 ? "home-news-desktop-only" : undefined}>
+              <NewsCard item={item} />
+            </div>
           ))}
         </div>
       </section>

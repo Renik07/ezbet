@@ -737,6 +737,9 @@
 - [ ] calibrate prioritization / shortlist: проверить, что важные новости реально получают приоритет, а слабые не съедают batch
 - [ ] calibrate editorial / publish decisions: проверить, что quality gate и publish rules не дают ложных `hold / skip / rewrite`
 - [ ] после деплоя наблюдать за усиленным `quality gate`: слабые/пустые/повторяющиеся тексты должны уходить в `hold / rewrite`, но валидные короткие новости не должны массово выпадать
+- [x] admin moderation для опубликованных новостей: базовый `soft delete / unpublish / hide` уже есть в `/studio`, скрытая новость исчезает из `/news` и отдает `404` по прямому URL; дальше можно расширить это до более полного moderation UX
+- [x] auth для `/admin` и `/studio`: добавлена одна общая страница входа/сессия, чтобы у посторонних не было доступа к админке, studio и ручным pipeline-действиям
+- [x] redesign `/studio` как редакторский workspace, а не дубликат `/news`: отдельными секциями вынесены `Needs attention`, `Ready to publish`, `Edited by editor` и `Published`, а глубокий raw/debug compare-слой оставлен ниже как diagnostics
 - [x] production cron / external scheduler вместо локального shell-loop: внешний cron может дергать один endpoint `/api/v1/pipeline/tick` или `scripts/pipeline-cron.sh`
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
 - [x] production soak-test на идемпотентность: есть endpoint `GET /api/v1/monitoring/idempotency`, который проверяет ключевые инварианты draft/article/news publish-цепочки перед controlled prod run
@@ -808,6 +811,10 @@ Production env checklist перед первым controlled prod-run:
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE`
 - `EZBET_API_BASE_URL`
 - `NEXT_PUBLIC_API_BASE_URL`
+- `EZBET_ADMIN_USERNAME`
+- `EZBET_ADMIN_PASSWORD`
+- `EZBET_ADMIN_SESSION_SECRET`
+- `EZBET_ADMIN_API_TOKEN`
 
 2. Рекомендуемые значения для первого прод-теста:
 - `OPENAI_TIMEOUT_SECONDS=45`
@@ -816,11 +823,16 @@ Production env checklist перед первым controlled prod-run:
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium`
 
 3. Базовые operational limits на старте:
-- `ingest batch`: `3-5` на источник
-- `enrichment batch`: `5`
-- `editorial batch`: `2-3`
-- `publish batch`: `1-2`
+- `ingest batch`: `100` на источник
+- `enrichment batch`: `20`
+- `editorial batch`: `10`
+- `publish batch`: `10`
 - `ThreadPoolExecutor` для enrichment сейчас ограничен `max_workers=4`; для первого controlled run этого достаточно
+
+Для hourly news-flow это важный принцип:
+- `ingest` должен иметь высокий лимит, чтобы забирать почти весь свежий час даже при росте числа источников
+- `enrichment / editorial / publish` могут быть заметно меньше, потому что это более тяжелые этапы
+- ingest по умолчанию дополнительно режет новости старше `1 часа`, чтобы scheduler не поднимал старый хвост
 
 4. Cron / scheduler runbook:
 - API должен быть доступен по `EZBET_API_BASE_URL`
@@ -1136,10 +1148,12 @@ npm run dev:web
 9. Настроить scheduler и провести первый сквозной тест: добавить сайт -> забрать новости -> добрать `full_text` -> опубликовать
 
 # Источники
-1. https://www.sport-express.ru/services/materials/news/se - RSS (Сбор новостей  - ОК. ФУЛЛ текст берется через веб-поиск)
 2. https://www.championat.com/sitemap/news.xml - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
 3. https://www.sports.ru (https://www.sports.ru/news) - scraping (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
 4. https://www.sovsport.ru (https://www.sovsport.ru/sitemap-news.xml) - news sitemap (Сбор новостей - ОК. ФУлл текст - Через скрапинг OK)
+
+
+1. https://www.sport-express.ru/services/materials/news/se - RSS (Сбор новостей  - ОК. ФУЛЛ текст берется через веб-поиск)
 5. https://www.sportsdaily.ru/news/ - scraping (Сбор новостей - ОК. ФУЛЛ текст берется через веб-поиск)
 
 # Убить процесс

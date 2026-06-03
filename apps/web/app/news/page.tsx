@@ -1,15 +1,38 @@
 import { NewsCard } from "@/components/news-card";
 import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
+import Link from "next/link";
+
+const NEWS_PER_PAGE = 20;
+
+function buildNewsPageHref(page: number, query: string) {
+  const params = new URLSearchParams();
+  if (query) {
+    params.set("query", query);
+  }
+  if (page > 1) {
+    params.set("page", String(page));
+  }
+  const search = params.toString();
+  return search ? `/news?${search}` : "/news";
+}
 
 export default async function NewsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ query?: string }>;
+  searchParams?: Promise<{ query?: string; page?: string }>;
 }) {
   const params = (await searchParams) ?? {};
   const query = params.query ?? "";
+  const requestedPage = Number(params.page ?? "1");
+  const safeRequestedPage = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
   const { items, isLive } = await getNews(query, { aiOnly: true });
+  const totalPages = Math.max(1, Math.ceil(items.length / NEWS_PER_PAGE));
+  const currentPage = Math.min(safeRequestedPage, totalPages);
+  const startIndex = (currentPage - 1) * NEWS_PER_PAGE;
+  const pagedItems = items.slice(startIndex, startIndex + NEWS_PER_PAGE);
+  const fromItem = items.length ? startIndex + 1 : 0;
+  const toItem = Math.min(startIndex + NEWS_PER_PAGE, items.length);
 
   return (
     <main className="page-shell">
@@ -33,8 +56,40 @@ export default async function NewsPage({
             </p>
           </div>
         </div>
+        <div className="section-head" style={{ marginTop: 0, alignItems: "center" }}>
+          <p style={{ margin: 0, color: "var(--muted)" }}>
+            {items.length
+              ? `Показаны ${fromItem}-${toItem} из ${items.length}`
+              : "По этому запросу пока ничего не найдено."}
+          </p>
+          {totalPages > 1 ? (
+            <div className="pagination-row">
+              {currentPage > 1 ? (
+                <Link className="button-secondary" href={buildNewsPageHref(currentPage - 1, query)}>
+                  Назад
+                </Link>
+              ) : (
+                <span className="button-secondary is-disabled" aria-disabled="true">
+                  Назад
+                </span>
+              )}
+              <span className="pagination-label">
+                Страница {currentPage} из {totalPages}
+              </span>
+              {currentPage < totalPages ? (
+                <Link className="button-secondary" href={buildNewsPageHref(currentPage + 1, query)}>
+                  Вперед
+                </Link>
+              ) : (
+                <span className="button-secondary is-disabled" aria-disabled="true">
+                  Вперед
+                </span>
+              )}
+            </div>
+          ) : null}
+        </div>
         <div className="news-grid">
-          {items.map((item) => (
+          {pagedItems.map((item) => (
             <NewsCard key={item.id} item={item} />
           ))}
         </div>

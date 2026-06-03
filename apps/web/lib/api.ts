@@ -5,3 +5,7 @@ export function resolveApiBaseUrl() {
     (process.env.NODE_ENV === "development" ? "http://localhost:8000" : undefined)
   );
 }
+
+export function resolveAdminApiToken() {
+  return process.env.EZBET_ADMIN_API_TOKEN;
+}

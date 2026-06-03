@@ -97,6 +97,7 @@ class NewsRepository:
                         source TEXT NOT NULL,
                         link TEXT,
                         status TEXT NOT NULL DEFAULT 'published',
+                        visibility TEXT NOT NULL DEFAULT 'public',
                         ai_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
@@ -295,6 +296,7 @@ class NewsRepository:
                         supports_sitemap BOOLEAN NOT NULL DEFAULT FALSE,
                         supports_scraping BOOLEAN NOT NULL DEFAULT FALSE,
                         last_probe_full_text_ok BOOLEAN NOT NULL DEFAULT FALSE,
+                        last_probe_full_text_method TEXT,
                         last_probe_lead_ok BOOLEAN NOT NULL DEFAULT FALSE,
                         last_probe_authors_count INTEGER NOT NULL DEFAULT 0,
                         last_probe_tags_count INTEGER NOT NULL DEFAULT 0,
@@ -312,7 +314,7 @@ class NewsRepository:
                         id TEXT PRIMARY KEY,
                         enabled BOOLEAN NOT NULL DEFAULT FALSE,
                         interval_minutes INTEGER NOT NULL DEFAULT 60,
-                        batch_size INTEGER NOT NULL DEFAULT 5,
+                        batch_size INTEGER NOT NULL DEFAULT 100,
                         run_enrichment BOOLEAN NOT NULL DEFAULT FALSE,
                         last_run_at TIMESTAMPTZ,
                         next_run_at TIMESTAMPTZ,
@@ -357,7 +359,10 @@ class NewsRepository:
                     "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS source_breakdown TEXT NOT NULL DEFAULT '[]'"
                 )
                 cursor.execute(
-                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 5"
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS batch_size INTEGER NOT NULL DEFAULT 100"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ALTER COLUMN batch_size SET DEFAULT 100"
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS run_enrichment BOOLEAN NOT NULL DEFAULT FALSE"
@@ -378,7 +383,10 @@ class NewsRepository:
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_interval_minutes INTEGER NOT NULL DEFAULT 60"
                 )
                 cursor.execute(
-                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_batch_size INTEGER NOT NULL DEFAULT 10"
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_batch_size INTEGER NOT NULL DEFAULT 20"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ALTER COLUMN enrichment_batch_size SET DEFAULT 20"
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS enrichment_last_run_at TIMESTAMPTZ"
@@ -405,7 +413,10 @@ class NewsRepository:
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_interval_minutes INTEGER NOT NULL DEFAULT 60"
                 )
                 cursor.execute(
-                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_batch_size INTEGER NOT NULL DEFAULT 5"
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_batch_size INTEGER NOT NULL DEFAULT 10"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ALTER COLUMN editorial_batch_size SET DEFAULT 10"
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS editorial_last_run_at TIMESTAMPTZ"
@@ -435,7 +446,10 @@ class NewsRepository:
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_interval_minutes INTEGER NOT NULL DEFAULT 60"
                 )
                 cursor.execute(
-                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_batch_size INTEGER NOT NULL DEFAULT 5"
+                    "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_batch_size INTEGER NOT NULL DEFAULT 10"
+                )
+                cursor.execute(
+                    "ALTER TABLE scheduler_settings ALTER COLUMN publish_batch_size SET DEFAULT 10"
                 )
                 cursor.execute(
                     "ALTER TABLE scheduler_settings ADD COLUMN IF NOT EXISTS publish_last_run_at TIMESTAMPTZ"
@@ -466,6 +480,9 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE draft_articles ADD COLUMN IF NOT EXISTS writer_body TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE news_items ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public'"
                 )
                 cursor.execute(
                     "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS decision TEXT NOT NULL DEFAULT 'approve'"
@@ -544,6 +561,9 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS last_probe_full_text_ok BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS last_probe_full_text_method TEXT"
                 )
                 cursor.execute(
                     "ALTER TABLE source_sync_state ADD COLUMN IF NOT EXISTS last_probe_lead_ok BOOLEAN NOT NULL DEFAULT FALSE"
@@ -632,8 +652,24 @@ class NewsRepository:
                 )
                 cursor.execute(
                     """
-                    INSERT INTO scheduler_settings (id, enabled, interval_minutes, last_status)
-                    VALUES ('default', FALSE, 60, 'idle')
+                    INSERT INTO scheduler_settings (
+                        id,
+                        enabled,
+                        interval_minutes,
+                        batch_size,
+                        run_enrichment,
+                        enrichment_enabled,
+                        enrichment_interval_minutes,
+                        enrichment_batch_size,
+                        editorial_enabled,
+                        editorial_interval_minutes,
+                        editorial_batch_size,
+                        publish_enabled,
+                        publish_interval_minutes,
+                        publish_batch_size,
+                        last_status
+                    )
+                    VALUES ('default', FALSE, 60, 100, FALSE, FALSE, 60, 20, FALSE, 60, 10, FALSE, 60, 10, 'idle')
                     ON CONFLICT (id) DO NOTHING
                     """
                 )
@@ -933,14 +969,24 @@ class NewsRepository:
                 )
             connection.commit()
 
-    def list(self, query: Optional[str] = None, ai_only: bool = False) -> list[NewsItem]:
+    def list(
+        self,
+        query: Optional[str] = None,
+        ai_only: bool = False,
+        *,
+        include_hidden: bool = False,
+        limit: int | None = None,
+    ) -> list[NewsItem]:
         statement = """
-            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.ai_reviewed, a.slug
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
             FROM news_items n
             LEFT JOIN articles a ON a.news_item_id = n.id
         """
         params: list[object] = []
         clauses: list[str] = []
+
+        if not include_hidden:
+            clauses.append("COALESCE(n.visibility, 'public') = 'public'")
 
         if ai_only:
             clauses.append("n.ai_reviewed = TRUE")
@@ -949,10 +995,10 @@ class NewsRepository:
             clauses.append(
                 """
                 (
-                    title ILIKE %s
-                    OR description ILIKE %s
-                    OR category ILIKE %s
-                    OR source ILIKE %s
+                    n.title ILIKE %s
+                    OR n.description ILIKE %s
+                    OR n.category ILIKE %s
+                    OR n.source ILIKE %s
                 )
                 """
             )
@@ -963,6 +1009,9 @@ class NewsRepository:
             statement += " WHERE " + " AND ".join(clauses)
 
         statement += " ORDER BY n.published_at DESC"
+        if limit is not None:
+            statement += " LIMIT %s"
+            params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -1312,28 +1361,32 @@ class NewsRepository:
 
         return int(row[0] if row and row[0] is not None else 0)
 
-    def get_article_by_slug(self, slug: str) -> Article | None:
+    def get_article_by_slug(self, slug: str, *, include_hidden: bool = False) -> Article | None:
         statement = """
             SELECT
-                id,
-                slug,
-                news_item_id,
-                raw_item_id,
-                title,
-                lead,
-                dek,
-                body,
-                category,
-                source_title,
-                source_url,
-                tags,
-                published_at,
-                ai_reviewed,
-                created_at,
-                updated_at
-            FROM articles
-            WHERE slug = %s
+                a.id,
+                a.slug,
+                a.news_item_id,
+                a.raw_item_id,
+                a.title,
+                a.lead,
+                a.dek,
+                a.body,
+                a.category,
+                a.source_title,
+                a.source_url,
+                a.tags,
+                a.published_at,
+                a.ai_reviewed,
+                a.created_at,
+                a.updated_at
+            FROM articles a
+            JOIN news_items n ON n.id = a.news_item_id
+            WHERE a.slug = %s
         """
+
+        if not include_hidden:
+            statement += " AND COALESCE(n.visibility, 'public') = 'public'"
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -1344,6 +1397,43 @@ class NewsRepository:
             return None
 
         return self._map_article_row(row)
+
+    def get_news_item(self, news_item_id: str, *, include_hidden: bool = False) -> NewsItem | None:
+        statement = """
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
+            FROM news_items n
+            LEFT JOIN articles a ON a.news_item_id = n.id
+            WHERE n.id = %s
+        """
+        params: list[object] = [news_item_id]
+
+        if not include_hidden:
+            statement += " AND COALESCE(n.visibility, 'public') = 'public'"
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, tuple(params))
+                row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._map_news_row(row)
+
+    def set_news_visibility(self, news_item_id: str, visibility: str) -> NewsItem | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE news_items
+                    SET visibility = %s
+                    WHERE id = %s
+                    """,
+                    (visibility, news_item_id),
+                )
+            connection.commit()
+
+        return self.get_news_item(news_item_id, include_hidden=True)
 
     def list_article_similarity_candidates(
         self,
@@ -1455,6 +1545,7 @@ class NewsRepository:
                 supports_sitemap,
                 supports_scraping,
                 last_probe_full_text_ok,
+                last_probe_full_text_method,
                 last_probe_lead_ok,
                 last_probe_tags_count,
                 last_probe_sample_title,
@@ -2194,6 +2285,7 @@ class NewsRepository:
         supports_sitemap: bool = False,
         supports_scraping: bool = False,
         full_text_ok: bool = False,
+        full_text_method: str | None = None,
         lead_ok: bool = False,
         tags_count: int = 0,
         sample_title: str | None = None,
@@ -2216,6 +2308,7 @@ class NewsRepository:
                         supports_sitemap,
                         supports_scraping,
                         last_probe_full_text_ok,
+                        last_probe_full_text_method,
                         last_probe_lead_ok,
                         last_probe_tags_count,
                         last_probe_sample_title,
@@ -2223,7 +2316,7 @@ class NewsRepository:
                         last_status,
                         last_error
                     )
-                    VALUES (%s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (source_key) DO UPDATE SET
                         source_title = EXCLUDED.source_title,
                         last_probe_at = EXCLUDED.last_probe_at,
@@ -2236,6 +2329,7 @@ class NewsRepository:
                         supports_sitemap = EXCLUDED.supports_sitemap,
                         supports_scraping = EXCLUDED.supports_scraping,
                         last_probe_full_text_ok = EXCLUDED.last_probe_full_text_ok,
+                        last_probe_full_text_method = EXCLUDED.last_probe_full_text_method,
                         last_probe_lead_ok = EXCLUDED.last_probe_lead_ok,
                         last_probe_tags_count = EXCLUDED.last_probe_tags_count,
                         last_probe_sample_title = EXCLUDED.last_probe_sample_title,
@@ -2256,6 +2350,7 @@ class NewsRepository:
                         supports_sitemap,
                         supports_scraping,
                         full_text_ok,
+                        full_text_method,
                         lead_ok,
                         tags_count,
                         sample_title,
@@ -3588,17 +3683,18 @@ class NewsRepository:
             status="published",
             ai_reviewed=True,
             article_slug=article.slug,
+            visibility="public",
         )
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO news_items (
-                        id,
-                        title,
-                        description,
-                        category,
+                        INSERT INTO news_items (
+                            id,
+                            title,
+                            description,
+                            category,
                         published_at,
                         source,
                         link,
@@ -3623,11 +3719,11 @@ class NewsRepository:
                         published_item.category,
                         published_item.published_at,
                         published_item.source,
-                        published_item.link,
-                        published_item.status,
-                        published_item.ai_reviewed,
-                    ),
-                )
+                            published_item.link,
+                            published_item.status,
+                            published_item.ai_reviewed,
+                        ),
+                    )
             connection.commit()
 
         return published_item
@@ -3964,8 +4060,9 @@ class NewsRepository:
             source=str(row[5]),
             link=row[6],
             status=str(row[7]),
-            ai_reviewed=bool(row[8]),
-            article_slug=row[9],
+            visibility=str(row[8]),
+            ai_reviewed=bool(row[9]),
+            article_slug=row[10],
         )
 
     @staticmethod
@@ -4099,13 +4196,14 @@ class NewsRepository:
             supports_sitemap=bool(row[21]),
             supports_scraping=bool(row[22]),
             last_probe_full_text_ok=bool(row[23]),
-            last_probe_lead_ok=bool(row[24]),
-            last_probe_tags_count=int(row[25] or 0),
-            last_probe_sample_title=row[26],
-            last_probe_sample_url=row[27],
-            last_status=str(row[28]),
-            last_error=row[29],
-            updated_at=row[30],
+            last_probe_full_text_method=row[24],
+            last_probe_lead_ok=bool(row[25]),
+            last_probe_tags_count=int(row[26] or 0),
+            last_probe_sample_title=row[27],
+            last_probe_sample_url=row[28],
+            last_status=str(row[29]),
+            last_error=row[30],
+            updated_at=row[31],
         )
 
     @staticmethod
@@ -4113,7 +4211,7 @@ class NewsRepository:
         return SchedulerSettings(
             enabled=bool(row[0]),
             interval_minutes=int(row[1] or 60),
-            batch_size=int(row[2] or 5),
+            batch_size=int(row[2] or 100),
             run_enrichment=bool(row[3]),
             last_run_at=row[4],
             next_run_at=row[5],
@@ -4132,7 +4230,7 @@ class NewsRepository:
         return EnrichmentSchedulerSettings(
             enabled=bool(row[0]),
             interval_minutes=int(row[1] or 60),
-            batch_size=int(row[2] or 10),
+            batch_size=int(row[2] or 20),
             last_run_at=row[3],
             next_run_at=row[4],
             last_status=str(row[5] or "idle"),
@@ -4149,7 +4247,7 @@ class NewsRepository:
         return EditorialSchedulerSettings(
             enabled=bool(row[0]),
             interval_minutes=int(row[1] or 60),
-            batch_size=int(row[2] or 5),
+            batch_size=int(row[2] or 10),
             last_run_at=row[3],
             next_run_at=row[4],
             last_status=str(row[5] or "idle"),
@@ -4167,7 +4265,7 @@ class NewsRepository:
         return PublishSchedulerSettings(
             enabled=bool(row[0]),
             interval_minutes=int(row[1] or 60),
-            batch_size=int(row[2] or 5),
+            batch_size=int(row[2] or 10),
             last_run_at=row[3],
             next_run_at=row[4],
             last_status=str(row[5] or "idle"),

@@ -1,4 +1,5 @@
-import { resolveApiBaseUrl } from "@/lib/api";
+import { resolveAdminApiToken, resolveApiBaseUrl } from "@/lib/api";
+import type { NewsItem } from "@/lib/news";
 
 export type RawItem = {
   id: string;
@@ -22,6 +23,7 @@ export type RawItem = {
   publishedAt: string;
   fetchedAt: string;
   importanceScore: number;
+  scoreBreakdown: string[];
   triageLabel: string;
   isDuplicate: boolean;
   duplicateOf?: string;
@@ -253,6 +255,7 @@ export type EditorialStudioData = {
   editorialScheduler: EditorialSchedulerSettings;
   publishScheduler: PublishSchedulerSettings;
   pipelineRuns: PipelineRun[];
+  publishedNews: NewsItem[];
   isLive: boolean;
   liveError?: string;
 };
@@ -519,15 +522,25 @@ const fallbackPublishScheduler: PublishSchedulerSettings = {
 };
 
 const fallbackPipelineRuns: PipelineRun[] = [];
+const fallbackPublishedNews: NewsItem[] = [];
 
 async function loadStudioResource<T>(
   baseUrl: string,
   path: string,
   parse: (payload: unknown) => T,
-  fallback: T
+  fallback: T,
+  options?: { admin?: boolean }
 ): Promise<{ data: T; error?: string }> {
   try {
-    const response = await fetch(new URL(path, baseUrl).toString(), { cache: "no-store" });
+    const response = await fetch(new URL(path, baseUrl).toString(), {
+      cache: "no-store",
+      headers:
+        options?.admin && resolveAdminApiToken()
+          ? {
+              "x-admin-token": resolveAdminApiToken() as string
+            }
+          : undefined
+    });
     if (!response.ok) {
       return { data: fallback, error: `${path}: ${response.status}` };
     }
@@ -558,6 +571,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialScheduler: fallbackEditorialScheduler,
       publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
+      publishedNews: fallbackPublishedNews,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
     };
@@ -576,7 +590,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     enrichmentSchedulerResult,
     editorialSchedulerResult,
     publishSchedulerResult,
-    pipelineRunsResult
+    pipelineRunsResult,
+    publishedNewsResult
   ] = await Promise.all([
     loadStudioResource(baseUrl, "/api/v1/prompts", (payload) => (payload as { items: PromptConfig[] }).items, fallbackPrompts),
     loadStudioResource(
@@ -625,6 +640,13 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       "/api/v1/pipeline-runs?limit=12",
       (payload) => (payload as { items: PipelineRun[] }).items,
       fallbackPipelineRuns
+    ),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/news?includeHidden=true&aiOnly=true&limit=24",
+      (payload) => (payload as { items: NewsItem[] }).items,
+      fallbackPublishedNews,
+      { admin: true }
     )
   ]);
 
@@ -641,10 +663,11 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     enrichmentSchedulerResult.error,
     editorialSchedulerResult.error,
     publishSchedulerResult.error,
-    pipelineRunsResult.error
+    pipelineRunsResult.error,
+    publishedNewsResult.error
   ].filter((value): value is string => Boolean(value));
 
-  const expectedResourceCount = 13;
+  const expectedResourceCount = 14;
   const isLive = partialErrors.length < expectedResourceCount;
 
   return {
@@ -661,6 +684,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialScheduler: editorialSchedulerResult.data,
     publishScheduler: publishSchedulerResult.data,
     pipelineRuns: pipelineRunsResult.data,
+    publishedNews: publishedNewsResult.data,
     isLive,
     liveError: partialErrors.length ? partialErrors.join("; ") : undefined
   };
@@ -668,9 +692,35 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
 
 export function buildRawDraftPairs(data: EditorialStudioData, limit = 10): RawDraftPair[] {
   const draftsByRawId = new Map(data.drafts.map((draft) => [draft.rawItemId, draft]));
+  const rawById = new Map(data.rawItems.map((rawItem) => [rawItem.id, rawItem]));
+  const prioritizedRawIds: string[] = [];
+  const seenRawIds = new Set<string>();
+
+  const addRawId = (rawItemId?: string) => {
+    if (!rawItemId || seenRawIds.has(rawItemId) || !rawById.has(rawItemId)) {
+      return;
+    }
+    seenRawIds.add(rawItemId);
+    prioritizedRawIds.push(rawItemId);
+  };
+
+  for (const item of data.contentPlan) {
+    addRawId(item.rawItemId);
+  }
+  for (const draft of data.drafts) {
+    addRawId(draft.rawItemId);
+  }
+  for (const rawItem of data.rawItems) {
+    addRawId(rawItem.id);
+  }
+
   const pairs: RawDraftPair[] = [];
 
-  for (const rawItem of data.rawItems) {
+  for (const rawItemId of prioritizedRawIds) {
+    const rawItem = rawById.get(rawItemId);
+    if (!rawItem) {
+      continue;
+    }
     pairs.push({
       rawItem,
       draft: draftsByRawId.get(rawItem.id)

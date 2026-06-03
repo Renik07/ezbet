@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { formatCategoryLabel } from "@/lib/category";
 import { getArticle } from "@/lib/news";
 
 export default async function ArticlePage({
@@ -19,7 +20,7 @@ export default async function ArticlePage({
     <main className="page-shell">
       <section className="hero article-hero">
         <div className="eyebrow">
-          <span>{item.category}</span>
+          <span>{formatCategoryLabel(item.category)}</span>
           {item.aiReviewed ? <span>AI edited</span> : null}
         </div>
         <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>{item.title}</h1>

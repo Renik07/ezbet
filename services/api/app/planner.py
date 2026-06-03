@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 
 from .ai_client import OpenAIEditorialClient, PlannerRerankItem
 from .models import ContentPlanItem, RawItem
@@ -12,6 +13,19 @@ STRICT_SHORTLIST_LOW_SCORE_FLOOR = 36
 STRICT_SHORTLIST_LOW_MAX_AGE = timedelta(hours=24)
 STRICT_SHORTLIST_LOW_FULL_TEXT_MIN_LEN = 280
 STRICT_SHORTLIST_LOW_SUMMARY_MIN_LEN = 110
+LIVE_MATCH_TRACKER_TERMS = (
+    "онлайн-трансляц",
+    "онлайн трансляц",
+    "прямой эфир",
+    "текстовая трансляц",
+    "live",
+    "лайв",
+    "matchcenter",
+    "match centre",
+    "match center",
+    "история личных встреч",
+    "коэффиц",
+)
 
 
 def run_content_planner(repository: NewsRepository, limit: int = 6) -> list[ContentPlanItem]:
@@ -39,12 +53,20 @@ def build_editorial_shortlist(
     if not candidates:
         return []
 
-    preferred_candidates = [item for item in candidates if item.triage_label in {"high", "medium"}]
+    preferred_candidates = [
+        item for item in candidates if item.triage_label in {"high", "medium"} and not is_live_match_tracker_candidate(item)
+    ]
     shortlisted: list[RawItem] = preferred_candidates[:shortlist_limit]
     if len(shortlisted) >= shortlist_limit:
         return shortlisted
 
-    low_candidates = [item for item in candidates if item.triage_label == "low" and is_viable_low_priority_candidate(item)]
+    low_candidates = [
+        item
+        for item in candidates
+        if item.triage_label == "low"
+        and not is_live_match_tracker_candidate(item)
+        and is_viable_low_priority_candidate(item)
+    ]
     remaining_slots = shortlist_limit - len(shortlisted)
     low_cap = low_priority_fallback_cap(batch_limit=batch_limit, preferred_count=len(shortlisted))
     if remaining_slots <= 0 or low_cap <= 0:
@@ -79,6 +101,21 @@ def is_viable_low_priority_candidate(raw_item: RawItem) -> bool:
     if len(full_text) >= STRICT_SHORTLIST_LOW_FULL_TEXT_MIN_LEN:
         return True
     if len(summary) >= STRICT_SHORTLIST_LOW_SUMMARY_MIN_LEN and len(lead) >= 60:
+        return True
+    return False
+
+
+def is_live_match_tracker_candidate(raw_item: RawItem) -> bool:
+    haystack = " ".join(
+        part.strip().lower()
+        for part in (raw_item.title, raw_item.summary or "", raw_item.lead or "", raw_item.full_text or "")
+        if part
+    )
+    if any(term in haystack for term in LIVE_MATCH_TRACKER_TERMS):
+        return True
+    if re.search(r"^\s*.+\s+[–:-]\s+[–:-]\s+.+\s*$", raw_item.title.strip().lower()):
+        return True
+    if re.search(r"^\s*.+\s+[–-]\s+\d+\s*:\s*\d+\s+.+\s*$", raw_item.title.strip().lower()):
         return True
     return False
 

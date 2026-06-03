@@ -107,6 +107,20 @@ PREFERRED_URL_SEGMENTS = {
     "match",
 }
 
+LIVE_MATCH_TRACKER_TERMS = (
+    "онлайн-трансляц",
+    "онлайн трансляц",
+    "прямой эфир",
+    "текстовая трансляц",
+    "live",
+    "лайв",
+    "matchcenter",
+    "match centre",
+    "match center",
+    "история личных встреч",
+    "коэффиц",
+)
+
 CHAMPIONAT_ALLOWED_TOP_LEVEL_SECTIONS = {
     "football",
     "hockey",
@@ -174,11 +188,36 @@ ARTICLE_NEGATIVE_TERMS = (
     "comment",
 )
 
+ARTICLE_TRAILING_NOISE_MARKERS = (
+    "читать дальше",
+    "читать также",
+    "читайте также",
+    "по теме",
+    "также по теме",
+    "совспорт теперь",
+    "заглавное фото",
+    "источник:",
+)
+
 CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
-    ("football", ("футбол", "football", "рпл", "лига чемпионов", "апл", "ла лига")),
+    ("football", ("футбол", "football", "soccer", "рпл", "лига чемпионов", "апл", "ла лига", "серия а")),
     ("hockey", ("хоккей", "hockey", "кхл", "нхл", "nhl")),
-    ("basketball", ("баскетбол", "basketball", "нба", "nba", "евролига")),
-    ("tennis", ("теннис", "tennis", "atp", "wta")),
+    ("basketball", ("баскетбол", "basketball", "нба", "nba", "евролига", "единая лига втб", "vtb")),
+    ("tennis", ("теннис", "tennis", "atp", "wta", "ролан гаррос", "wimbledon", "us open")),
+    ("mma", ("mma", "ufc", "bellator", "смешанн", "единоборств", "мма")),
+    ("boxing", ("бокс", "boxing", "box", "wbc", "wba", "ibf", "wbo")),
+    ("fencing", ("фехтован", "fencing")),
+    ("volleyball", ("волейбол", "volleyball")),
+    ("handball", ("гандбол", "handball")),
+    ("swimming", ("плавани", "swimming")),
+    ("athletics", ("лёгкая атлетика", "легкая атлетика", "athletics", "track and field")),
+    ("biathlon", ("биатлон", "biathlon")),
+    ("skiing", ("лыжи", "лыж", "skiing", "лыжные гонки", "горные лыжи")),
+    ("figure_skating", ("фигурное катание", "figure skating")),
+    ("gymnastics", ("гимнастик", "gymnastics")),
+    ("motorsport", ("формула-1", "формула 1", "formula 1", "f1", "motorsport", "автоспорт", "motogp")),
+    ("chess", ("шахмат", "chess")),
+    ("esports", ("киберспорт", "esports", "e-sports", "dota", "cs2", "counter-strike", "league of legends")),
     ("betting", ("букмекер", "ставк", "bet", "коэффициент", "линия")),
 ]
 
@@ -241,6 +280,7 @@ class SourceProbeResult:
     supports_sitemap: bool
     supports_scraping: bool
     full_text_ok: bool
+    full_text_method: str | None
     lead_ok: bool
     tags_count: int
     sample_title: str | None
@@ -280,6 +320,8 @@ SOURCE_REPUTATION_HINTS: dict[str, int] = {
     "sovsport": 5,
     "советский спорт": 5,
 }
+
+DEFAULT_INGEST_MAX_ITEM_AGE = timedelta(hours=1)
 
 
 def ingest_sources(
@@ -448,7 +490,12 @@ def enrich_raw_item_content(
     allow_web_search_fallback: bool = True,
 ) -> RawItem:
     existing_full_text = (raw_item.full_text or "").strip()
-    has_usable_full_text = _is_usable_full_text(existing_full_text, raw_item.summary)
+    has_usable_full_text = _is_usable_full_text(
+        existing_full_text,
+        raw_item.title,
+        raw_item.summary,
+        raw_item.lead,
+    )
     if (
         has_usable_full_text
         and ((raw_item.lead or "").strip() or raw_item.tags)
@@ -457,7 +504,12 @@ def enrich_raw_item_content(
 
     html = fetch_remote_document(raw_item.url, timeout=10)
     direct_enrichment = _extract_article_enrichment_from_html(raw_item.url, html) if html else None
-    if direct_enrichment is not None and _is_usable_full_text(direct_enrichment.full_text, raw_item.summary):
+    if direct_enrichment is not None and _is_usable_full_text(
+        direct_enrichment.full_text,
+        raw_item.title,
+        raw_item.summary,
+        direct_enrichment.lead,
+    ):
         return _persist_raw_item_enrichment(
             repository,
             raw_item,
@@ -485,7 +537,12 @@ def enrich_raw_item_content(
         if ai_client.enabled and html
         else None
     )
-    if ai_html_enrichment is not None and _is_usable_full_text(ai_html_enrichment.full_text, raw_item.summary):
+    if ai_html_enrichment is not None and _is_usable_full_text(
+        ai_html_enrichment.full_text,
+        raw_item.title,
+        raw_item.summary,
+        ai_html_enrichment.lead,
+    ):
         return _persist_raw_item_enrichment(
             repository,
             raw_item,
@@ -677,8 +734,8 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
                 None,
             )
         if source.source_type == "scraping":
-            return SourceProbeResult(False, 0, "Страница не прочитана или scraping-адаптер не нашел кандидатов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, False, 0, None, None)
-        return SourceProbeResult(False, 0, "Фид не прочитан или не вернул элементов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, False, 0, None, None)
+            return SourceProbeResult(False, 0, "Страница не прочитана или scraping-адаптер не нашел кандидатов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, None, False, 0, None, None)
+        return SourceProbeResult(False, 0, "Фид не прочитан или не вернул элементов.", "empty", source.source_type, source.url, supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping, False, None, False, 0, None, None)
 
     supports_rss, supports_news_sitemap, supports_sitemap, supports_scraping = _probe_support_flags(
         source.source_type,
@@ -688,7 +745,8 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
 
     if source.source_type == "ai_research":
         sample = next((item for item in items if item.url), items[0])
-        full_text_ok = _is_usable_full_text(sample.full_text, sample.summary)
+        full_text_ok = _is_probe_usable_full_text(sample.full_text, sample.title, sample.summary)
+        full_text_method = "ai_search" if full_text_ok else None
         lead_ok = _is_usable_lead(sample.lead)
         tags_count = len(sample.tags)
 
@@ -717,6 +775,7 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
             supports_sitemap,
             supports_scraping,
             full_text_ok,
+            full_text_method,
             lead_ok,
             tags_count,
             sample.title,
@@ -727,13 +786,15 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
     sample = samples[0]
     enrichment: ArticleEnrichmentResult | None = None
     full_text_ok = False
+    full_text_method: str | None = None
     lead_ok = False
     tags_count = 0
 
     for candidate in samples:
         candidate_enrichment = extract_article_enrichment(candidate.url, timeout=timeout) if candidate.url else None
-        candidate_full_text_ok = _is_usable_full_text(
+        candidate_full_text_ok = _is_probe_usable_full_text(
             candidate_enrichment.full_text if candidate_enrichment is not None else None,
+            candidate.title,
             candidate.summary,
         )
         candidate_lead_ok = _is_usable_lead(candidate_enrichment.lead if candidate_enrichment is not None else None)
@@ -743,6 +804,7 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
             sample = candidate
             enrichment = candidate_enrichment
             full_text_ok = True
+            full_text_method = "direct_parser"
             lead_ok = candidate_lead_ok
             tags_count = candidate_tags_count
             break
@@ -778,6 +840,7 @@ def probe_source(source: SourceItem, timeout: int = 10) -> SourceProbeResult:
         supports_sitemap,
         supports_scraping,
         full_text_ok,
+        full_text_method,
         lead_ok,
         tags_count,
         sample.title,
@@ -900,17 +963,21 @@ def _collect_source_items(
     timeout: int,
     ai_search_prompt: PromptConfig | None = None,
 ) -> list[RawItem]:
+    items: list[RawItem]
     if source.source_type == "rss":
-        return _parse_feed(source, timeout=timeout)
-    if source.source_type == "news_sitemap":
-        return _parse_news_sitemap_source(source, timeout=timeout)
-    if source.source_type == "sitemap":
-        return _parse_sitemap_source(source, timeout=timeout)
-    if source.source_type == "scraping":
-        return _parse_scraping_source(source, timeout=timeout)
-    if source.source_type == "ai_research":
-        return _parse_ai_research_source(source, timeout=timeout, ai_search_prompt=ai_search_prompt)
-    return []
+        items = _parse_feed(source, timeout=timeout)
+    elif source.source_type == "news_sitemap":
+        items = _parse_news_sitemap_source(source, timeout=timeout)
+    elif source.source_type == "sitemap":
+        items = _parse_sitemap_source(source, timeout=timeout)
+    elif source.source_type == "scraping":
+        items = _parse_scraping_source(source, timeout=timeout)
+    elif source.source_type == "ai_research":
+        items = _parse_ai_research_source(source, timeout=timeout, ai_search_prompt=ai_search_prompt)
+    else:
+        items = []
+
+    return [item for item in items if not _should_drop_raw_item_as_service_page(item)]
 
 
 def _parse_feed(source: SourceItem, timeout: int) -> list[RawItem]:
@@ -1024,6 +1091,14 @@ def _parse_sitemap_source(source: SourceItem, timeout: int) -> list[RawItem]:
 
 
 def _parse_scraping_source(source: SourceItem, timeout: int) -> list[RawItem]:
+    sovsport_news_items = _parse_sovsport_news_source(source, timeout=timeout)
+    if sovsport_news_items:
+        return sovsport_news_items
+
+    sovsport_articles_items = _parse_sovsport_articles_source(source, timeout=timeout)
+    if sovsport_articles_items:
+        return sovsport_articles_items
+
     payload = _fetch_remote_document(source.url, timeout)
 
     parser = _ScrapingDocumentParser(source.url)
@@ -1076,6 +1151,134 @@ def _parse_scraping_source(source: SourceItem, timeout: int) -> list[RawItem]:
             published=fetched_at,
         )
     ]
+
+
+def _parse_sovsport_articles_source(source: SourceItem, *, timeout: int) -> list[RawItem]:
+    if not _is_sovsport_articles_source(source):
+        return []
+
+    parts = urlsplit(source.url.strip())
+    base_root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+    api_url = f"{base_root}/api/proxy/api/articles"
+    try:
+        payload = _fetch_remote_document(api_url, timeout)
+        data = json.loads(payload)
+    except (SourceFetchError, json.JSONDecodeError):
+        return []
+
+    records = data.get("data")
+    if not isinstance(records, list):
+        return []
+
+    fetched_at = datetime.now(timezone.utc)
+    items: list[RawItem] = []
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        slug = _normalize_whitespace(str(record.get("url") or ""))
+        title = _normalize_whitespace(str(record.get("title") or ""))
+        if not slug or not title:
+            continue
+
+        article_url = _normalize_url(urljoin(f"{base_root}/articles/", slug))
+        if not article_url:
+            continue
+
+        summary = _normalize_whitespace(str(record.get("subTitle") or "")) or title
+        published = _try_parse_datetime(str(record.get("publicPublishedAt") or "")) or fetched_at
+        sport_category = record.get("sportCategory") if isinstance(record.get("sportCategory"), dict) else {}
+        tags: list[str] = []
+        category_name = _normalize_whitespace(str(sport_category.get("name") or ""))
+        category_type = _normalize_whitespace(str(sport_category.get("typeId") or ""))
+        if category_name:
+            tags.append(category_name)
+        if category_type and category_type not in {tag.lower() for tag in tags}:
+            tags.append(category_type)
+
+        items.append(
+            _build_raw_item(
+                source=source,
+                payload=payload,
+                fetched_at=fetched_at,
+                external_id=article_url,
+                title=title,
+                summary=summary,
+                lead=summary,
+                source_title=source.title,
+                source_url=article_url,
+                url=article_url,
+                published=published,
+                tags=tags,
+            )
+        )
+
+    items.sort(key=lambda item: (item.published_at, item.importance_score), reverse=True)
+    return items
+
+
+def _parse_sovsport_news_source(source: SourceItem, *, timeout: int) -> list[RawItem]:
+    if not _is_sovsport_news_source(source):
+        return []
+
+    parts = urlsplit(source.url.strip())
+    base_root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+    api_url = f"{base_root}/api/proxy/api/news-collection"
+    try:
+        payload = _fetch_remote_document(api_url, timeout)
+        data = json.loads(payload)
+    except (SourceFetchError, json.JSONDecodeError):
+        return []
+
+    records = data.get("data")
+    if not isinstance(records, list):
+        return []
+
+    fetched_at = datetime.now(timezone.utc)
+    items: list[RawItem] = []
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        slug = _normalize_whitespace(str(record.get("url") or ""))
+        title = _normalize_whitespace(str(record.get("title") or ""))
+        if not slug or not title:
+            continue
+
+        sport_category = record.get("sportCategory") if isinstance(record.get("sportCategory"), dict) else {}
+        category_type = _normalize_whitespace(str(sport_category.get("typeId") or ""))
+        article_url = _build_sovsport_news_article_url(base_root, category_type, slug)
+        if not article_url:
+            continue
+
+        summary = _normalize_whitespace(str(record.get("subTitle") or "")) or title
+        published = _try_parse_datetime(str(record.get("publicPublishedAt") or "")) or fetched_at
+        tags: list[str] = []
+        category_name = _normalize_whitespace(str(sport_category.get("name") or ""))
+        if category_name:
+            tags.append(category_name)
+        if category_type and category_type.lower() not in {tag.lower() for tag in tags}:
+            tags.append(category_type)
+
+        items.append(
+            _build_raw_item(
+                source=source,
+                payload=payload,
+                fetched_at=fetched_at,
+                external_id=article_url,
+                title=title,
+                summary=summary,
+                lead=summary,
+                source_title=source.title,
+                source_url=article_url,
+                url=article_url,
+                published=published,
+                tags=tags,
+            )
+        )
+
+    items.sort(key=lambda item: (item.published_at, item.importance_score), reverse=True)
+    return items
 
 
 def _parse_ai_research_source(
@@ -1396,26 +1599,49 @@ def _extract_article_enrichment_from_html(url: str, payload: str | None) -> Arti
     except ValueError:
         return None
 
-    paragraphs = _dedupe_article_paragraphs(
-        [paragraph for paragraph in parser.paragraphs if len(paragraph) >= 40]
-    )
-    full_text: str | None = None
-    if len(paragraphs) >= 2:
-        full_text = "\n\n".join(paragraphs)
-    elif paragraphs:
-        full_text = paragraphs[0]
-    else:
-        fallback = parser.og_description or parser.meta_description
-        if fallback and len(fallback) >= 80:
-            full_text = fallback
-
-    resolved_title = parser.og_title or parser.heading_title or parser.page_title
+    resolved_title = parser.og_title or parser.json_ld_title or parser.heading_title or parser.page_title
     if resolved_title:
         resolved_title = _normalize_whitespace(resolved_title)
 
-    lead = parser.og_description or parser.meta_description
+    lead = parser.og_description or parser.json_ld_description or parser.meta_description
     if lead:
         lead = _normalize_whitespace(lead)
+
+    html_full_text: str | None = None
+    if _is_sovsport_host(url) and parser.preferred_container_text:
+        html_full_text = parser.preferred_container_text
+    else:
+        if _is_sovsport_host(url):
+            paragraph_source = (
+                parser.preferred_paragraphs
+                or parser.preferred_container_paragraphs
+                or parser.paragraphs
+            )
+        else:
+            paragraph_source = parser.preferred_paragraphs if parser.preferred_paragraphs else parser.paragraphs
+        paragraphs = _trim_article_trailing_noise(
+            _dedupe_article_paragraphs(
+                [paragraph for paragraph in paragraph_source if len(paragraph) >= 40]
+            )
+        )
+        if len(paragraphs) >= 2:
+            html_full_text = "\n\n".join(paragraphs)
+        elif paragraphs:
+            html_full_text = paragraphs[0]
+        else:
+            fallback = parser.og_description or parser.meta_description
+            if fallback and len(fallback) >= 80:
+                html_full_text = fallback
+
+    html_full_text = _trim_article_trailing_noise_text(html_full_text)
+    jsonld_full_text = _normalize_jsonld_article_body(parser.json_ld_article_body)
+    full_text = _choose_best_article_full_text(
+        url,
+        html_full_text=html_full_text,
+        jsonld_full_text=jsonld_full_text,
+        title=resolved_title,
+        lead=lead,
+    )
 
     if _looks_like_listing_text(full_text):
         full_text = None
@@ -1424,7 +1650,7 @@ def _extract_article_enrichment_from_html(url: str, payload: str | None) -> Arti
         title=resolved_title or None,
         full_text=full_text,
         lead=lead or None,
-        tags=parser.tags,
+        tags=_merge_tags(parser.tags, parser.json_ld_tags),
     )
 
 
@@ -1440,6 +1666,31 @@ def _merge_tags(*tag_groups: list[str]) -> list[str]:
             seen.add(lowered)
             merged.append(normalized)
     return merged
+
+
+def _choose_best_article_full_text(
+    url: str,
+    *,
+    html_full_text: str | None,
+    jsonld_full_text: str | None,
+    title: str | None,
+    lead: str | None,
+) -> str | None:
+    candidates = [
+        candidate
+        for candidate in (html_full_text, jsonld_full_text)
+        if candidate
+    ]
+    if not candidates:
+        return None
+
+    return max(
+        candidates,
+        key=lambda candidate: (
+            _score_article_text_candidate(candidate, title=title, lead=lead),
+            len(candidate),
+        ),
+    )
 
 
 def _choose_best_local_partial_enrichment(
@@ -1520,18 +1771,43 @@ def _persist_raw_item_enrichment(
     )
 
 
-def _is_usable_full_text(value: str | None, source_summary: str | None = None) -> bool:
+def _is_usable_full_text(value: str | None, *context_parts: str | None) -> bool:
     if not value:
         return False
     normalized = value.strip()
+    if _contains_article_noise_marker(normalized):
+        return False
     if _looks_like_listing_text(normalized):
+        return False
+    if len(normalized) >= 160 and _article_context_overlap(normalized, *context_parts) < 0.08:
         return False
     if len(normalized) >= 180:
         return True
     if normalized.count("\n\n") >= 1 and len(normalized) >= 120:
         return True
-    summary = (source_summary or "").strip()
-    if summary and len(normalized) >= max(120, int(len(summary) * 1.35)):
+    primary_context = next((part.strip() for part in context_parts if part and part.strip()), "")
+    if primary_context and len(normalized) >= max(120, int(len(primary_context) * 1.35)):
+        return True
+    return False
+
+
+def _is_probe_usable_full_text(value: str | None, *context_parts: str | None) -> bool:
+    if _is_usable_full_text(value, *context_parts):
+        return True
+    if not value:
+        return False
+
+    normalized = value.strip()
+    if _contains_article_noise_marker(normalized):
+        return False
+    if _looks_like_listing_text(normalized):
+        return False
+    if _article_context_overlap(normalized, *context_parts) < 0.08:
+        return False
+
+    if len(normalized) >= 100:
+        return True
+    if len(normalized) >= 80 and any(part and part.strip() for part in context_parts):
         return True
     return False
 
@@ -1568,6 +1844,11 @@ def _filter_new_items(
     known_external_ids: set[str] | None = None,
     known_dedupe_keys: set[str] | None = None,
 ) -> list[RawItem]:
+    cutoff = datetime.now(timezone.utc) - DEFAULT_INGEST_MAX_ITEM_AGE
+    items = [item for item in items if item.published_at >= cutoff]
+    if not items:
+        return []
+
     known_ids = known_external_ids or set()
     known_keys = known_dedupe_keys or set()
     if state is not None and source_type == "scraping":
@@ -1730,10 +2011,13 @@ def _build_raw_item(
     published: datetime,
     tags: list[str] | None = None,
 ) -> RawItem:
-    normalized_category = _classify_category(title, summary, source)
+    normalized_category = _classify_category(title, summary, source, tags)
     dedupe_key = _make_dedupe_key(url, title)
-    importance_score = _score_importance(title, summary, published, source)
+    importance_score = _score_importance(title, summary, published, source, tags)
     triage_label = _triage_label(importance_score)
+    if _looks_like_live_match_tracker(title, summary):
+        importance_score = min(importance_score, 18)
+        triage_label = "low"
 
     return RawItem(
         id=f"{source.key}:{external_id}",
@@ -1906,28 +2190,49 @@ class _ArticleDocumentParser(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
+        self.base_host = urlsplit(base_url).netloc.lower()
         self._container_scores: list[int] = [0]
         self._skip_depth = 0
         self._text_capture_depth = 0
         self._text_capture_parts: list[str] = []
+        self._preferred_container_depth = 0
+        self._preferred_text_capture_depth = 0
+        self._preferred_text_capture_parts: list[str] = []
         self._in_paragraph = False
         self._paragraph_parts: list[str] = []
         self._in_title_tag = False
         self._title_parts: list[str] = []
         self._in_h1_tag = False
         self._h1_parts: list[str] = []
+        self._in_json_ld_script = False
+        self._json_ld_parts: list[str] = []
         self.paragraphs: list[str] = []
+        self.preferred_paragraphs: list[str] = []
+        self.preferred_container_paragraphs: list[str] = []
+        self.preferred_container_text: str | None = None
         self.page_title: str | None = None
         self.og_title: str | None = None
         self.heading_title: str | None = None
         self.meta_description: str | None = None
         self.og_description: str | None = None
         self.tags: list[str] = []
+        self.json_ld_title: str | None = None
+        self.json_ld_description: str | None = None
+        self.json_ld_article_body: str | None = None
+        self.json_ld_tags: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {key.lower(): (value or "") for key, value in attrs}
         tag = tag.lower()
         self._container_scores.append(self._container_scores[-1] + _article_container_score(tag, attr_map))
+        if self._preferred_container_depth > 0:
+            self._preferred_container_depth += 1
+            if self._preferred_text_capture_depth > 0:
+                self._preferred_text_capture_depth += 1
+        elif _is_sovsport_preferred_article_container(self.base_host, attr_map):
+            self._preferred_container_depth = 1
+            self._preferred_text_capture_depth = 1
+            self._preferred_text_capture_parts = []
 
         if tag == "title":
             self._in_title_tag = True
@@ -1935,6 +2240,11 @@ class _ArticleDocumentParser(HTMLParser):
         if tag == "h1":
             self._in_h1_tag = True
             self._h1_parts = []
+
+        if tag == "script" and attr_map.get("type", "").lower() == "application/ld+json":
+            self._in_json_ld_script = True
+            self._json_ld_parts = []
+            return
 
         if tag in {"script", "style", "noscript"}:
             self._skip_depth += 1
@@ -1990,6 +2300,12 @@ class _ArticleDocumentParser(HTMLParser):
                     self.heading_title = heading
                 self._h1_parts = []
 
+            if tag == "script" and self._in_json_ld_script:
+                self._in_json_ld_script = False
+                self._consume_json_ld_script("".join(self._json_ld_parts))
+                self._json_ld_parts = []
+                return
+
             if tag in {"script", "style", "noscript"} and self._skip_depth > 0:
                 self._skip_depth -= 1
                 return
@@ -1998,6 +2314,12 @@ class _ArticleDocumentParser(HTMLParser):
                 text = _normalize_whitespace(" ".join(self._paragraph_parts))
                 if text and text not in self.paragraphs:
                     self.paragraphs.append(text)
+                if (
+                    text
+                    and self._preferred_container_depth > 0
+                    and text not in self.preferred_paragraphs
+                ):
+                    self.preferred_paragraphs.append(text)
                 self._in_paragraph = False
                 self._paragraph_parts = []
 
@@ -2009,7 +2331,19 @@ class _ArticleDocumentParser(HTMLParser):
                         if paragraph not in self.paragraphs:
                             self.paragraphs.append(paragraph)
                     self._text_capture_parts = []
+            if self._preferred_text_capture_depth > 0:
+                self._preferred_text_capture_depth -= 1
+                if self._preferred_text_capture_depth == 0:
+                    text = _normalize_article_text(" ".join(self._preferred_text_capture_parts))
+                    if text and not self.preferred_container_text:
+                        self.preferred_container_text = text
+                    for paragraph in _split_article_text(text):
+                        if paragraph not in self.preferred_container_paragraphs:
+                            self.preferred_container_paragraphs.append(paragraph)
+                    self._preferred_text_capture_parts = []
         finally:
+            if self._preferred_container_depth > 0:
+                self._preferred_container_depth -= 1
             if self._container_scores:
                 self._container_scores.pop()
 
@@ -2018,12 +2352,17 @@ class _ArticleDocumentParser(HTMLParser):
             self._title_parts.append(data)
         if self._in_h1_tag:
             self._h1_parts.append(data)
+        if self._in_json_ld_script:
+            self._json_ld_parts.append(data)
+            return
         if self._skip_depth > 0:
             return
         if self._in_paragraph:
             self._paragraph_parts.append(data)
         if self._text_capture_depth > 0:
             self._text_capture_parts.append(data)
+        if self._preferred_text_capture_depth > 0:
+            self._preferred_text_capture_parts.append(data)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
@@ -2035,9 +2374,35 @@ class _ArticleDocumentParser(HTMLParser):
             if tag not in self.tags:
                 self.tags.append(tag)
 
+    def _consume_json_ld_script(self, payload: str) -> None:
+        cleaned = payload.strip()
+        if not cleaned:
+            return
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return
+        _merge_json_ld_article_metadata(self, data)
 
-def _classify_category(title: str, summary: str, source: SourceItem) -> str:
-    haystack = f"{title} {summary} {source.title}".lower()
+
+def _classify_category(
+    title: str,
+    summary: str,
+    source: SourceItem,
+    tags: list[str] | None = None,
+) -> str:
+    haystack = " ".join(
+        part
+        for part in (
+            title,
+            summary,
+            source.title,
+            source.category,
+            source.url,
+            " ".join(tags or []),
+        )
+        if part
+    ).lower()
 
     for category, keywords in CATEGORY_RULES:
         if any(keyword in haystack for keyword in keywords):
@@ -2046,52 +2411,92 @@ def _classify_category(title: str, summary: str, source: SourceItem) -> str:
     return "general"
 
 
-def _score_importance(title: str, summary: str, published_at: datetime, source: SourceItem) -> int:
-    score = 18
+def _score_importance(
+    title: str,
+    summary: str,
+    published_at: datetime,
+    source: SourceItem,
+    tags: list[str] | None = None,
+) -> int:
+    score = 0
+    for _, delta in _score_importance_components(title, summary, published_at, source, tags):
+        score += delta
+    return max(0, min(score, 100))
+
+
+def build_importance_score_breakdown(
+    *,
+    title: str,
+    summary: str,
+    published_at: datetime,
+    source: SourceItem,
+    tags: list[str] | None = None,
+) -> list[str]:
+    components = _score_importance_components(title, summary, published_at, source, tags)
+    lines = [
+        f"{label}: {'+' if delta >= 0 else ''}{delta}"
+        for label, delta in components
+        if delta != 0 or label == "База"
+    ]
+    total = max(0, min(sum(delta for _, delta in components), 100))
+    lines.append(f"Итог: {total}/100")
+    return lines
+
+
+def _score_importance_components(
+    title: str,
+    summary: str,
+    published_at: datetime,
+    source: SourceItem,
+    tags: list[str] | None = None,
+) -> list[tuple[str, int]]:
+    components: list[tuple[str, int]] = [("База", 18)]
     title_lower = title.lower()
     summary_lower = summary.lower()
     haystack = f"{title_lower} {summary_lower}"
 
-    score += _freshness_bonus(published_at)
-    score += _source_reputation_bonus(source)
-    score += _category_bonus(source, haystack)
+    components.append(("Свежесть", _freshness_bonus(published_at)))
+    components.append(("Источник", _source_reputation_bonus(source)))
+    components.append(("Категория", _category_bonus(source, haystack, tags)))
 
     for term in HIGH_PRIORITY_TERMS:
         if term in title_lower:
-            score += 16
+            components.append((f"Сильный триггер title: {term}", 16))
         elif term in summary_lower:
-            score += 8
+            components.append((f"Сильный триггер summary: {term}", 8))
 
     for term in MEDIUM_PRIORITY_TERMS:
         if term in title_lower:
-            score += 6
+            components.append((f"Средний триггер title: {term}", 6))
         elif term in summary_lower:
-            score += 3
+            components.append((f"Средний триггер summary: {term}", 3))
 
     for term in MAJOR_EVENT_TERMS:
         if term in haystack:
-            score += 8
+            components.append((f"Большое событие: {term}", 8))
 
     for term in OFFICIAL_SIGNAL_TERMS:
         if term in haystack:
-            score += 6
+            components.append((f"Официальный сигнал: {term}", 6))
 
     if re.search(r"\b\d+\s*[:\-]\s*\d+\b", title_lower):
-        score += 4
+        components.append(("Счет/результат в заголовке", 4))
     if re.search(r"\b\d+\s+(матч|тур|игр|round|game|games)\b", haystack):
-        score += 4
+        components.append(("Матчевая фактура", 4))
 
     if len(title.strip()) >= 55:
-        score += 3
+        components.append(("Достаточно информативный заголовок", 3))
     if len(summary.strip()) >= 140:
-        score += 4
+        components.append(("Подробный summary", 4))
     elif len(summary.strip()) < 45:
-        score -= 6
+        components.append(("Слишком короткий summary", -6))
 
-    if any(noise in haystack for noise in ("прямой эфир", "live", "видео", "video")):
-        score -= 6
+    if _looks_like_live_match_tracker(title, summary):
+        components.append(("Live/match-tracker штраф", -22))
+    elif any(noise in haystack for noise in ("прямой эфир", "live", "видео", "video")):
+        components.append(("Сервисный/видео штраф", -6))
 
-    return max(0, min(score, 100))
+    return components
 
 
 def _triage_label(score: int) -> str:
@@ -2126,13 +2531,13 @@ def _source_reputation_bonus(source: SourceItem) -> int:
     return best_match
 
 
-def _category_bonus(source: SourceItem, haystack: str) -> int:
-    category = _classify_category("", haystack, source)
-    if category in {"football", "hockey", "basketball", "tennis"}:
-        return 6
+def _category_bonus(source: SourceItem, haystack: str, tags: list[str] | None = None) -> int:
+    category = _classify_category("", haystack, source, tags)
+    if category == "general":
+        return 0
     if category == "betting":
         return 4
-    return 0
+    return 6
 
 
 def _make_dedupe_key(url: str | None, title: str) -> str:
@@ -2143,6 +2548,41 @@ def _make_dedupe_key(url: str | None, title: str) -> str:
 
     normalized_title = " ".join(title.lower().split())
     return normalized_title[:240]
+
+
+def _looks_like_live_match_tracker(title: str, summary: str) -> bool:
+    title_lower = title.strip().lower()
+    summary_lower = summary.strip().lower()
+    haystack = f"{title_lower} {summary_lower}"
+
+    if any(term in haystack for term in LIVE_MATCH_TRACKER_TERMS):
+        return True
+
+    if re.search(r"^\s*.+\s+[–:-]\s+[–:-]\s+.+\s*$", title_lower):
+        return True
+
+    if re.search(r"^\s*.+\s+[–-]\s+\d+\s*:\s*\d+\s+.+\s*$", title_lower):
+        return True
+
+    return False
+
+
+def _should_drop_raw_item_as_service_page(raw_item: RawItem) -> bool:
+    if _looks_like_live_match_tracker(raw_item.title, raw_item.summary or ""):
+        return True
+
+    lead = (raw_item.lead or "").strip()
+    full_text = (raw_item.full_text or "").strip()
+    service_haystack = " ".join(
+        part.strip().lower()
+        for part in (raw_item.title, raw_item.summary or "", lead, full_text)
+        if part
+    )
+
+    if "онлайн-трансляц" in service_haystack or "прямой эфир" in service_haystack:
+        return True
+
+    return False
 
 
 def _normalize_url(url: str) -> str:
@@ -2635,6 +3075,10 @@ def _looks_like_article_text_container(attr_map: dict[str, str]) -> bool:
         "articletext",
         "article-text",
         "article_text",
+        "text-editor",
+        "text_editor",
+        "content-controller_text-editor",
+        "content-controller__text-editor",
         "articlebody",
         "article-body",
         "article_body",
@@ -2676,6 +3120,187 @@ def _normalize_article_text(value: str) -> str:
     cleaned = _normalize_whitespace(value)
     cleaned = re.sub(r"\s+(?=[,.;:!?])", "", cleaned)
     return cleaned
+
+
+def _is_sovsport_articles_source(source: SourceItem) -> bool:
+    parts = urlsplit(source.url.strip())
+    host = parts.netloc.lower()
+    path = parts.path.rstrip("/").lower()
+    return (
+        "sovsport.ru" in host
+        and source.source_type == "scraping"
+        and path == "/articles"
+    )
+
+
+def _is_sovsport_news_source(source: SourceItem) -> bool:
+    parts = urlsplit(source.url.strip())
+    host = parts.netloc.lower()
+    path = parts.path.rstrip("/").lower()
+    return (
+        "sovsport.ru" in host
+        and source.source_type == "scraping"
+        and path == "/news"
+    )
+
+
+def _build_sovsport_news_article_url(base_root: str, category_type: str, slug: str) -> str | None:
+    normalized_slug = slug.strip().strip("/")
+    if not normalized_slug:
+        return None
+
+    normalized_category = category_type.strip().strip("/").lower()
+    if normalized_category:
+        candidate = _normalize_url(f"{base_root}/{normalized_category}/news/{normalized_slug}")
+        if candidate:
+            return candidate
+
+    return _normalize_url(f"{base_root}/news/{normalized_slug}")
+
+
+def _is_sovsport_preferred_article_container(base_host: str, attr_map: dict[str, str]) -> bool:
+    if "sovsport.ru" not in base_host:
+        return False
+    haystack = " ".join(
+        filter(
+            None,
+            (
+                attr_map.get("class", ""),
+                attr_map.get("id", ""),
+                attr_map.get("data-testid", ""),
+            ),
+        )
+    ).lower()
+    return "content-controller_text-editor" in haystack or "text-editor" in haystack
+
+
+def _is_sovsport_host(url: str) -> bool:
+    host = urlsplit(url).netloc.lower()
+    return host.endswith("sovsport.ru") or ".sovsport.ru" in host
+
+
+def _contains_article_noise_marker(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = _normalize_dedupe_text(value)
+    if not normalized:
+        return False
+    for marker in ARTICLE_TRAILING_NOISE_MARKERS:
+        if _normalize_dedupe_text(marker) in normalized:
+            return True
+    return False
+
+
+def _article_context_overlap(value: str | None, *context_parts: str | None) -> float:
+    if not value:
+        return 1.0
+    context_tokens: set[str] = set()
+    for part in context_parts:
+        if not part:
+            continue
+        context_tokens.update(
+            token
+            for token in _normalize_dedupe_text(part).split()
+            if len(token) >= 4
+        )
+    if not context_tokens:
+        return 1.0
+
+    text_tokens = {
+        token
+        for token in _normalize_dedupe_text(value).split()
+        if len(token) >= 4
+    }
+    if not text_tokens:
+        return 0.0
+    return len(text_tokens & context_tokens) / len(context_tokens)
+
+
+def _score_article_text_candidate(
+    value: str,
+    *,
+    title: str | None,
+    lead: str | None,
+) -> tuple[int, int]:
+    score = 0
+    overlap = _article_context_overlap(value, title, lead)
+
+    if overlap >= 0.2:
+        score += 4
+    elif overlap >= 0.12:
+        score += 3
+    elif overlap >= 0.08:
+        score += 2
+    elif overlap >= 0.04:
+        score += 1
+
+    if _contains_article_noise_marker(value):
+        score -= 4
+    if _looks_like_listing_text(value):
+        score -= 5
+    if len(value) >= 180:
+        score += 1
+
+    return score, int(overlap * 1000)
+
+
+def _normalize_jsonld_article_body(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = _trim_article_trailing_noise_text(_normalize_whitespace(value))
+    if not normalized:
+        return None
+    paragraphs = _split_article_text(normalized)
+    if len(paragraphs) >= 2:
+        return "\n\n".join(paragraphs)
+    if paragraphs:
+        return paragraphs[0]
+    return normalized if len(normalized) >= 80 else None
+
+
+def _merge_json_ld_article_metadata(parser: _ArticleDocumentParser, payload: object) -> None:
+    if isinstance(payload, list):
+        for item in payload:
+            _merge_json_ld_article_metadata(parser, item)
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    if "@graph" in payload:
+        _merge_json_ld_article_metadata(parser, payload.get("@graph"))
+
+    article_type = str(payload.get("@type") or "").lower()
+    if article_type and article_type not in {
+        "newsarticle",
+        "article",
+        "blogposting",
+        "report",
+        "liveblogposting",
+    }:
+        return
+
+    headline = _normalize_whitespace(str(payload.get("headline") or ""))
+    description = _normalize_whitespace(str(payload.get("description") or ""))
+    article_body = _normalize_whitespace(str(payload.get("articleBody") or payload.get("articlebody") or ""))
+    keywords = payload.get("keywords")
+
+    if headline and not parser.json_ld_title:
+        parser.json_ld_title = headline
+    if description and not parser.json_ld_description:
+        parser.json_ld_description = description
+    if article_body and (not parser.json_ld_article_body or len(article_body) > len(parser.json_ld_article_body)):
+        parser.json_ld_article_body = article_body
+
+    if isinstance(keywords, str):
+        for tag in _split_meta_values(keywords):
+            if tag not in parser.json_ld_tags:
+                parser.json_ld_tags.append(tag)
+    elif isinstance(keywords, list):
+        for keyword in keywords:
+            tag = _normalize_whitespace(str(keyword or ""))
+            if tag and tag not in parser.json_ld_tags:
+                parser.json_ld_tags.append(tag)
 
 
 def _split_article_text(value: str) -> list[str]:
@@ -2731,6 +3356,44 @@ def _dedupe_article_paragraphs(paragraphs: list[str]) -> list[str]:
         normalized_seen.append(normalized)
 
     return unique
+
+
+def _trim_article_trailing_noise(paragraphs: list[str]) -> list[str]:
+    trimmed: list[str] = []
+
+    for paragraph in paragraphs:
+        normalized = _normalize_dedupe_text(paragraph)
+        if any(marker in normalized for marker in ARTICLE_TRAILING_NOISE_MARKERS):
+            break
+        cropped = _trim_article_trailing_noise_text(paragraph)
+        if cropped:
+          trimmed.append(cropped)
+          if cropped != paragraph:
+              break
+
+    return trimmed or paragraphs
+
+
+def _trim_article_trailing_noise_text(value: str | None) -> str | None:
+    if not value:
+        return value
+
+    original = value.strip()
+    lowered = original.lower()
+    cut_index: int | None = None
+
+    for marker in ARTICLE_TRAILING_NOISE_MARKERS:
+        index = lowered.find(marker)
+        if index == -1:
+            continue
+        if cut_index is None or index < cut_index:
+            cut_index = index
+
+    if cut_index is None:
+        return original
+
+    trimmed = original[:cut_index].rstrip(" \n\r\t:;,.!-")
+    return trimmed or None
 
 
 def _normalize_dedupe_text(value: str) -> str:

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatCategoryLabel } from "@/lib/category";
 import type { NewsItem } from "@/lib/news";
 
 type NewsCardProps = {
@@ -9,7 +10,7 @@ export function NewsCard({ item }: NewsCardProps) {
   const content = (
     <article className="news-card">
       <div className="badge-row">
-        <span>{item.category}</span>
+        <span>{formatCategoryLabel(item.category)}</span>
         {item.aiReviewed ? <span className="ai-badge">AI edited</span> : null}
       </div>
       <h3>{item.title}</h3>

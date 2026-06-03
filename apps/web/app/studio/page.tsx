@@ -1,5 +1,10 @@
 import Link from "next/link";
 
+import { logoutAdminNow } from "@/app/auth-actions";
+import { hidePublishedNewsNow, unhidePublishedNewsNow } from "@/app/admin/actions";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { requireAdminSession } from "@/lib/auth";
+import { formatCategoryLabel } from "@/lib/category";
 import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +69,7 @@ function formatContentPlanStatus(status?: string) {
     case "rewrite_needed":
       return "нужен rewrite";
     case "fallback_only":
-      return "template fallback only";
+      return "только шаблонный fallback";
     default:
       return status ?? "ещё не попадало в content plan";
   }
@@ -96,11 +101,11 @@ function formatReviewStatus(status?: string) {
     case "reviewed":
       return "проверено";
     case "quality_hold":
-      return "quality hold";
+      return "удержано quality gate";
     case "quality_rewrite":
       return "нужен rewrite по quality gate";
     case "fallback_only":
-      return "fallback only";
+      return "только fallback";
     default:
       return status ?? "нет review";
   }
@@ -119,6 +124,47 @@ function formatPublishDecision(decision?: string) {
     default:
       return decision ?? "нет publish decision";
   }
+}
+
+function formatNewsVisibility(visibility?: string) {
+  switch (visibility) {
+    case "hidden":
+      return "скрыта";
+    case "public":
+    default:
+      return "в ленте";
+  }
+}
+
+function hasEditorChanges(draft: {
+  title: string;
+  dek: string;
+  body: string;
+  writerTitle?: string;
+  writerDek?: string;
+  writerBody?: string;
+}) {
+  return Boolean(
+    draft.writerBody &&
+      (draft.writerTitle !== draft.title || draft.writerDek !== draft.dek || draft.writerBody !== draft.body)
+  );
+}
+
+function isNeedsAttentionDraft(draft: {
+  status: string;
+  reviewStatus: string;
+  publishDecision: string;
+}) {
+  return (
+    draft.status === "hold" ||
+    draft.status === "rewrite_needed" ||
+    draft.status === "fallback_only" ||
+    draft.reviewStatus === "quality_hold" ||
+    draft.reviewStatus === "quality_rewrite" ||
+    draft.reviewStatus === "fallback_only" ||
+    draft.publishDecision === "publish_hold" ||
+    draft.publishDecision === "publish_skip"
+  );
 }
 
 function formatEditorDecision(decision?: string) {
@@ -344,22 +390,74 @@ function describeEditorialState(rawItem: {
   return draft.reviewSummary ?? "Материал находится в editorial-пайплайне.";
 }
 
-export default async function StudioPage() {
+type StudioSearchParams = {
+  notice?: string;
+  detail?: string;
+  tab?: string;
+};
+
+function getStudioNotice(notice?: string, detail?: string) {
+  switch (notice) {
+    case "news-hidden":
+      return detail ?? "Новость скрыта из публичной ленты.";
+    case "news-unhidden":
+      return detail ?? "Новость возвращена в публичную ленту.";
+    case "hide-news-error":
+    case "unhide-news-error":
+      return detail ?? "Не удалось изменить видимость новости.";
+    default:
+      return detail ?? null;
+  }
+}
+
+type StudioTab = "attention" | "published" | "diagnostics";
+
+function getStudioTab(tab?: string): StudioTab {
+  switch (tab) {
+    case "attention":
+    case "published":
+    case "diagnostics":
+      return tab;
+    default:
+      return "published";
+  }
+}
+
+export default async function StudioPage({
+  searchParams
+}: {
+  searchParams?: Promise<StudioSearchParams>;
+}) {
+  await requireAdminSession("/studio");
+  const params = (await searchParams) ?? {};
   const data = await getEditorialStudioData();
-  const { prompts, drafts, reviews, contentPlan, editorialStatus, isLive } = data;
-  const activePrompts = prompts.filter((prompt) => prompt.status === "active");
-  const rawDraftPairs = buildRawDraftPairs(data, 10);
+  const { drafts, contentPlan, editorialStatus, isLive, publishedNews } = data;
+  const rawDraftPairs = buildRawDraftPairs(data, 8);
+  const notice = getStudioNotice(params.notice, params.detail);
+  const activeTab = getStudioTab(params.tab);
+  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+  const cutoff48h = Date.now() - 48 * 60 * 60 * 1000;
+  const needsAttentionDrafts = drafts.filter(
+    (draft) => isNeedsAttentionDraft(draft) && Date.parse(draft.publishedAt) >= cutoff24h
+  );
+  const recentPublishedNews = publishedNews.filter((item) => Date.parse(item.publishedAt) >= cutoff48h);
+  const recentContentPlan = contentPlan
+    .filter((item) => Date.parse(item.updatedAt || item.createdAt) >= cutoff24h)
+    .slice(0, 8);
+  const publishedVisibleNews = recentPublishedNews.filter((item) => item.visibility !== "hidden");
+  const hiddenPublishedNews = recentPublishedNews.filter((item) => item.visibility === "hidden");
 
   return (
     <main className="page-shell">
       <section className="hero" style={{ paddingBottom: 22 }}>
-        <div className="eyebrow">AI Studio</div>
-        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Черновики и prompt-слой</h1>
+        <div className="eyebrow">Редакторская студия</div>
+        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Редакторский workspace</h1>
         <p>
           {isLive
             ? "Студия читает живые данные из editorial API: prompt configs, draft articles и review-результаты."
-            : "API editorial-слоя сейчас недоступен, поэтому показывается fallback-просмотр структуры Stage 3."}
+            : "API editorial-слоя сейчас недоступен, поэтому показывается резервный режим просмотра."}
         </p>
+        {notice ? <p className="source-card-error">{notice}</p> : null}
         <div className="hero-actions">
           <Link className="button-primary" href="/admin">
             Открыть админку
@@ -370,29 +468,172 @@ export default async function StudioPage() {
           <Link className="button-secondary" href="/">
             На главную
           </Link>
+          <form action={logoutAdminNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Выйти"
+              pendingLabel="Выходим..."
+            />
+          </form>
         </div>
         <div className="section-card" style={{ marginTop: 18 }}>
           <p style={{ margin: 0 }}>
-            AI mode:{" "}
+            Режим AI:{" "}
             <strong>
               {editorialStatus.openaiEnabled
                 ? `${editorialStatus.providerLabel} live (editorial: ${editorialStatus.openaiModel}, search: ${editorialStatus.openaiSearchModel}, ${editorialStatus.apiStyle})`
-                : "template fallback"}
+                : "шаблонный fallback"}
             </strong>
           </p>
           <p style={{ margin: "6px 0 0 0" }}>
-            Web search: <strong>{editorialStatus.webSearchEnabled ? "on" : "off"}</strong>
+            Веб-поиск: <strong>{editorialStatus.webSearchEnabled ? "включен" : "выключен"}</strong>
           </p>
+        </div>
+        <div className="stats-grid" style={{ marginTop: 18 }}>
+          <div className="stat">
+            <strong>{publishedVisibleNews.length}</strong>
+            <span>в ленте за 48 часов</span>
+          </div>
+          <div className="stat">
+            <strong>{hiddenPublishedNews.length}</strong>
+            <span>скрыты за 48 часов</span>
+          </div>
+          <div className="stat">
+            <strong>{rawDraftPairs.length}</strong>
+            <span>карточек в диагностике</span>
+          </div>
+        </div>
+        <div className="tab-row" style={{ marginTop: 18 }}>
+          <Link className={`tab-link ${activeTab === "published" ? "is-active" : ""}`} href="/studio?tab=published">
+            Опубликованные
+          </Link>
+          <Link className={`tab-link ${activeTab === "diagnostics" ? "is-active" : ""}`} href="/studio?tab=diagnostics">
+            Диагностика
+          </Link>
         </div>
       </section>
 
+      {activeTab === "attention" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Original vs AI</h2>
+            <h2>Требуют внимания</h2>
             <p>
-              Здесь удобнее всего проверять, что модель реально работает: слева сырой RSS-вход, справа AI-черновик.
-              Если справа ещё пусто, это нормально: один editorial run сейчас обрабатывает только часть очереди.
+              Главный рабочий список редактора: hold, rewrite, skip, fallback и спорные случаи перед публикацией.
+              Показываем только свежие кейсы за последние 24 часа.
+            </p>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          {needsAttentionDrafts.length ? (
+            needsAttentionDrafts.map((draft) => (
+              <article key={draft.id} className="news-card">
+                <span>
+                  {formatCategoryLabel(draft.category)} · {formatDraftStatus(draft.status)} · {formatPublishDecision(draft.publishDecision)}
+                </span>
+                <h3>{draft.title}</h3>
+                <p>{draft.reviewSummary ?? draft.publishReason ?? "Материал требует внимания редактора."}</p>
+                <p className="footer-note" style={{ marginTop: 12 }}>
+                  {draft.sourceTitle} ·{" "}
+                  <time dateTime={draft.publishedAt}>
+                    {new Date(draft.publishedAt).toLocaleString("ru-RU", {
+                      dateStyle: "medium",
+                      timeStyle: "short"
+                    })}
+                  </time>
+                </p>
+                <p className="footer-note">
+                  Review: {formatReviewStatus(draft.reviewStatus)} · Mode: {draft.generationMode}
+                </p>
+              </article>
+            ))
+          ) : (
+            <article className="news-card">
+              <h3>Сейчас всё спокойно</h3>
+              <p>Свежих материалов с hold/rewrite/skip на текущем срезе нет.</p>
+            </article>
+          )}
+        </div>
+      </section>
+      ) : null}
+
+      {activeTab === "published" ? (
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Опубликованные материалы</h2>
+            <p>Публичная лента и скрытые материалы для moderation. Показываем только свежие за последние 48 часов.</p>
+          </div>
+        </div>
+        <div className="stats-grid" style={{ marginBottom: 18 }}>
+          <div className="stat">
+            <strong>{publishedVisibleNews.length}</strong>
+            <span>видны в ленте</span>
+          </div>
+          <div className="stat">
+            <strong>{hiddenPublishedNews.length}</strong>
+            <span>скрыты</span>
+          </div>
+        </div>
+        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          {recentPublishedNews.length ? (
+            recentPublishedNews.map((item) => (
+              <article key={item.id} className="news-card">
+                <span>
+                  {formatCategoryLabel(item.category)} · {formatNewsVisibility(item.visibility)} · {item.aiReviewed ? "прошла AI-редактуру" : "публичная запись"}
+                </span>
+                <h3>{item.title}</h3>
+                <p>{item.description}</p>
+                <p className="footer-note" style={{ marginTop: 12 }}>
+                  {item.source} ·{" "}
+                  <time dateTime={item.publishedAt}>
+                    {new Date(item.publishedAt).toLocaleString("ru-RU", {
+                      dateStyle: "medium",
+                      timeStyle: "short"
+                    })}
+                  </time>
+                </p>
+                <div className="hero-actions" style={{ marginTop: 16 }}>
+                  {item.articleSlug && item.visibility !== "hidden" ? (
+                    <Link className="button-secondary" href={`/news/${item.articleSlug}`}>
+                      Открыть статью
+                    </Link>
+                  ) : null}
+                  {item.link ? (
+                    <a className="button-secondary" href={item.link} target="_blank" rel="noreferrer">
+                      Первоисточник
+                    </a>
+                  ) : null}
+                  <form action={item.visibility === "hidden" ? unhidePublishedNewsNow : hidePublishedNewsNow}>
+                    <input type="hidden" name="newsItemId" value={item.id} />
+                    <PendingSubmitButton
+                      className={item.visibility === "hidden" ? "button-primary" : "button-secondary"}
+                      idleLabel={item.visibility === "hidden" ? "Вернуть в ленту" : "Скрыть"}
+                      pendingLabel={item.visibility === "hidden" ? "Возвращаем..." : "Скрываем..."}
+                    />
+                  </form>
+                </div>
+              </article>
+            ))
+          ) : (
+            <article className="news-card">
+              <h3>Опубликованных материалов пока нет</h3>
+              <p>Когда publish-этап выпустит новости, здесь появится moderation-блок по публичной ленте.</p>
+            </article>
+          )}
+        </div>
+      </section>
+      ) : null}
+
+      {activeTab === "diagnostics" ? (
+      <>
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Исходник и AI-версия</h2>
+            <p>
+              Глубокая диагностика пайплайна: слева сырой RSS-вход, справа результат writer/editor.
+              Показываем только последние карточки, а не полный архив.
             </p>
           </div>
         </div>
@@ -400,30 +641,30 @@ export default async function StudioPage() {
           {rawDraftPairs.map(({ rawItem, draft }) => (
             <article key={rawItem.id} className="compare-card">
               <div className="compare-panel">
-                <span>RAW RSS</span>
+                <span>Сырой RSS-вход</span>
                 <h3>{rawItem.title}</h3>
                 <div className="compare-block">
-                  <strong>Original title</strong>
+                  <strong>Исходный заголовок</strong>
                   <p>{rawItem.title}</p>
                 </div>
                 <div className="compare-block">
-                  <strong>Original summary</strong>
+                  <strong>Исходное summary</strong>
                   <p>{rawItem.summary}</p>
                 </div>
                 {rawItem.lead ? (
                   <div className="compare-block">
-                    <strong>Original lead</strong>
+                    <strong>Исходный lead</strong>
                     <p>{rawItem.lead}</p>
                   </div>
                 ) : null}
                 {rawItem.tags.length ? (
                   <div className="compare-block">
-                    <strong>Original tags</strong>
+                    <strong>Исходные теги</strong>
                     <p>{rawItem.tags.join(", ")}</p>
                   </div>
                 ) : null}
                 <div className="compare-block">
-                  <strong>Original meta</strong>
+                  <strong>Данные источника</strong>
                   <p>
                     Дата публикации:{" "}
                     <time dateTime={rawItem.publishedAt}>
@@ -445,7 +686,7 @@ export default async function StudioPage() {
                   </p>
                 </div>
                 <div className="compare-block">
-                  <strong>Original full text / search brief</strong>
+                  <strong>Исходный full text / search brief</strong>
                   <div className="compare-text-surface">
                     {rawItem.fullText ? (
                       rawItem.fullText
@@ -458,7 +699,7 @@ export default async function StudioPage() {
                   </div>
                 </div>
                 <div className="compare-block">
-                  <strong>Full text provenance</strong>
+                  <strong>Происхождение full text</strong>
                   <p>
                     Способ:{" "}
                     <strong>{formatExtractionMode(rawItem.extractionMode)}</strong>
@@ -485,7 +726,7 @@ export default async function StudioPage() {
                   </p>
                   {rawItem.referenceUrls.length ? (
                     <div>
-                      <p>Источники web search:</p>
+                      <p>Источники веб-поиска:</p>
                       {rawItem.referenceUrls.map((url) => (
                         <p key={`${rawItem.id}-${url}`}>
                           <a href={url} target="_blank" rel="noreferrer">
@@ -498,7 +739,7 @@ export default async function StudioPage() {
                   {rawItem.enrichmentError ? <p>Причина: {rawItem.enrichmentError}</p> : null}
                 </div>
                 <div className="compare-block">
-                  <strong>Pipeline status</strong>
+                  <strong>Статус pipeline</strong>
                   <p>{describePipelineState(rawItem)}</p>
                   <p>
                     <strong>Full text:</strong> {describeEnrichmentBlock(rawItem)}
@@ -514,30 +755,38 @@ export default async function StudioPage() {
                 <p className="footer-note">
                   {rawItem.sourceTitle} · {rawItem.triageLabel} · score {rawItem.importanceScore}
                 </p>
+                {rawItem.scoreBreakdown?.length ? (
+                  <div className="compare-block">
+                    <strong>Почему такой score</strong>
+                    {rawItem.scoreBreakdown.map((line) => (
+                      <p key={`${rawItem.id}-score-${line}`}>{line}</p>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <div className="compare-panel">
-                <span>{draft ? `AI DRAFT · ${draft.generationMode}` : "AI DRAFT PENDING"}</span>
+                <span>{draft ? `AI-черновик · ${draft.generationMode}` : "AI-черновик еще не создан"}</span>
                 <h3>{draft?.title ?? "Черновик ещё не создан"}</h3>
                 <div className="compare-block">
-                  <strong>Writer title</strong>
+                  <strong>Заголовок writer</strong>
                   <p>{draft?.writerTitle ?? draft?.title ?? "Для этой новости пока нет draft-версии."}</p>
                 </div>
                 <div className="compare-block">
-                  <strong>Writer dek</strong>
+                  <strong>Dek от writer</strong>
                   <p>{draft?.writerDek ?? draft?.dek ?? "Запустите editorial run, чтобы получить AI-версию."}</p>
                 </div>
                 {draft?.status === "fallback_only" ? (
                   <p className="source-card-error">
-                    Fallback-only: этот draft сохранён только для внутреннего просмотра и не может попасть в публикацию.
+                    Только fallback: этот draft сохранен только для внутреннего просмотра и не может попасть в публикацию.
                   </p>
                 ) : null}
                 {draft?.generationMode === "template" ? (
                   <p className="source-card-error">
-                    Это template fallback. Такой draft не должен автоматически попадать в публикацию.
+                    Это шаблонный fallback. Такой draft не должен автоматически попадать в публикацию.
                   </p>
                 ) : null}
                 <div className="compare-block">
-                  <strong>Editorial status</strong>
+                  <strong>Редакционный статус</strong>
                   <p>
                     Content plan: <strong>{formatContentPlanStatus(rawItem.contentPlanStatus)}</strong>
                   </p>
@@ -555,7 +804,7 @@ export default async function StudioPage() {
                   {draft?.publishReason ? <p>Причина publish decision: {draft.publishReason}</p> : null}
                 </div>
                 <div className="compare-block">
-                  <strong>Writer draft</strong>
+                  <strong>Черновик writer</strong>
                   <div className="compare-text-surface">
                     {draft?.writerBody || draft?.body ? (
                       (draft?.writerBody ?? draft?.body ?? "")
@@ -567,9 +816,9 @@ export default async function StudioPage() {
                     )}
                   </div>
                 </div>
-                {draft && draft.writerBody && (draft.writerTitle !== draft.title || draft.writerDek !== draft.dek || draft.writerBody !== draft.body) ? (
+                {draft && hasEditorChanges(draft) ? (
                   <div className="compare-block">
-                    <strong>Editor final version</strong>
+                    <strong>Финальная версия editor</strong>
                     <p><strong>Title:</strong> {draft.title}</p>
                     <p><strong>Dek:</strong> {draft.dek}</p>
                     <div className="compare-text-surface">
@@ -589,12 +838,13 @@ export default async function StudioPage() {
       <section>
         <div className="section-head">
           <div>
-            <h2>Content plan</h2>
-            <p>Это промежуточный слой между triage raw_items и генерацией draft-статей.</p>
+            <h2>Контент-план</h2>
+            <p>Это промежуточный слой между triage raw_items и генерацией draft-статей. Показываем только свежие записи за последние 24 часа.</p>
           </div>
         </div>
         <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {contentPlan.map((item) => (
+          {recentContentPlan.length ? (
+            recentContentPlan.map((item) => (
             <article key={item.id} className="news-card">
               <span>
                 {item.priorityLabel} · {item.plannedFormat}
@@ -605,112 +855,18 @@ export default async function StudioPage() {
                 {item.sourceTitle} · {item.status} · score {item.priorityScore}
               </p>
             </article>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>Prompt configs</h2>
-            <p>Показываем только активные конфиги, которые реально участвуют в текущем флоу.</p>
-          </div>
-        </div>
-        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {activePrompts.length ? (
-            activePrompts.map((prompt) => (
-              <article key={prompt.id} className="news-card">
-                <span>
-                  {prompt.agentKey} · v{prompt.version}
-                </span>
-                <h3>{prompt.name}</h3>
-                <p>{prompt.systemPrompt}</p>
-                <p>
-                  <strong>Model:</strong> {prompt.model}
-                </p>
-                <p>
-                  <strong>Template:</strong> {prompt.userPromptTemplate}
-                </p>
-              </article>
             ))
           ) : (
             <article className="news-card">
-              <h3>Активных prompt-конфигов пока нет</h3>
-              <p>Когда вы активируете writer/editor prompt в админке, он появится здесь.</p>
+              <h3>Свежих записей контент-плана нет</h3>
+              <p>Здесь показываются только недавние записи за последние 24 часа, чтобы диагностика не превращалась в архив.</p>
             </article>
           )}
         </div>
       </section>
+      </>
+      ) : null}
 
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>Latest drafts</h2>
-            <p>Это черновики, которые появились после RSS-ingestion и editorial pass.</p>
-          </div>
-        </div>
-        <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
-          {drafts.map((draft) => (
-            <article key={draft.id} className="news-card">
-              <span>
-                {draft.category} · {draft.status} · {draft.reviewStatus}
-              </span>
-              <h3>{draft.title}</h3>
-              <p>
-                <strong>Dek:</strong> {draft.dek}
-              </p>
-              {draft.body.split("\n\n").map((paragraph, index) => (
-                <p key={`${draft.id}-${index}`}>{paragraph}</p>
-              ))}
-              <div className="section-head" style={{ margin: "16px 0 0" }}>
-                <span>{draft.sourceTitle}</span>
-                <time dateTime={draft.publishedAt}>
-                  {new Date(draft.publishedAt).toLocaleString("ru-RU", {
-                    dateStyle: "medium",
-                    timeStyle: "short"
-                  })}
-                </time>
-              </div>
-              <p className="footer-note" style={{ marginTop: 12 }}>
-                Prompt: {draft.promptName} · Mode: {draft.generationMode}
-              </p>
-              {draft.status === "fallback_only" ? (
-                <p className="source-card-error">
-                  Fallback-only: материал оставлен только для studio/admin и исключён из публикации.
-                </p>
-              ) : null}
-              {draft.generationMode === "template" ? (
-                <p className="source-card-error">
-                  Template fallback: материал требует живой генерации или ручной доработки.
-                </p>
-              ) : null}
-              {draft.reviewSummary ? <p>{draft.reviewSummary}</p> : null}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>Review log</h2>
-            <p>Короткие summary редакторского прохода по каждому черновику.</p>
-          </div>
-        </div>
-        <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {reviews.map((review) => (
-            <article key={review.id} className="news-card">
-              <span>{review.status} · {formatEditorDecision(review.decision)}</span>
-              <h3>{review.promptName}</h3>
-              <p>{review.summary}</p>
-              <p>{review.notes}</p>
-              {review.revisedTitle && review.revisedDek && review.revisedBody ? (
-                <p className="footer-note">Editor вернул исправленную финальную версию для этого черновика.</p>
-              ) : null}
-            </article>
-          ))}
-        </div>
-      </section>
     </main>
   );
 }

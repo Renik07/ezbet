@@ -15,6 +15,7 @@ class NewsItem(BaseModel):
     source: str
     link: Optional[str] = None
     status: str = "published"
+    visibility: str = "public"
     ai_reviewed: bool = Field(default=False, serialization_alias="aiReviewed")
     article_slug: Optional[str] = Field(default=None, serialization_alias="articleSlug")
 
@@ -60,6 +61,7 @@ class RawItem(BaseModel):
     published_at: datetime = Field(serialization_alias="publishedAt")
     fetched_at: datetime = Field(serialization_alias="fetchedAt")
     importance_score: int = Field(serialization_alias="importanceScore")
+    score_breakdown: list[str] = Field(default_factory=list, serialization_alias="scoreBreakdown")
     triage_label: str = Field(serialization_alias="triageLabel")
     is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
     duplicate_of: Optional[str] = Field(default=None, serialization_alias="duplicateOf")
@@ -89,6 +91,7 @@ class RawItemPreview(BaseModel):
     published_at: datetime = Field(serialization_alias="publishedAt")
     fetched_at: datetime = Field(serialization_alias="fetchedAt")
     importance_score: int = Field(serialization_alias="importanceScore")
+    score_breakdown: list[str] = Field(default_factory=list, serialization_alias="scoreBreakdown")
     triage_label: str = Field(serialization_alias="triageLabel")
     is_duplicate: bool = Field(default=False, serialization_alias="isDuplicate")
     duplicate_of: Optional[str] = Field(default=None, serialization_alias="duplicateOf")
@@ -235,6 +238,10 @@ class NewsListResponse(BaseModel):
     items: list[NewsItem]
 
 
+class NewsItemResponse(BaseModel):
+    item: NewsItem
+
+
 class ArticleResponse(BaseModel):
     item: Article
 
@@ -290,6 +297,7 @@ class SourceCreateRequest(BaseModel):
     supports_sitemap: bool = Field(default=False, alias="supportsSitemap", serialization_alias="supportsSitemap")
     supports_scraping: bool = Field(default=False, alias="supportsScraping", serialization_alias="supportsScraping")
     full_text_ok: bool = Field(default=False, alias="fullTextOk", serialization_alias="fullTextOk")
+    full_text_method: Optional[str] = Field(default=None, alias="fullTextMethod", serialization_alias="fullTextMethod")
     lead_ok: bool = Field(default=False, alias="leadOk", serialization_alias="leadOk")
     tags_count: int = Field(default=0, alias="tagsCount", serialization_alias="tagsCount")
     sample_title: Optional[str] = Field(default=None, alias="sampleTitle", serialization_alias="sampleTitle")
@@ -334,6 +342,7 @@ class SourceSyncState(BaseModel):
     supports_sitemap: bool = Field(default=False, serialization_alias="supportsSitemap")
     supports_scraping: bool = Field(default=False, serialization_alias="supportsScraping")
     last_probe_full_text_ok: bool = Field(default=False, serialization_alias="lastProbeFullTextOk")
+    last_probe_full_text_method: Optional[str] = Field(default=None, serialization_alias="lastProbeFullTextMethod")
     last_probe_lead_ok: bool = Field(default=False, serialization_alias="lastProbeLeadOk")
     last_probe_tags_count: int = Field(default=0, serialization_alias="lastProbeTagsCount")
     last_probe_sample_title: Optional[str] = Field(default=None, serialization_alias="lastProbeSampleTitle")
@@ -359,6 +368,7 @@ class SourceProbeResponse(BaseModel):
     supports_sitemap: bool = Field(default=False, serialization_alias="supportsSitemap")
     supports_scraping: bool = Field(default=False, serialization_alias="supportsScraping")
     full_text_ok: bool = Field(serialization_alias="fullTextOk")
+    full_text_method: Optional[str] = Field(default=None, serialization_alias="fullTextMethod")
     lead_ok: bool = Field(serialization_alias="leadOk")
     tags_count: int = Field(serialization_alias="tagsCount")
     sample_title: Optional[str] = Field(default=None, serialization_alias="sampleTitle")

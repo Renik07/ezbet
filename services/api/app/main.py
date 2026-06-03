@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 import threading
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 import psycopg
 
 from .ai_client import OpenAIEditorialClient
@@ -19,6 +20,7 @@ from .editorial import (
 )
 from .ingestion import (
     _capability_supports_adapter,
+    build_importance_score_breakdown,
     enrich_raw_item_content,
     ingest_sources as collect_source_items,
     ingest_sources_with_results,
@@ -49,6 +51,7 @@ from .models import (
     EditorReviewListResponse,
     IngestResponse,
     NewsListResponse,
+    NewsItemResponse,
     PublishRunResponse,
     PublishSchedulerRunResponse,
     PublishSchedulerSettings,
@@ -64,6 +67,7 @@ from .models import (
     RawItemListResponse,
     RawItemPreviewListResponse,
     RawItem,
+    RawItemPreview,
     ResetResponse,
     SchedulerRunResponse,
     SchedulerSettings,
@@ -119,6 +123,16 @@ def _run_id(phase: str) -> str:
 
 def _duration_ms(started_at: datetime, finished_at: datetime) -> int:
     return max(0, int((finished_at - started_at).total_seconds() * 1000))
+
+
+def _require_admin_api_token(request: Request) -> None:
+    expected = (os.getenv("EZBET_ADMIN_API_TOKEN") or "").strip()
+    if not expected:
+        return
+
+    provided = (request.headers.get("x-admin-token") or "").strip()
+    if provided != expected:
+        raise HTTPException(status_code=403, detail="Admin token is required for this action.")
 
 
 def _log_pipeline_event(
@@ -483,10 +497,18 @@ def editorial_status() -> EditorialStatusResponse:
 
 @app.get("/api/v1/news", response_model=NewsListResponse)
 def list_news(
+    request: Request,
     query: Optional[str] = Query(default=None),
     ai_only: bool = Query(default=False, alias="aiOnly"),
+    include_hidden: bool = Query(default=False, alias="includeHidden"),
+    limit: Optional[int] = Query(default=None, ge=1, le=100),
 ) -> NewsListResponse:
-    return NewsListResponse(items=repository.list(query, ai_only=ai_only))
+    if include_hidden:
+        _require_admin_api_token(request)
+
+    return NewsListResponse(
+        items=repository.list(query, ai_only=ai_only, include_hidden=include_hidden, limit=limit)
+    )
 
 
 @app.get("/api/v1/articles/{slug}", response_model=ArticleResponse)
@@ -495,6 +517,24 @@ def get_article(slug: str) -> ArticleResponse:
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     return ArticleResponse(item=article)
+
+
+@app.post("/api/v1/news/{news_item_id:path}/hide", response_model=NewsItemResponse)
+def hide_news_item(news_item_id: str, request: Request) -> NewsItemResponse:
+    _require_admin_api_token(request)
+    item = repository.set_news_visibility(news_item_id, "hidden")
+    if item is None:
+        raise HTTPException(status_code=404, detail="News item not found")
+    return NewsItemResponse(item=item)
+
+
+@app.post("/api/v1/news/{news_item_id:path}/unhide", response_model=NewsItemResponse)
+def unhide_news_item(news_item_id: str, request: Request) -> NewsItemResponse:
+    _require_admin_api_token(request)
+    item = repository.set_news_visibility(news_item_id, "public")
+    if item is None:
+        raise HTTPException(status_code=404, detail="News item not found")
+    return NewsItemResponse(item=item)
 
 
 @app.get("/api/v1/sources", response_model=SourceListResponse)
@@ -621,6 +661,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
                 if ai_enrichment.full_text and len(ai_enrichment.full_text.strip()) >= 120:
                     result.readiness = "ready_ai"
                     result.full_text_ok = True
+                    result.full_text_method = "web_search"
                     result.lead_ok = result.lead_ok or bool(ai_enrichment.lead)
                     result.tags_count = max(result.tags_count, len(ai_enrichment.tags))
                     result.sample_title = candidate.title
@@ -654,6 +695,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
             supports_sitemap=result.supports_sitemap,
             supports_scraping=result.supports_scraping,
             full_text_ok=result.full_text_ok,
+            full_text_method=result.full_text_method,
             lead_ok=result.lead_ok,
             tags_count=result.tags_count,
             sample_title=result.sample_title,
@@ -672,6 +714,7 @@ def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool =
         supports_sitemap=result.supports_sitemap,
         supports_scraping=result.supports_scraping,
         full_text_ok=result.full_text_ok,
+        full_text_method=result.full_text_method,
         lead_ok=result.lead_ok,
         tags_count=result.tags_count,
         sample_title=result.sample_title,
@@ -909,12 +952,32 @@ def start_pipeline_now() -> dict[str, object]:
 
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
 def list_raw_items(limit: int = Query(default=50, ge=1, le=200)) -> RawItemListResponse:
-    return RawItemListResponse(items=repository.list_raw_items(limit))
+    items = [_with_score_breakdown(item) for item in repository.list_raw_items(limit)]
+    return RawItemListResponse(items=items)
 
 
 @app.get("/api/v1/raw-items/preview", response_model=RawItemPreviewListResponse)
 def list_raw_item_previews(limit: int = Query(default=50, ge=1, le=200)) -> RawItemPreviewListResponse:
-    return RawItemPreviewListResponse(items=repository.list_raw_item_previews(limit))
+    items = [_with_score_breakdown(item) for item in repository.list_raw_item_previews(limit)]
+    return RawItemPreviewListResponse(items=items)
+
+
+def _with_score_breakdown(item: RawItem | RawItemPreview) -> RawItem | RawItemPreview:
+    source_url = item.source_url if isinstance(item, RawItem) else ""
+    source = SourceItem(
+        key=item.source_key,
+        title=item.source_title,
+        url=source_url,
+        category=item.category,
+    )
+    breakdown = build_importance_score_breakdown(
+        title=item.title,
+        summary=item.summary,
+        published_at=item.published_at,
+        source=source,
+        tags=item.tags,
+    )
+    return item.model_copy(update={"score_breakdown": breakdown})
 
 
 @app.get("/api/v1/pipeline-runs", response_model=PipelineRunListResponse)

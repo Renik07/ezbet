@@ -1,24 +1,23 @@
 import Link from "next/link";
 
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { formatCategoryLabel } from "@/lib/category";
 import { getEditorialStudioData, type DraftArticle, type RawItem } from "@/lib/editorial";
+import { requireAdminSession } from "@/lib/auth";
+import { logoutAdminNow } from "@/app/auth-actions";
 
 import {
   createSourceNow,
   cleanupPromptVersionsNow,
   deleteSourceNow,
-  ingestRssTestBatchNow,
   probeNewSourceNow,
   resetDatabaseNow,
   runEditorialSchedulerNow,
   runManualPipelineNow,
   runEnrichmentNow,
   runEnrichmentSchedulerNow,
-  runPublishNow,
   runPublishSchedulerNow,
   runSchedulerNow,
-  runContentPlannerNow,
-  runEditorialNow,
   savePublishSchedulerSettingsNow,
   saveEditorialSchedulerSettingsNow,
   saveEnrichmentSchedulerSettingsNow,
@@ -29,6 +28,7 @@ import {
 type AdminSearchParams = {
   notice?: string;
   detail?: string;
+  tab?: string;
   sourceKey?: string;
   sourceTitle?: string;
   sourceUrl?: string;
@@ -44,17 +44,21 @@ type AdminSearchParams = {
   supportsSitemap?: string;
   supportsScraping?: string;
   probeFullTextOk?: string;
+  probeFullTextMethod?: string;
   probeLeadOk?: string;
   probeTagsCount?: string;
   probeSampleTitle?: string;
   probeSampleUrl?: string;
 };
 
+type AdminTab = "pipeline" | "sources" | "prompts" | "diagnostics";
+
 export default async function AdminPage({
   searchParams
 }: {
   searchParams?: Promise<AdminSearchParams>;
 }) {
+  await requireAdminSession("/admin");
   const params = (await searchParams) ?? {};
   const notice = getNoticeMessage(params.notice, params.detail);
   const sourceDraft = {
@@ -75,6 +79,7 @@ export default async function AdminPage({
           supportsSitemap: params.supportsSitemap === "true",
           supportsScraping: params.supportsScraping === "true",
           fullTextOk: params.probeFullTextOk === "true",
+          fullTextMethod: params.probeFullTextMethod,
           leadOk: params.probeLeadOk === "true",
           tagsCount: params.probeTagsCount ?? "0",
           sampleTitle: params.probeSampleTitle,
@@ -103,64 +108,32 @@ export default async function AdminPage({
   const activeSources = sources.filter((source) => source.status === "active");
   const pipelineQueues = buildPipelineQueues(rawItems, drafts);
   const duplicateAudit = buildDuplicateAudit(rawItems);
+  const activeTab = getAdminTab(params.tab);
 
   return (
     <main className="page-shell">
       <section className="hero" style={{ paddingBottom: 22 }}>
-        <div className="eyebrow">Admin</div>
-        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Prompt management и editorial control</h1>
+        <div className="eyebrow">Админка</div>
+        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Управление источниками, промптами и pipeline</h1>
             <p>
               {isLive
-                ? "Админка уже подключена к живому editorial API. Здесь можно выпускать новые версии prompt’ов и вручную запускать editorial cycle."
+                ? "Админка уже подключена к живому editorial API. Здесь можно выпускать новые версии промптов и вручную запускать редакционный цикл."
                 : "API сейчас недоступен, поэтому админка показывает fallback-состояние и не сможет сохранить изменения."}
             </p>
             {!isLive && liveError ? <p className="source-card-error">{liveError}</p> : null}
         <div className="hero-actions">
+          <form action={logoutAdminNow}>
+            <PendingSubmitButton
+              className="button-secondary"
+              idleLabel="Выйти"
+              pendingLabel="Выходим..."
+            />
+          </form>
           <form action={resetDatabaseNow}>
             <PendingSubmitButton
               className="button-secondary"
               idleLabel="Очистить БД"
               pendingLabel="Очищаем БД..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action={ingestRssTestBatchNow}>
-            <PendingSubmitButton
-              className="button-secondary"
-              idleLabel="Загрузить 5 с каждого источника"
-              pendingLabel="Тянем источники..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action={runContentPlannerNow}>
-            <PendingSubmitButton
-              className="button-secondary"
-              idleLabel="Обновить content plan"
-              pendingLabel="Планировщик работает..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action={runEnrichmentNow}>
-            <PendingSubmitButton
-              className="button-secondary"
-              idleLabel="Добрать full text"
-              pendingLabel="Enrichment работает..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action={runEditorialNow}>
-            <PendingSubmitButton
-              className="button-primary"
-              idleLabel="Запустить editorial run"
-              pendingLabel="AI-редакция работает..."
-              disabled={!isLive}
-            />
-          </form>
-          <form action={runPublishNow}>
-            <PendingSubmitButton
-              className="button-secondary"
-              idleLabel="Опубликовать готовые материалы"
-              pendingLabel="Публикуем материалы..."
               disabled={!isLive}
             />
           </form>
@@ -171,6 +144,32 @@ export default async function AdminPage({
             К ленте
           </Link>
         </div>
+        <div className="tab-row" style={{ marginTop: 18 }}>
+          <Link
+            className={`tab-link${activeTab === "pipeline" ? " is-active" : ""}`}
+            href="/admin?tab=pipeline"
+          >
+            Запуски
+          </Link>
+          <Link
+            className={`tab-link${activeTab === "sources" ? " is-active" : ""}`}
+            href="/admin?tab=sources"
+          >
+            Источники
+          </Link>
+          <Link
+            className={`tab-link${activeTab === "prompts" ? " is-active" : ""}`}
+            href="/admin?tab=prompts"
+          >
+            Промпты
+          </Link>
+          <Link
+            className={`tab-link${activeTab === "diagnostics" ? " is-active" : ""}`}
+            href="/admin?tab=diagnostics"
+          >
+            Диагностика
+          </Link>
+        </div>
         {notice ? (
           <div className="section-card" style={{ marginTop: 18 }}>
             <p style={{ margin: 0 }}>{notice}</p>
@@ -178,6 +177,7 @@ export default async function AdminPage({
         ) : null}
       </section>
 
+      {activeTab === "pipeline" ? (
       <section>
         <div className="section-head">
           <div>
@@ -211,7 +211,9 @@ export default async function AdminPage({
           )}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "diagnostics" ? (
       <section>
         <div className="section-head">
           <div>
@@ -273,7 +275,9 @@ export default async function AdminPage({
           </article>
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "diagnostics" ? (
       <section>
         <div className="section-head">
           <div>
@@ -318,12 +322,14 @@ export default async function AdminPage({
           )}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "pipeline" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>AI status</h2>
-            <p>Здесь видно, используем ли мы живой OpenAI слой или работаем на template fallback.</p>
+            <h2>Статус AI</h2>
+            <p>Здесь видно, используем ли мы живой OpenAI-слой или работаем на шаблонном fallback.</p>
           </div>
         </div>
         <div className="stats-grid">
@@ -357,11 +363,13 @@ export default async function AdminPage({
           </div>
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "pipeline" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Ingest scheduler</h2>
+            <h2>Расписание pipeline</h2>
             <p>
               Автосбор должен запускать ingestion только по расписанию и забирать только новые новости относительно
               текущего source-state, а не всю ленту заново.
@@ -666,11 +674,13 @@ export default async function AdminPage({
           </article>
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "sources" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Source registry</h2>
+            <h2>Источники</h2>
             <p>
               Здесь управляется список рабочих источников. Сначала источник проходит проверку, и только после
               успешного результата его можно добавить. В списке ниже показываются только активные источники.
@@ -678,13 +688,14 @@ export default async function AdminPage({
           </div>
         </div>
         <div style={{ marginBottom: 24 }}>
-          <article className="news-card source-create-card">
-            <span>new source</span>
-            <h3>Добавить источник</h3>
-            <form action={createSourceNow} className="prompt-form">
-              <label className="field">
-                <span>Key</span>
-                <input name="key" placeholder="championat-news" defaultValue={sourceDraft.key} required />
+            <article className="news-card source-create-card">
+              <span>new source</span>
+              <h3>Добавить источник</h3>
+              <form action={createSourceNow} className="prompt-form">
+                <input type="hidden" name="tab" value={activeTab} />
+                <label className="field">
+                  <span>Key</span>
+                  <input name="key" placeholder="championat-news" defaultValue={sourceDraft.key} required />
               </label>
               <label className="field">
                 <span>Title</span>
@@ -706,6 +717,7 @@ export default async function AdminPage({
               <input type="hidden" name="supportsSitemap" value={draftProbe?.supportsSitemap ? "true" : "false"} />
               <input type="hidden" name="supportsScraping" value={draftProbe?.supportsScraping ? "true" : "false"} />
               <input type="hidden" name="fullTextOk" value={draftProbe?.fullTextOk ? "true" : "false"} />
+              <input type="hidden" name="fullTextMethod" value={draftProbe?.fullTextMethod ?? ""} />
               <input type="hidden" name="leadOk" value={draftProbe?.leadOk ? "true" : "false"} />
               <input type="hidden" name="tagsCount" value={String(draftProbe?.tagsCount ?? 0)} />
               <input type="hidden" name="sampleTitle" value={draftProbe?.sampleTitle ?? ""} />
@@ -738,8 +750,9 @@ export default async function AdminPage({
               {draftProbe ? (
                 <div className={draftProbe.ok ? "source-probe-preview" : "source-card-error"}>
                   <strong>Проверка:</strong> {draftProbe.readiness} · элементов: {draftProbe.count} · full text:{" "}
-                  {draftProbe.fullTextOk ? "ok" : "нет"} · lead: {draftProbe.leadOk ? "ok" : "нет"} · tags:{" "}
-                  {draftProbe.tagsCount}
+                  {draftProbe.fullTextOk ? "ok" : "нет"}
+                  {draftProbe.fullTextMethod ? ` (${formatProbeFullTextMethod(draftProbe.fullTextMethod)})` : ""}
+                  {" · "}lead: {draftProbe.leadOk ? "ok" : "нет"} · tags: {draftProbe.tagsCount}
                   <br />
                   Capability profile: rss {draftProbe.supportsRss ? "yes" : "no"} · news sitemap{" "}
                   {draftProbe.supportsNewsSitemap ? "yes" : "no"} · scraping {draftProbe.supportsScraping ? "yes" : "no"}
@@ -779,8 +792,25 @@ export default async function AdminPage({
         <div className="source-grid">
           {activeSources.map((source) => {
             const state = sourceStateMap.get(source.key);
-            const lamp = getSourceLamp(state?.lastStatus, state?.lastProbeReadiness);
+            const lamp = getSourceLamp(
+              state?.lastStatus,
+              state?.lastProbeReadiness,
+              state?.lastSuccessfulFetchAt,
+              state?.lastSuccessfulParseAt
+            );
             const readiness = getReadinessBadge(state?.lastProbeReadiness);
+            const needsPreflightWarning =
+              (source.sourceType === "scraping" || source.sourceType === "news_sitemap") &&
+              (
+                source.status === "draft" ||
+                (
+                  !state?.lastSuccessfulFetchAt &&
+                  !state?.lastSuccessfulParseAt &&
+                  (state?.lastProbeReadiness === "unknown" ||
+                    state?.lastProbeReadiness === "empty" ||
+                    state?.lastProbeReadiness === "fetch_error")
+                )
+              );
 
             return (
             <article key={source.key} className="news-card source-card">
@@ -799,6 +829,7 @@ export default async function AdminPage({
               {source.notes ? <p className="footer-note">{source.notes}</p> : null}
               <div className="source-button-row">
                 <form action={deleteSourceNow}>
+                  <input type="hidden" name="tab" value={activeTab} />
                   <input type="hidden" name="sourceKey" value={source.key} />
                   <PendingSubmitButton
                     className="button-secondary"
@@ -812,8 +843,9 @@ export default async function AdminPage({
               </p>
               <p className="footer-note">
                 Preflight: <strong>{readiness.label}</strong> · full text:{" "}
-                {state?.lastProbeFullTextOk ? "ok" : "нет"} · lead: {state?.lastProbeLeadOk ? "ok" : "нет"} · tags:{" "}
-                {state?.lastProbeTagsCount ?? 0}
+                {state?.lastProbeFullTextOk ? "ok" : "нет"}
+                {state?.lastProbeFullTextMethod ? ` (${formatProbeFullTextMethod(state.lastProbeFullTextMethod)})` : ""}
+                {" · "}lead: {state?.lastProbeLeadOk ? "ok" : "нет"} · tags: {state?.lastProbeTagsCount ?? 0}
               </p>
               <p className="footer-note">
                 Capability profile: preferred {formatSourceType(state?.preferredAdapter ?? "unknown")} · rss{" "}
@@ -849,11 +881,7 @@ export default async function AdminPage({
               <p className="footer-note">
                 Последний batch: {state?.lastItemCount ?? 0} · failures подряд: {state?.consecutiveFailures ?? 0}
               </p>
-              {(source.sourceType === "scraping" || source.sourceType === "news_sitemap") &&
-              source.status !== "draft" &&
-              (state?.lastProbeReadiness === "unknown" ||
-                state?.lastProbeReadiness === "empty" ||
-                state?.lastProbeReadiness === "fetch_error") ? (
+              {needsPreflightWarning ? (
                 <p className="source-card-error">
                   Для этого источника нужен успешный preflight, который подтверждает, что сайт действительно отдает новости.
                 </p>
@@ -864,11 +892,13 @@ export default async function AdminPage({
           })}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "prompts" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Prompt editors</h2>
+            <h2>Промпты</h2>
             <p>Каждое сохранение создаёт новую версию prompt’а. При активации она сразу становится рабочей.</p>
           </div>
           <form action={cleanupPromptVersionsNow}>
@@ -938,11 +968,13 @@ export default async function AdminPage({
           ))}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "diagnostics" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Content plan</h2>
+            <h2>Контент-план</h2>
             <p>Планировщик выбирает, какие raw_items идут в редакционный контур и в каком формате.</p>
           </div>
         </div>
@@ -961,12 +993,14 @@ export default async function AdminPage({
           ))}
         </div>
       </section>
+      ) : null}
 
+      {activeTab === "diagnostics" ? (
       <section>
         <div className="section-head">
           <div>
-            <h2>Editorial queue</h2>
-            <p>Последние drafts и reviews прямо в админке, чтобы не прыгать между экранами.</p>
+            <h2>Редакционная очередь</h2>
+            <p>Последние drafts и reviews прямо в админке, если нужно быстро посмотреть состояние без перехода в студию.</p>
           </div>
         </div>
         <div className="stats-grid" style={{ marginBottom: 18 }}>
@@ -987,7 +1021,7 @@ export default async function AdminPage({
           {drafts.slice(0, 4).map((draft) => (
             <article key={draft.id} className="news-card">
               <span>
-                {draft.category} · {draft.status} · {draft.reviewStatus} · {draft.generationMode}
+                {formatCategoryLabel(draft.category)} · {draft.status} · {draft.reviewStatus} · {draft.generationMode}
               </span>
               <h3>{draft.title}</h3>
               <p>{draft.dek}</p>
@@ -1008,11 +1042,20 @@ export default async function AdminPage({
           ))}
         </div>
       </section>
+      ) : null}
     </main>
   );
 }
 
 type Prompt = Awaited<ReturnType<typeof getEditorialStudioData>>["prompts"][number];
+
+function getAdminTab(tab?: string): AdminTab {
+  if (tab === "sources" || tab === "prompts" || tab === "diagnostics") {
+    return tab;
+  }
+
+  return "pipeline";
+}
 
 function getNoticeMessage(notice?: string, detail?: string) {
   switch (notice) {
@@ -1364,24 +1407,35 @@ function groupPrompts(prompts: Prompt[]) {
   return Array.from(grouped.values()).sort((left, right) => left.agentKey.localeCompare(right.agentKey));
 }
 
-function getSourceLamp(status?: string, readiness?: string) {
+function getSourceLamp(
+  status?: string,
+  readiness?: string,
+  lastSuccessfulFetchAt?: string,
+  lastSuccessfulParseAt?: string
+) {
   if (readiness === "ready") {
-    return { tone: "green", label: "ready" };
+    return { tone: "green", label: "готов" };
   }
   if (readiness === "ready_ai") {
-    return { tone: "green", label: "ready_search" };
+    return { tone: "green", label: "готов через веб-поиск" };
   }
   if (readiness === "partial" || readiness === "feed_only") {
-    return { tone: "amber", label: readiness };
+    return {
+      tone: "amber",
+      label: readiness === "partial" ? "частично готов" : "только фид"
+    };
+  }
+  if (lastSuccessfulFetchAt || lastSuccessfulParseAt) {
+    return { tone: "green", label: "работает" };
   }
   switch (status) {
     case "probe_ok":
     case "ok":
-      return { tone: "green", label: "ok" };
+      return { tone: "green", label: "в порядке" };
     case "probe_error":
-      return { tone: "red", label: "error" };
+      return { tone: "red", label: "ошибка" };
     default:
-      return { tone: "amber", label: "idle" };
+      return { tone: "amber", label: "ожидает запуск" };
   }
 }
 
@@ -1403,5 +1457,18 @@ function getReadinessBadge(readiness?: string) {
       return { label: "unsupported" };
     default:
       return { label: "unknown" };
+  }
+}
+
+function formatProbeFullTextMethod(value?: string) {
+  switch (value) {
+    case "direct_parser":
+      return "direct parser";
+    case "web_search":
+      return "web search";
+    case "ai_search":
+      return "ai search";
+    default:
+      return value ?? "не указан";
   }
 }
