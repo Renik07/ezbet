@@ -8,6 +8,7 @@ import { formatCategoryLabel } from "@/lib/category";
 import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function formatExtractionMode(mode?: string) {
   switch (mode) {

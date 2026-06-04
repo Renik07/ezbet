@@ -5,6 +5,9 @@ import { isAdminAuthConfigured, isAdminAuthenticated } from "@/lib/auth";
 
 import { loginAdminNow } from "./actions";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type LoginSearchParams = {
   notice?: string;
   next?: string;
