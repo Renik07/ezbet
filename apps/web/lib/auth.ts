@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 const ADMIN_SESSION_COOKIE = "ezbet_admin_session";
 const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 12;
+const ADMIN_SESSION_COOKIE_PATHS = ["/", "/login", "/admin", "/studio"];
 
 type AdminAuthConfig = {
   username: string;
@@ -80,6 +81,18 @@ function decodeSession(value: string): ParsedSession | null {
   }
 }
 
+function expireAdminSessionCookies(cookieStore: Awaited<ReturnType<typeof cookies>>) {
+  for (const path of ADMIN_SESSION_COOKIE_PATHS) {
+    cookieStore.set(ADMIN_SESSION_COOKIE, "", {
+      httpOnly: true,
+      secure: isAdminSessionCookieSecure(),
+      sameSite: "lax",
+      path,
+      maxAge: 0
+    });
+  }
+}
+
 export function isAdminAuthConfigured() {
   return getAdminAuthConfig() !== null;
 }
@@ -129,6 +142,7 @@ export async function createAdminSession() {
   const expiresAt = Date.now() + ADMIN_SESSION_TTL_SECONDS * 1000;
   const signature = createSignature(config.username, expiresAt, config.sessionSecret);
 
+  expireAdminSessionCookies(cookieStore);
   cookieStore.set(ADMIN_SESSION_COOKIE, encodeSession({ username: config.username, expiresAt, signature }), {
     httpOnly: true,
     secure: isAdminSessionCookieSecure(),
@@ -140,13 +154,7 @@ export async function createAdminSession() {
 
 export async function clearAdminSession() {
   const cookieStore = await cookies();
-  cookieStore.set(ADMIN_SESSION_COOKIE, "", {
-    httpOnly: true,
-    secure: isAdminSessionCookieSecure(),
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0
-  });
+  expireAdminSessionCookies(cookieStore);
 }
 
 export async function validateAdminCredentials(username: string, password: string) {
