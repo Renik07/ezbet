@@ -739,7 +739,7 @@
 - [ ] после деплоя наблюдать за усиленным `quality gate`: слабые/пустые/повторяющиеся тексты должны уходить в `hold / rewrite`, но валидные короткие новости не должны массово выпадать
 - [x] admin moderation для опубликованных новостей: базовый `soft delete / unpublish / hide` уже есть в `/studio`, скрытая новость исчезает из `/news` и отдает `404` по прямому URL; дальше можно расширить это до более полного moderation UX
 - [x] auth для `/admin` и `/studio`: добавлена одна общая страница входа/сессия, чтобы у посторонних не было доступа к админке, studio и ручным pipeline-действиям
-- [ ] после перевода production на домен и HTTPS вернуть `EZBET_ADMIN_SECURE_COOKIE=true`; текущее `false` допустимо только как временный режим для входа по IP через обычный `http`
+- [x] production auth/cookie зафиксирован под домен и HTTPS: при нормальном домене через reverse proxy держать `EZBET_ADMIN_SECURE_COOKIE=true`; временный вход по IP без TLS больше не считаем целевым production-сценарием
 - [x] redesign `/studio` как редакторский workspace, а не дубликат `/news`: отдельными секциями вынесены `Needs attention`, `Ready to publish`, `Edited by editor` и `Published`, а глубокий raw/debug compare-слой оставлен ниже как diagnostics
 - [x] production cron / external scheduler вместо локального shell-loop: внешний cron может дергать один endpoint `/api/v1/pipeline/tick` или `scripts/pipeline-cron.sh`
 - [ ] отдельный background worker / job-runner для тяжелых этапов `enrichment`, `editorial`, `publish`
@@ -816,6 +816,7 @@ Production env checklist перед первым controlled prod-run:
 - `EZBET_ADMIN_PASSWORD`
 - `EZBET_ADMIN_SESSION_SECRET`
 - `EZBET_ADMIN_API_TOKEN`
+- `EZBET_PUBLIC_HOST`
 - `EZBET_ADMIN_SECURE_COOKIE`
 
 2. Рекомендуемые значения для первого прод-теста:
@@ -823,8 +824,8 @@ Production env checklist перед первым controlled prod-run:
 - `OPENAI_WEB_SEARCH_ENABLED=true`
 - `OPENAI_WEB_SEARCH_LIVE=true`
 - `OPENAI_WEB_SEARCH_CONTEXT_SIZE=medium`
-- если production пока открыт по IP и без HTTPS: `EZBET_ADMIN_SECURE_COOKIE=false`
-- после прикрутки домена и HTTPS обязательно вернуть: `EZBET_ADMIN_SECURE_COOKIE=true`
+- `EZBET_PUBLIC_HOST=your-domain.com`
+- `EZBET_ADMIN_SECURE_COOKIE=true`
 
 3. Базовые operational limits на старте:
 - `ingest batch`: `100` на источник
@@ -986,7 +987,7 @@ Production env checklist перед первым controlled prod-run:
 
 ### Что будет крутиться на сервере
 
-- `nginx` или другой reverse proxy
+- `caddy` или другой reverse proxy
 - `web`
 - `api`
 - `worker`
@@ -997,7 +998,8 @@ Production env checklist перед первым controlled prod-run:
 Позже можно вынести `Postgres` и storage в managed services.
 
 Текущий `docker-compose.prod.yml` рассчитан именно на такой контур:
-- наружу публикуется `nginx` на `80`
+- наружу публикуется `caddy` на `80/443`
+- `caddy` сам получает и продлевает Let's Encrypt сертификат для `EZBET_PUBLIC_HOST`
 - `web` доступен внутри docker-сети и обслуживается через reverse proxy
 - `api` проброшен только на `127.0.0.1:8000` для локальной server-side связи и отладки на сервере
 

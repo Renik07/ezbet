@@ -30,15 +30,24 @@ services:
       EZBET_ADMIN_PASSWORD: ${EZBET_ADMIN_PASSWORD}
       EZBET_ADMIN_SESSION_SECRET: ${EZBET_ADMIN_SESSION_SECRET}
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN}
-      EZBET_ADMIN_SECURE_COOKIE: ${EZBET_ADMIN_SECURE_COOKIE:-false}
+      EZBET_ADMIN_SECURE_COOKIE: ${EZBET_ADMIN_SECURE_COOKIE:-true}
     depends_on:
       - api
 
-  nginx:
-    image: nginx:1.27-alpine
+  caddy:
+    image: caddy:2.10-alpine
     depends_on:
       - web
     ports:
       - "80:80"
+      - "443:443"
+    environment:
+      EZBET_PUBLIC_HOST: ${EZBET_PUBLIC_HOST}
     volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
