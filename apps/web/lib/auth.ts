@@ -91,22 +91,24 @@ export async function isAdminAuthenticated() {
   }
 
   const cookieStore = await cookies();
-  const sessionValue = cookieStore.get(ADMIN_SESSION_COOKIE)?.value;
-  if (!sessionValue) {
+  const sessionValues = cookieStore.getAll(ADMIN_SESSION_COOKIE).map((cookie) => cookie.value);
+  if (!sessionValues.length) {
     return false;
   }
 
-  const parsed = decodeSession(sessionValue);
-  if (!parsed) {
-    return false;
-  }
+  return sessionValues.some((sessionValue) => {
+    const parsed = decodeSession(sessionValue);
+    if (!parsed) {
+      return false;
+    }
 
-  if (parsed.username !== config.username || parsed.expiresAt <= Date.now()) {
-    return false;
-  }
+    if (parsed.username !== config.username || parsed.expiresAt <= Date.now()) {
+      return false;
+    }
 
-  const expectedSignature = createSignature(parsed.username, parsed.expiresAt, config.sessionSecret);
-  return safeEqual(parsed.signature, expectedSignature);
+    const expectedSignature = createSignature(parsed.username, parsed.expiresAt, config.sessionSecret);
+    return safeEqual(parsed.signature, expectedSignature);
+  });
 }
 
 export async function requireAdminSession(nextPath = "/admin") {
