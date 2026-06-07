@@ -33,30 +33,46 @@ export default async function NewsPage({
   const pagedItems = items.slice(startIndex, startIndex + NEWS_PER_PAGE);
   const fromItem = items.length ? startIndex + 1 : 0;
   const toItem = Math.min(startIndex + NEWS_PER_PAGE, items.length);
+  const popularItems = items.slice(0, 5);
 
   return (
-    <main className="page-shell">
-      <section className="hero" style={{ paddingBottom: 22 }}>
-        <div className="eyebrow">Поиск по новостям</div>
-        <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Лента новостей</h1>
-        <p>{isLive ? "Свежие публикации с поиском по ленте и удобной навигацией по страницам." : "Лента временно недоступна."}</p>
+    <main>
+      <section className="news-page-hero container-wide">
+        <div className="news-kicker">{isLive ? "Живая лента" : "Резервная лента"}</div>
+        <h1>Лента новостей</h1>
+        <p>
+          {isLive
+            ? "Свежие публикации с поиском по темам, командам, турнирам и источникам."
+            : "API временно недоступен, поэтому здесь показаны резервные публикации."}
+        </p>
         <SearchForm initialQuery={query} />
       </section>
 
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>{query ? `Результаты по запросу: ${query}` : "Все новости"}</h2>
+      <div className="content-layout container-wide">
+        <section className="news-feed" aria-label="Все новости">
+          <div className="section-header">
+            <h2 className="section-title">{query ? `Результаты: ${query}` : "Все новости"}</h2>
+            <span className="section-count">
+              {items.length ? `${fromItem}-${toItem} из ${items.length}` : "Ничего не найдено"}
+            </span>
           </div>
-        </div>
-        <div className="section-head" style={{ marginTop: 0, alignItems: "center" }}>
-          <p style={{ margin: 0, color: "var(--muted)" }}>
-            {items.length
-              ? `Показаны ${fromItem}-${toItem} из ${items.length}`
-              : "По этому запросу пока ничего не найдено."}
-          </p>
+          <div className="news-list">
+            {pagedItems.length ? (
+              pagedItems.map((item) => <NewsCard key={item.id} item={item} />)
+            ) : (
+              <article className="news-item">
+                <div className="ni-meta">
+                  <span className="ni-time">Поиск</span>
+                  <span className="cat-pill cat-pill--football">ezbet</span>
+                </div>
+                <h3 className="ni-title">По этому запросу пока ничего не найдено</h3>
+                <p className="ni-desc">Попробуйте изменить формулировку или открыть всю ленту без фильтра.</p>
+              </article>
+            )}
+          </div>
+
           {totalPages > 1 ? (
-            <div className="pagination-row">
+            <nav className="pagination-row" aria-label="Навигация по страницам">
               {currentPage > 1 ? (
                 <a className="button-secondary" href={buildNewsPageHref(currentPage - 1, query)}>
                   Назад
@@ -78,15 +94,38 @@ export default async function NewsPage({
                   Вперед
                 </span>
               )}
-            </div>
+            </nav>
           ) : null}
-        </div>
-        <div className="news-grid">
-          {pagedItems.map((item) => (
-            <NewsCard key={item.id} item={item} />
-          ))}
-        </div>
-      </section>
+        </section>
+
+        <aside className="sidebar">
+          <div className="sidebar-block">
+            <h3 className="sidebar-block-title">Быстрый поиск</h3>
+            <div className="topic-cloud">
+              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "Беттинг", "Киберспорт"].map((topic) => (
+                <Link key={topic} href={`/news?query=${encodeURIComponent(topic)}`} className="topic-chip">
+                  {topic}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="sidebar-block">
+            <h3 className="sidebar-block-title">В фокусе</h3>
+            <ol className="popular-list" role="list">
+              {popularItems.map((item, index) => (
+                <li className="popular-item" key={item.id}>
+                  <span className="popular-num">{index + 1}</span>
+                  <a className="popular-link" href={item.articleSlug ? `/news/${item.articleSlug}` : item.link ?? "/news"}>
+                    {item.title}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+        </aside>
+      </div>
     </main>
   );
 }

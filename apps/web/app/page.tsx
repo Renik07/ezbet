@@ -1,53 +1,183 @@
 import Link from "next/link";
+import type { Route } from "next";
 import { NewsCard } from "@/components/news-card";
+import { formatCategoryLabel } from "@/lib/category";
 import { getNews } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 
+function formatRelativeTime(date: string) {
+  const diffMs = Date.now() - new Date(date).getTime();
+  const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} мин`;
+  }
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} ч`;
+  }
+
+  return new Date(date).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "short"
+  });
+}
+
+function categoryTone(category?: string) {
+  const normalized = category?.toLowerCase();
+  if (normalized === "football" || normalized === "футбол") return "football";
+  if (normalized === "hockey" || normalized === "хоккей") return "hockey";
+  if (normalized === "basketball" || normalized === "баскетбол") return "basketball";
+  if (normalized === "tennis" || normalized === "теннис") return "tennis";
+  if (normalized === "mma" || normalized === "мма" || normalized === "boxing" || normalized === "бокс") return "mma";
+  if (normalized === "esports" || normalized === "киберспорт") return "cyber";
+  return "football";
+}
+
+function newsHref(articleSlug?: string) {
+  return articleSlug ? (`/news/${articleSlug}` as Route) : ("/news" as Route);
+}
+
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true });
-  const featuredNews = news.slice(0, 12);
+  const heroItem = news[0];
+  const tickerNews = news.slice(1, 9);
+  const featuredNews = news.slice(1, 9);
+  const popularNews = news.slice(0, 5);
 
   return (
-    <main className="page-shell">
-      <section className="hero">
-        <div className="hero-grid">
-          <div>
-            <div className="eyebrow">
-              <span>ezbet.ru</span>
-              <span>Новости спорта и беттинга</span>
+    <main>
+      <section className="home-hero container-wide">
+        {heroItem ? (
+          <article className="hero-article">
+            <div className="hero-category">
+              <span className={`category-dot category-dot--${categoryTone(heroItem.category)}`} />
+              <span className="category-label">{formatCategoryLabel(heroItem.category)}</span>
+              <span className="hero-time">{formatRelativeTime(heroItem.publishedAt)} назад</span>
             </div>
-            <h1>Свежие новости спорта в одной живой ленте.</h1>
-            <p>Короткий срез последних публикаций на главной и полная лента новостей в отдельном разделе.</p>
-          </div>
-          <aside className="hero-card">
-            <div className="eyebrow">Сейчас в эфире</div>
-            <strong>{featuredNews.length || 0} новостей</strong>
-            <p>
-              {isLive
-                ? "Свежие публикации появляются здесь автоматически по мере обновления ленты."
-                : "Лента временно недоступна. После восстановления API публикации снова появятся автоматически."}
+            <h1 className="hero-title">{heroItem.title}</h1>
+            <p className="hero-desc">{heroItem.description}</p>
+            <div className="hero-meta">
+              <span className="meta-author">{heroItem.source}</span>
+              <Link className="hero-read-btn" href={newsHref(heroItem.articleSlug)}>
+                Читать полностью
+              </Link>
+            </div>
+          </article>
+        ) : (
+          <article className="hero-article">
+            <div className="hero-category">
+              <span className="category-dot category-dot--football" />
+              <span className="category-label">ezbet.ru</span>
+              <span className="hero-time">лента обновляется</span>
+            </div>
+            <h1 className="hero-title">Спортивные новости и беттинг-сигналы в одной ленте</h1>
+            <p className="hero-desc">
+              Когда API снова отдаст публикации, главная автоматически покажет ведущую новость, live-ленту и свежий выпуск.
             </p>
-          </aside>
-        </div>
+            <div className="hero-meta">
+              <span className="meta-author">Редакция ezbet.ru</span>
+              <Link className="hero-read-btn" href="/news">
+                Открыть ленту
+              </Link>
+            </div>
+          </article>
+        )}
+
+        <aside className="live-ticker">
+          <div className="ticker-header">
+            <span className={`live-badge${isLive ? "" : " live-badge--muted"}`}>
+              <span className="live-dot" />
+              {isLive ? "LIVE" : "DEMO"}
+            </span>
+            <span className="ticker-title">Лента событий</span>
+          </div>
+          <ul className="ticker-list" role="list">
+            {tickerNews.length ? (
+              tickerNews.map((item) => (
+                <li className="ticker-item" key={item.id}>
+                  <span className="ti-time">{formatRelativeTime(item.publishedAt)}</span>
+                  <span className={`ti-cat cat--${categoryTone(item.category)}`} />
+                  {item.articleSlug ? (
+                    <Link className="ti-title" href={newsHref(item.articleSlug)}>
+                      {item.title}
+                    </Link>
+                  ) : (
+                    <a className="ti-title" href={item.link ?? "/news"}>
+                      {item.title}
+                    </a>
+                  )}
+                </li>
+              ))
+            ) : (
+              <li className="ticker-empty">Свежие события появятся после обновления ленты.</li>
+            )}
+          </ul>
+        </aside>
       </section>
 
-      <section>
-        <div className="section-head">
-          <div>
-            <h3>Последние новости</h3>
-            <p>{isLive ? "Полная лента доступна в отдельном разделе новостей." : "Сейчас показывается резервная лента."}</p>
+      <div className="content-layout container-wide">
+        <section className="news-feed" aria-label="Главные новости">
+          <div className="section-header">
+            <h2 className="section-title">Главные новости</h2>
+            <Link href="/news" className="section-link">
+              Все новости
+            </Link>
           </div>
-          <Link href="/news">Вся лента</Link>
-        </div>
-        <div className="news-grid">
-          {featuredNews.map((item, index) => (
-            <div key={item.id} className={index >= 8 ? "home-news-desktop-only" : undefined}>
-              <NewsCard item={item} />
+          <div className="news-list">
+            {featuredNews.length ? (
+              featuredNews.map((item) => <NewsCard key={item.id} item={item} />)
+            ) : (
+              <article className="news-item">
+                <div className="ni-meta">
+                  <span className="ni-time">Сейчас</span>
+                  <span className="cat-pill cat-pill--football">ezbet</span>
+                </div>
+                <h3 className="ni-title">Лента скоро наполнится новыми публикациями</h3>
+                <p className="ni-desc">Проверьте подключение API или дождитесь следующего редакционного прогона.</p>
+              </article>
+            )}
+          </div>
+          <Link href="/news" className="load-more-btn">
+            Перейти ко всей ленте
+          </Link>
+        </section>
+
+        <aside className="sidebar">
+          <div className="sidebar-block">
+            <h3 className="sidebar-block-title">Популярное сегодня</h3>
+            <ol className="popular-list" role="list">
+              {popularNews.map((item, index) => (
+                <li className="popular-item" key={item.id}>
+                  <span className="popular-num">{index + 1}</span>
+                  {item.articleSlug ? (
+                    <Link className="popular-link" href={newsHref(item.articleSlug)}>
+                      {item.title}
+                    </Link>
+                  ) : (
+                    <a className="popular-link" href={item.link ?? "/news"}>
+                      {item.title}
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <div className="sidebar-block">
+            <h3 className="sidebar-block-title">Рубрики</h3>
+            <div className="topic-cloud">
+              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "Беттинг", "Киберспорт"].map((topic) => (
+                <Link key={topic} href={`/news?query=${encodeURIComponent(topic)}`} className="topic-chip">
+                  {topic}
+                </Link>
+              ))}
             </div>
-          ))}
-        </div>
-      </section>
+          </div>
+        </aside>
+      </div>
     </main>
   );
 }
