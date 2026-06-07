@@ -11,7 +11,7 @@ export function NewsCard({ item }: NewsCardProps) {
     <article className="news-card">
       <div className="badge-row">
         <span>{formatCategoryLabel(item.category)}</span>
-        {item.aiReviewed ? <span className="ai-badge">AI edited</span> : null}
+        {item.aiReviewed ? <span className="ai-badge">Проверено AI</span> : null}
       </div>
       <h3>{item.title}</h3>
       <p>{item.description}</p>

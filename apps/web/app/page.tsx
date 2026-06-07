@@ -15,37 +15,19 @@ export default async function HomePage() {
           <div>
             <div className="eyebrow">
               <span>ezbet.ru</span>
-              <span>AI-assisted sports media MVP</span>
+              <span>Новости спорта и беттинга</span>
             </div>
-            <h1>Новости спорта и беттинга, собранные в один живой поток.</h1>
-            <p>
-              Первый MVP объединяет автосбор новостей, поиск по ленте и быструю
-              публикацию материалов. AI уже участвует в редактуре черновика
-              перед публикацией, чтобы на старте автоматизация была реальной, а
-              не декоративной.
-            </p>
-            <div className="hero-actions">
-              <Link className="button-primary" href="/news">
-                Смотреть ленту
-              </Link>
-              <Link className="button-secondary" href="/studio">
-                Открыть AI Studio
-              </Link>
-              <Link className="button-secondary" href="/admin">
-                Открыть админку
-              </Link>
-            </div>
+            <h1>Свежие новости спорта в одной живой ленте.</h1>
+            <p>Короткий срез последних публикаций на главной и полная лента новостей в отдельном разделе.</p>
           </div>
           <aside className="hero-card">
-            <div className="eyebrow">Стартовый контур MVP</div>
-            <strong>4 шага</strong>
-            <p>Сбор новостей, поиск, AI-редактура и публикация без ручной рутины.</p>
-            <div className="section-card">
-              <p style={{ margin: 0 }}>
-                В следующих итерациях сюда добавятся карточки букмекеров,
-                контент-план и AI-генерация lead image для статей.
-              </p>
-            </div>
+            <div className="eyebrow">Сейчас в эфире</div>
+            <strong>{featuredNews.length || 0} новостей</strong>
+            <p>
+              {isLive
+                ? "Свежие публикации появляются здесь автоматически по мере обновления ленты."
+                : "Лента временно недоступна. После восстановления API публикации снова появятся автоматически."}
+            </p>
           </aside>
         </div>
       </section>
@@ -53,39 +35,8 @@ export default async function HomePage() {
       <section>
         <div className="section-head">
           <div>
-            <h2>Сигналы системы</h2>
-            <p>Минимальные KPI, которые будут расти вместе с реальным ingestion-потоком.</p>
-          </div>
-        </div>
-        <div className="stats-grid">
-          <div className="stat">
-            <strong>12</strong>
-            <span>источников в стартовом пуле</span>
-          </div>
-          <div className="stat">
-            <strong>10 мин</strong>
-            <span>целевой интервал scheduler для проверки новых публикаций</span>
-          </div>
-          <div className="stat">
-            <strong>1 AI-pass</strong>
-            <span>редакторская обработка перед публикацией в MVP</span>
-          </div>
-          <div className="stat">
-            <strong>2 prompts</strong>
-            <span>writer и editor уже подняты в отдельный prompt-driven слой</span>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="section-head">
-          <div>
             <h3>Последние новости</h3>
-            <p>
-              {isLive
-                ? "Главная показывает только новости, которые уже прошли AI-редактуру и попали в публичную витрину."
-                : "API сейчас недоступен, поэтому показывается fallback-лента для локальной разработки."}
-            </p>
+            <p>{isLive ? "Полная лента доступна в отдельном разделе новостей." : "Сейчас показывается резервная лента."}</p>
           </div>
           <Link href="/news">Вся лента</Link>
         </div>
@@ -97,12 +48,6 @@ export default async function HomePage() {
           ))}
         </div>
       </section>
-
-      <p className="footer-note">
-        {isLive
-          ? "MVP сейчас работает на живом контуре: RSS -> raw_items -> news_items -> API -> frontend."
-          : "MVP может работать и без API, но для реальных новостей нужно поднять backend-контур."}
-      </p>
     </main>
   );
 }
