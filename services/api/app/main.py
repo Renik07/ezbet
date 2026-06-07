@@ -616,16 +616,19 @@ def delete_source(source_key: str) -> SourceListResponse:
 
 @app.post("/api/v1/source-probe", response_model=SourceProbeResponse)
 def probe_source_draft(payload: SourceCreateRequest) -> SourceProbeResponse:
-    source = SourceItem(
-        key=payload.key or "source-draft",
-        title=payload.title,
-        url=payload.url,
-        category=payload.category,
-        source_type=payload.source_type,
-        status="draft",
-        notes=payload.notes,
-    )
-    return _probe_source_item(source, persist=False, auto_detect=payload.source_type == "auto")
+    try:
+        source = SourceItem(
+            key=payload.key or "source-draft",
+            title=payload.title,
+            url=payload.url,
+            category=payload.category,
+            source_type=payload.source_type,
+            status="draft",
+            notes=payload.notes,
+        )
+        return _probe_source_item(source, persist=False, auto_detect=payload.source_type == "auto")
+    except Exception as exc:
+        _raise_source_probe_http_error(exc)
 
 
 @app.post("/api/v1/sources/{source_key}/probe", response_model=SourceProbeResponse)
@@ -634,7 +637,16 @@ def probe_source_config(source_key: str) -> SourceProbeResponse:
         source = repository.get_source_config(source_key)
         return _probe_source_item(source, persist=True)
     except Exception as exc:
-        _raise_source_http_error(exc)
+        _raise_source_probe_http_error(exc)
+
+
+def _raise_source_probe_http_error(exc: Exception) -> None:
+    if isinstance(exc, HTTPException):
+        raise exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.exception("source_probe_failed")
+    raise HTTPException(status_code=502, detail=f"Source probe failed: {exc}") from exc
 
 
 def _probe_source_item(source: SourceItem, *, persist: bool, auto_detect: bool = False) -> SourceProbeResponse:
