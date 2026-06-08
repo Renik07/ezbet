@@ -1098,6 +1098,41 @@ class NewsRepository:
 
         return [self._map_pipeline_run_row(row) for row in rows]
 
+    def get_latest_pipeline_run(self, *, phase: str, status: str | None = None) -> PipelineRun | None:
+        statement = """
+            SELECT
+                id,
+                phase,
+                trigger,
+                status,
+                started_at,
+                finished_at,
+                duration_ms,
+                found_count,
+                saved_count,
+                published_count,
+                processed_count,
+                enriched_count,
+                planned_count,
+                generated_count,
+                reviewed_count,
+                skipped_items,
+                source_breakdown,
+                error
+            FROM pipeline_runs
+            WHERE phase = %s
+              AND (%s IS NULL OR status = %s)
+            ORDER BY started_at DESC, created_at DESC
+            LIMIT 1
+        """
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (phase, status, status))
+                row = cursor.fetchone()
+
+        return self._map_pipeline_run_row(row) if row else None
+
     def record_pipeline_run(
         self,
         *,
@@ -1249,6 +1284,55 @@ class NewsRepository:
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+        return [self._map_raw_preview_row(row) for row in rows]
+
+    def list_raw_item_previews_for_ingest_run(self, run: PipelineRun, limit: int = 50) -> list[RawItemPreview]:
+        statement = """
+            SELECT
+                r.id,
+                r.source_key,
+                r.source_title,
+                r.category,
+                r.normalized_category,
+                r.title,
+                r.summary,
+                r.lead,
+                r.url,
+                r.published_at,
+                r.fetched_at,
+                r.importance_score,
+                r.triage_label,
+                r.is_duplicate,
+                r.duplicate_of,
+                r.duplicate_stage,
+                r.duplicate_reason,
+                r.full_text,
+                r.full_text_source_url,
+                r.full_text_source_title,
+                r.reference_urls,
+                r.extraction_mode,
+                r.enrichment_status,
+                r.enrichment_error,
+                cp.status,
+                cp.reason,
+                cp.priority_label,
+                r.tags
+            FROM raw_items r
+            LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
+            LEFT JOIN draft_articles d ON d.raw_item_id = r.id
+            WHERE r.fetched_at >= (%s::timestamptz - INTERVAL '2 minutes')
+              AND r.fetched_at <= (%s::timestamptz + INTERVAL '2 minutes')
+            ORDER BY
+                r.fetched_at DESC,
+                r.published_at DESC
+            LIMIT %s
+        """
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (run.started_at, run.finished_at, limit))
                 rows = cursor.fetchall()
 
         return [self._map_raw_preview_row(row) for row in rows]

@@ -978,8 +978,21 @@ def list_raw_items(limit: int = Query(default=50, ge=1, le=200)) -> RawItemListR
 
 
 @app.get("/api/v1/raw-items/preview", response_model=RawItemPreviewListResponse)
-def list_raw_item_previews(limit: int = Query(default=50, ge=1, le=200)) -> RawItemPreviewListResponse:
-    items = [_with_score_breakdown(item) for item in repository.list_raw_item_previews(limit)]
+def list_raw_item_previews(
+    limit: int = Query(default=50, ge=1, le=200),
+    scope: str = Query(default="latest", pattern="^(latest|latest_ingest)$"),
+) -> RawItemPreviewListResponse:
+    if scope == "latest_ingest":
+        latest_ingest_run = repository.get_latest_pipeline_run(phase="ingest", status="ok")
+        raw_items = (
+            repository.list_raw_item_previews_for_ingest_run(latest_ingest_run, limit)
+            if latest_ingest_run
+            else []
+        )
+    else:
+        raw_items = repository.list_raw_item_previews(limit)
+
+    items = [_with_score_breakdown(item) for item in raw_items]
     return RawItemPreviewListResponse(items=items)
 
 

@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { logoutAdminNow } from "@/app/auth-actions";
 import { hidePublishedNewsNow, unhidePublishedNewsNow } from "@/app/admin/actions";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { StudioDiagnosticsRefresh } from "@/components/studio-diagnostics-refresh";
 import { requireAdminSession } from "@/lib/auth";
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDateTime } from "@/lib/dates";
@@ -459,6 +460,7 @@ export default async function StudioPage({
 
   return (
     <main className="page-shell">
+      <StudioDiagnosticsRefresh enabled={activeTab === "diagnostics"} />
       <section className="hero" style={{ paddingBottom: 22 }}>
         <div className="eyebrow">Редакторская студия</div>
         <h1 style={{ fontSize: "clamp(2.2rem, 5vw, 4rem)" }}>Редакторский workspace</h1>
@@ -634,15 +636,15 @@ export default async function StudioPage({
       <section>
         <div className="section-head">
           <div>
-            <h2>Исходник и AI-версия</h2>
+            <h2>Исходник и AI-версия последнего pipeline</h2>
             <p>
-              Глубокая диагностика пайплайна: слева сырой RSS-вход, справа результат writer/editor.
-              Показываем только последние карточки, а не полный архив.
+              Глубокая диагностика последнего ingest-прогона: слева сырой RSS-вход, справа результат writer/editor.
+              Вкладка обновляется автоматически каждые 30 секунд.
             </p>
           </div>
         </div>
         <div className="compare-grid">
-          {rawDraftPairs.map(({ rawItem, draft }) => (
+          {rawDraftPairs.length ? rawDraftPairs.map(({ rawItem, draft }) => (
             <article key={rawItem.id} className="compare-card">
               <div className="compare-panel">
                 <span>Сырой RSS-вход</span>
@@ -832,7 +834,14 @@ export default async function StudioPage({
                 ) : null}
               </div>
             </article>
-          ))}
+          )) : (
+            <article className="news-card">
+              <h3>В последнем pipeline не было новых raw-новостей</h3>
+              <p>
+                Когда следующий ingest сохранит свежие материалы, они появятся здесь вместе с draft/review/publish-статусами.
+              </p>
+            </article>
+          )}
         </div>
       </section>
 

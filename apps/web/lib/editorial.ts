@@ -600,7 +600,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     loadStudioResource(baseUrl, "/api/v1/prompts", (payload) => (payload as { items: PromptConfig[] }).items, fallbackPrompts),
     loadStudioResource(
       baseUrl,
-      "/api/v1/raw-items/preview?limit=50",
+      "/api/v1/raw-items/preview?limit=50&scope=latest_ingest",
       (payload) => (payload as { items: RawItem[] }).items,
       fallbackRawItems
     ),

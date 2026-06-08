@@ -28,20 +28,19 @@ export const metadata: Metadata = {
 function formatRelativeTime(date: string) {
   const diffMs = Date.now() - new Date(date).getTime();
   const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
-  const formatter = new Intl.RelativeTimeFormat("ru-RU", { numeric: "always" });
 
   if (diffMinutes < 60) {
-    return formatter.format(-diffMinutes, "minute");
+    return `${diffMinutes} мин`;
   }
 
   const diffHours = Math.round(diffMinutes / 60);
   if (diffHours < 24) {
-    return formatter.format(-diffHours, "hour");
+    return `${diffHours} ч`;
   }
 
   const diffDays = Math.round(diffHours / 24);
   if (diffDays < 8) {
-    return formatter.format(-diffDays, "day");
+    return `${diffDays} д`;
   }
 
   return formatMoscowDate(date);
