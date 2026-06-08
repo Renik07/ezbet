@@ -40,10 +40,17 @@ def run_content_planner(
     planned_items: list[ContentPlanItem] = []
     ai_client = OpenAIEditorialClient()
     reranked_items = select_reranked_candidates(candidates, limit=limit, ai_client=ai_client)
+    selected_raw_ids = {raw_item.id for raw_item, _ in reranked_items}
 
     for raw_item, rerank in reranked_items:
         plan_item = build_plan_item(raw_item, rerank)
         planned_items.append(repository.upsert_content_plan_item(plan_item))
+
+    for raw_item in candidate_pool:
+        if raw_item.id in selected_raw_ids:
+            continue
+        audit_item = build_non_selected_plan_item(raw_item, candidates)
+        repository.upsert_content_plan_item(audit_item)
 
     return planned_items
 
@@ -176,6 +183,54 @@ def build_plan_item(raw_item: RawItem, rerank: PlannerRerankItem | None = None) 
         priority_label=priority_label,
         planned_format=planned_format,
         status="planned",
+        reason=reason,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def build_non_selected_plan_item(raw_item: RawItem, shortlisted_candidates: list[RawItem]) -> ContentPlanItem:
+    priority_score = raw_item.importance_score
+    priority_label = priority_label_for_score(priority_score)
+    planned_format = select_format(raw_item, priority_label)
+    shortlisted_ids = {item.id for item in shortlisted_candidates}
+    now = datetime.now(timezone.utc)
+
+    if is_live_match_tracker_candidate(raw_item):
+        status = "skip_live_tracker"
+        reason = (
+            "Planner не отправил материал в writer/editor: новость похожа на live/match tracker, "
+            "трансляцию, коэффициенты или служебный матч-центр."
+        )
+    elif raw_item.triage_label == "low" and not is_viable_low_priority_candidate(raw_item):
+        status = "skip_low_quality"
+        reason = (
+            "Planner не отправил low-priority материал в writer/editor: не хватило score, свежести "
+            "или фактической плотности full text/summary/lead."
+        )
+    elif raw_item.id not in shortlisted_ids:
+        status = "skip_shortlist_rules"
+        reason = (
+            "Planner не включил материал в shortlist: более сильные high/medium новости заняли "
+            "редакционный слот, а low-priority fallback ограничен."
+        )
+    else:
+        status = "deferred_batch_limit"
+        reason = (
+            "Planner счёл материал годным, но не отправил в writer/editor из-за лимита editorial batchSize "
+            "в текущем pipeline."
+        )
+
+    return ContentPlanItem(
+        id=f"plan:{raw_item.id}",
+        raw_item_id=raw_item.id,
+        title=raw_item.title,
+        source_title=raw_item.source_title,
+        category=raw_item.normalized_category,
+        priority_score=priority_score,
+        priority_label=priority_label,
+        planned_format=planned_format,
+        status=status,
         reason=reason,
         created_at=now,
         updated_at=now,

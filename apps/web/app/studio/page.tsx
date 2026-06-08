@@ -81,6 +81,14 @@ function formatContentPlanStatus(status?: string) {
       return "нужен rewrite";
     case "fallback_only":
       return "только шаблонный fallback";
+    case "deferred_batch_limit":
+      return "отложено из-за batchSize";
+    case "skip_low_quality":
+      return "не выбрано: низкая фактическая плотность";
+    case "skip_live_tracker":
+      return "не выбрано: live/match tracker";
+    case "skip_shortlist_rules":
+      return "не выбрано shortlist-правилами";
     default:
       return status ?? "ещё не попадало в content plan";
   }
@@ -371,6 +379,16 @@ function describeEditorialBlock(
   }
   if (rawItem.contentPlanStatus === "fallback_only") {
     return `Editorial не пойдет в обычный AI-поток: ${rawItem.contentPlanReason ?? "новость оставлена только во fallback-режиме."}`;
+  }
+  if (rawItem.contentPlanStatus === "deferred_batch_limit") {
+    return `Editorial не стартовал в этом pipeline: ${rawItem.contentPlanReason ?? "новость отложена из-за лимита batchSize."}`;
+  }
+  if (
+    rawItem.contentPlanStatus === "skip_low_quality" ||
+    rawItem.contentPlanStatus === "skip_live_tracker" ||
+    rawItem.contentPlanStatus === "skip_shortlist_rules"
+  ) {
+    return `Editorial не стартовал: ${rawItem.contentPlanReason ?? "planner не выбрал материал для writer/editor."}`;
   }
   if (!draft) {
     if (rawItem.contentPlanStatus === "planned") {
