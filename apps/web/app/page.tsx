@@ -62,7 +62,7 @@ function newsHref(articleSlug?: string) {
 }
 
 export default async function HomePage() {
-  const { items: news, isLive } = await getNews(undefined, { aiOnly: true });
+  const { items: news, isLive } = await getNews(undefined, { aiOnly: true, fallbackToAll: true });
   const heroItem = news[0];
   const tickerNews = news.slice(1, 9);
   const featuredNews = news.slice(1, 9);

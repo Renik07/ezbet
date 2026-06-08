@@ -95,7 +95,7 @@ const fallbackArticles: Article[] = [
   }
 ];
 
-export async function getNews(query?: string, options?: { aiOnly?: boolean }): Promise<NewsFeed> {
+export async function getNews(query?: string, options?: { aiOnly?: boolean; fallbackToAll?: boolean }): Promise<NewsFeed> {
   const baseUrl = resolveApiBaseUrl();
 
   if (!baseUrl) {
@@ -126,8 +126,30 @@ export async function getNews(query?: string, options?: { aiOnly?: boolean }): P
     }
 
     const payload = (await response.json()) as { items: NewsItem[] };
+    const filteredItems = filterNews(payload.items, query, options);
+
+    if (options?.aiOnly && options.fallbackToAll && filteredItems.length === 0) {
+      const fallbackUrl = new URL("/api/v1/news", baseUrl);
+      if (query) {
+        fallbackUrl.searchParams.set("query", query);
+      }
+
+      const fallbackResponse = await fetch(fallbackUrl.toString(), {
+        cache: "no-store"
+      });
+
+      if (fallbackResponse.ok) {
+        const fallbackPayload = (await fallbackResponse.json()) as { items: NewsItem[] };
+        return {
+          items: filterNews(fallbackPayload.items, query, { aiOnly: false }),
+          isLive: true,
+          apiBaseUrl: baseUrl
+        };
+      }
+    }
+
     return {
-      items: filterNews(payload.items, query, options),
+      items: filteredItems,
       isLive: true,
       apiBaseUrl: baseUrl
     };
