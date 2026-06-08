@@ -1236,6 +1236,9 @@ class NewsRepository:
                     source_key=str(item.get("source_key", "")).strip(),
                     source_title=str(item.get("source_title", "")).strip(),
                     found_count=int(item.get("found_count", 0) or 0),
+                    parsed_count=int(item.get("parsed_count", item.get("found_count", 0)) or 0),
+                    fresh_count=int(item.get("fresh_count", item.get("found_count", 0)) or 0),
+                    filtered_count=int(item.get("filtered_count", 0) or 0),
                 )
                 for item in (source_breakdown or [])
                 if str(item.get("source_title", "")).strip()
@@ -2831,7 +2834,7 @@ class NewsRepository:
 
         return [self._map_review_row(row) for row in rows]
 
-    def list_raw_candidates_for_plan(self, limit: int = 6) -> list[RawItem]:
+    def list_raw_candidates_for_plan(self, limit: int = 6, since: datetime | None = None) -> list[RawItem]:
         statement = """
             SELECT
                 r.id,
@@ -2867,6 +2870,12 @@ class NewsRepository:
             LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             WHERE r.is_duplicate = FALSE
               AND cp.raw_item_id IS NULL
+        """
+        params: list[object] = []
+        if since is not None:
+            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            params.append(since)
+        statement += """
             ORDER BY
                 CASE r.triage_label
                     WHEN 'high' THEN 0
@@ -2878,15 +2887,16 @@ class NewsRepository:
                 r.published_at DESC
             LIMIT %s
         """
+        params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
+                cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
 
         return [self._map_raw_row(row) for row in rows]
 
-    def list_planned_raw_items_for_drafts(self, limit: int = 3) -> list[RawItem]:
+    def list_planned_raw_items_for_drafts(self, limit: int = 3, since: datetime | None = None) -> list[RawItem]:
         statement = """
             SELECT
                 r.id,
@@ -2923,13 +2933,17 @@ class NewsRepository:
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
             WHERE cp.status = 'planned'
               AND d.raw_item_id IS NULL
-            ORDER BY cp.priority_score DESC, r.published_at DESC
-            LIMIT %s
         """
+        params: list[object] = []
+        if since is not None:
+            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            params.append(since)
+        statement += " ORDER BY cp.priority_score DESC, r.published_at DESC LIMIT %s"
+        params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
+                cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
 
         return [self._map_raw_row(row) for row in rows]
@@ -2951,43 +2965,48 @@ class NewsRepository:
 
         return int(row[0] if row and row[0] is not None else 0)
 
-    def list_publishable_drafts(self, limit: int = 5) -> list[DraftArticle]:
+    def list_publishable_drafts(self, limit: int = 5, since: datetime | None = None) -> list[DraftArticle]:
         statement = """
             SELECT
-                id,
-                raw_item_id,
-                title,
-                dek,
-                body,
-                writer_title,
-                writer_dek,
-                writer_body,
-                category,
-                source_title,
-                source_url,
-                published_at,
-                status,
-                review_status,
-                review_summary,
-                publish_decision,
-                publish_reason,
-                prompt_config_id,
-                prompt_name,
-                model,
-                generation_mode,
-                created_at,
-                updated_at
-            FROM draft_articles
-            WHERE status = 'ready_for_publish'
-              AND review_status = 'reviewed'
-              AND publish_decision = 'publish_auto'
-            ORDER BY updated_at ASC, published_at DESC
-            LIMIT %s
+                d.id,
+                d.raw_item_id,
+                d.title,
+                d.dek,
+                d.body,
+                d.writer_title,
+                d.writer_dek,
+                d.writer_body,
+                d.category,
+                d.source_title,
+                d.source_url,
+                d.published_at,
+                d.status,
+                d.review_status,
+                d.review_summary,
+                d.publish_decision,
+                d.publish_reason,
+                d.prompt_config_id,
+                d.prompt_name,
+                d.model,
+                d.generation_mode,
+                d.created_at,
+                d.updated_at
+            FROM draft_articles d
+            JOIN raw_items r ON r.id = d.raw_item_id
+            WHERE d.status = 'ready_for_publish'
+              AND d.review_status = 'reviewed'
+              AND d.publish_decision = 'publish_auto'
         """
+        params: list[object] = []
+        if since is not None:
+            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            params.append(since)
+        statement += " ORDER BY d.updated_at ASC, d.published_at DESC LIMIT %s"
+        params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
+                cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
 
         return [self._map_draft_row(row) for row in rows]

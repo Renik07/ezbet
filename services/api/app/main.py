@@ -1325,7 +1325,12 @@ def _run_source_ingestion(
                 trigger=trigger,
                 status="ok" if not result.error else "error",
                 error_reason=result.error,
-                counts={"items": len(source_items), "retry_count": result.retry_count},
+                counts={
+                    "parsed": len(result.items),
+                    "fresh": len(source_items),
+                    "filtered": max(0, len(result.items) - len(source_items)),
+                    "retry_count": result.retry_count,
+                },
                 fetch_status=result.fetch_status,
                 parse_status=result.parse_status,
             )
@@ -1356,6 +1361,12 @@ def _run_source_ingestion(
                 "source_key": result.source.key,
                 "source_title": result.source.title,
                 "found_count": len([item for item in raw_items if item.source_key == result.source.key]),
+                "parsed_count": len(result.items),
+                "fresh_count": len([item for item in raw_items if item.source_key == result.source.key]),
+                "filtered_count": max(
+                    0,
+                    len(result.items) - len([item for item in raw_items if item.source_key == result.source.key]),
+                ),
             }
             for result in source_results
         ]
@@ -1812,7 +1823,13 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
         try:
             repository.set_editorial_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
-            planned_items = run_content_planner(repository, limit=batch_size)
+            ingest_settings = repository.get_scheduler_settings()
+            current_ingest_started_at = ingest_settings.last_run_at
+            planned_items = run_content_planner(
+                repository,
+                limit=batch_size,
+                since=current_ingest_started_at,
+            )
             _log_pipeline_event(
                 "scheduler_run_started",
                 phase="editorial",
@@ -1821,7 +1838,11 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
                 status="running",
                 counts={"batch_size": batch_size, "planned": len(planned_items)},
             )
-            drafts, reviews = run_editorial_cycle(repository, limit=batch_size)
+            drafts, reviews = run_editorial_cycle(
+                repository,
+                limit=batch_size,
+                since=current_ingest_started_at,
+            )
             published_count = len([draft for draft in drafts if draft.status == "published"])
             latest_settings = repository.get_editorial_scheduler_settings()
             next_run_at = (
@@ -1992,7 +2013,8 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
                 status="running",
                 counts={"batch_size": batch_size},
             )
-            published = _run_publish_for_drafts(limit=batch_size)
+            ingest_settings = repository.get_scheduler_settings()
+            published = _run_publish_for_drafts(limit=batch_size, since=ingest_settings.last_run_at)
             latest_settings = repository.get_publish_scheduler_settings()
             next_run_at = (
                 now + timedelta(minutes=latest_settings.interval_minutes)
@@ -2180,8 +2202,8 @@ def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
     _run_enrichment_for_raw_items(raw_items)
 
 
-def _run_publish_for_drafts(*, limit: int) -> int:
-    drafts = repository.list_publishable_drafts(limit=limit)
+def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int:
+    drafts = repository.list_publishable_drafts(limit=limit, since=since)
     published = 0
 
     for draft in drafts:

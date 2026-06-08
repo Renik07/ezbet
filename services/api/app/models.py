@@ -232,6 +232,9 @@ class PipelineSourceBreakdownItem(BaseModel):
     source_key: str = Field(serialization_alias="sourceKey")
     source_title: str = Field(serialization_alias="sourceTitle")
     found_count: int = Field(default=0, serialization_alias="foundCount")
+    parsed_count: int = Field(default=0, serialization_alias="parsedCount")
+    fresh_count: int = Field(default=0, serialization_alias="freshCount")
+    filtered_count: int = Field(default=0, serialization_alias="filteredCount")
 
 
 class NewsListResponse(BaseModel):

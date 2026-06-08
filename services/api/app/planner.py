@@ -28,10 +28,14 @@ LIVE_MATCH_TRACKER_TERMS = (
 )
 
 
-def run_content_planner(repository: NewsRepository, limit: int = 6) -> list[ContentPlanItem]:
+def run_content_planner(
+    repository: NewsRepository,
+    limit: int = 6,
+    since: datetime | None = None,
+) -> list[ContentPlanItem]:
     shortlist_limit = max(limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
     pool_limit = max(shortlist_limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
-    candidate_pool = repository.list_raw_candidates_for_plan(limit=pool_limit)
+    candidate_pool = repository.list_raw_candidates_for_plan(limit=pool_limit, since=since)
     candidates = build_editorial_shortlist(candidate_pool, shortlist_limit=shortlist_limit, batch_limit=limit)
     planned_items: list[ContentPlanItem] = []
     ai_client = OpenAIEditorialClient()

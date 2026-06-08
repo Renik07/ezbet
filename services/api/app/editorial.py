@@ -114,11 +114,15 @@ class QualityGateResult:
     reason: str
 
 
-def run_editorial_cycle(repository: NewsRepository, limit: int = 2) -> tuple[list[DraftArticle], list[EditorReview]]:
+def run_editorial_cycle(
+    repository: NewsRepository,
+    limit: int = 2,
+    since: datetime | None = None,
+) -> tuple[list[DraftArticle], list[EditorReview]]:
     ai_client = OpenAIEditorialClient()
     writer_prompt = repository.get_active_prompt("writer")
     editor_prompt = repository.get_active_prompt("editor")
-    raw_candidates = repository.list_planned_raw_items_for_drafts(limit=limit)
+    raw_candidates = repository.list_planned_raw_items_for_drafts(limit=limit, since=since)
 
     generated: list[DraftArticle] = []
     reviews: list[EditorReview] = []
