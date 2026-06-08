@@ -121,6 +121,8 @@ export default async function AdminPage({
   const pipelineQueues = buildPipelineQueues(rawItems, drafts);
   const duplicateAudit = buildDuplicateAudit(rawItems);
   const activeTab = getAdminTab(params.tab);
+  const currentRawItemIds = new Set(rawItems.map((item) => item.id));
+  const currentPipelineContentPlan = contentPlan.filter((item) => currentRawItemIds.has(item.rawItemId));
 
   return (
     <main className="page-shell">
@@ -987,11 +989,13 @@ export default async function AdminPage({
         <div className="section-head">
           <div>
             <h2>Контент-план</h2>
-            <p>Планировщик выбирает, какие raw_items идут в редакционный контур и в каком формате.</p>
+            <p>
+              Планировщик выбирает, какие raw_items последнего pipeline идут в редакционный контур и в каком формате.
+            </p>
           </div>
         </div>
         <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
-          {contentPlan.slice(0, 6).map((item) => (
+          {currentPipelineContentPlan.length ? currentPipelineContentPlan.slice(0, 8).map((item) => (
             <article key={item.id} className="news-card">
               <span>
                 {item.priorityLabel} · {item.plannedFormat} · {item.status}
@@ -1002,7 +1006,14 @@ export default async function AdminPage({
                 {item.sourceTitle} · score {item.priorityScore}
               </p>
             </article>
-          ))}
+          )) : (
+            <article className="news-card">
+              <h3>Для последнего pipeline записей content plan нет</h3>
+              <p>
+                Если в диагностике есть raw-новости, но здесь пусто, значит planner ещё не выбрал их в editorial batch.
+              </p>
+            </article>
+          )}
         </div>
       </section>
       ) : null}
@@ -1025,8 +1036,8 @@ export default async function AdminPage({
             <span>review entries в текущей выборке</span>
           </div>
           <div className="stat">
-            <strong>{contentPlan.length}</strong>
-            <span>content plan items в текущей выборке</span>
+            <strong>{currentPipelineContentPlan.length}</strong>
+            <span>content plan items последнего pipeline</span>
           </div>
         </div>
         <div className="news-grid" style={{ gridTemplateColumns: "1fr" }}>
