@@ -980,13 +980,13 @@ def list_raw_items(limit: int = Query(default=50, ge=1, le=200)) -> RawItemListR
 @app.get("/api/v1/raw-items/preview", response_model=RawItemPreviewListResponse)
 def list_raw_item_previews(
     limit: int = Query(default=50, ge=1, le=200),
-    scope: str = Query(default="latest", pattern="^(latest|latest_ingest)$"),
+    scope: str = Query(default="latest"),
 ) -> RawItemPreviewListResponse:
     if scope == "latest_ingest":
-        latest_ingest_run = repository.get_latest_pipeline_run(phase="ingest", status="ok")
+        scheduler_settings = repository.get_scheduler_settings()
         raw_items = (
-            repository.list_raw_item_previews_for_ingest_run(latest_ingest_run, limit)
-            if latest_ingest_run
+            repository.list_raw_item_previews_since(scheduler_settings.last_run_at, limit)
+            if scheduler_settings.last_run_at
             else []
         )
     else:

@@ -602,7 +602,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       baseUrl,
       "/api/v1/raw-items/preview?limit=50&scope=latest_ingest",
       (payload) => (payload as { items: RawItem[] }).items,
-      fallbackRawItems
+      []
     ),
     loadStudioResource(baseUrl, "/api/v1/drafts", (payload) => (payload as { items: DraftArticle[] }).items, fallbackDrafts),
     loadStudioResource(baseUrl, "/api/v1/reviews", (payload) => (payload as { items: EditorReview[] }).items, fallbackReviews),

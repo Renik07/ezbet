@@ -470,6 +470,7 @@ export default async function StudioPage({
             : "API editorial-слоя сейчас недоступен, поэтому показывается резервный режим просмотра."}
         </p>
         {notice ? <p className="source-card-error">{notice}</p> : null}
+        {data.liveError ? <p className="source-card-error">Ошибка загрузки live-данных: {data.liveError}</p> : null}
         <div className="hero-actions">
           <Link className="button-primary" href="/admin">
             Открыть админку
