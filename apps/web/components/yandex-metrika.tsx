@@ -14,19 +14,33 @@ declare global {
 export function YandexMetrikaPageViews() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const hasTrackedInitialPage = useRef(false);
+  const previousUrl = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!hasTrackedInitialPage.current) {
-      hasTrackedInitialPage.current = true;
-      return;
-    }
-
     const query = searchParams.toString();
-    const url = query ? `${pathname}?${query}` : pathname;
-    window.ym?.(METRIKA_ID, "hit", url, {
-      referer: document.referrer
-    });
+    const path = query ? `${pathname}?${query}` : pathname;
+    const url = new URL(path, window.location.origin).href;
+    const referer = previousUrl.current ?? document.referrer;
+    let attempts = 0;
+
+    const sendHit = () => {
+      attempts += 1;
+
+      if (window.ym) {
+        window.ym(METRIKA_ID, "hit", url, {
+          referer,
+          title: document.title
+        });
+        previousUrl.current = url;
+        return;
+      }
+
+      if (attempts < 20) {
+        window.setTimeout(sendHit, 250);
+      }
+    };
+
+    sendHit();
   }, [pathname, searchParams]);
 
   return null;
