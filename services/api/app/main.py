@@ -519,6 +519,15 @@ def get_article(slug: str) -> ArticleResponse:
     return ArticleResponse(item=article)
 
 
+@app.post("/api/v1/articles/reflow-publication-times")
+def reflow_article_publication_times(
+    request: Request,
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> dict[str, int]:
+    _require_admin_api_token(request)
+    return {"updated": repository.reflow_public_published_at_for_articles(limit=limit)}
+
+
 @app.post("/api/v1/news/{news_item_id:path}/hide", response_model=NewsItemResponse)
 def hide_news_item(news_item_id: str, request: Request) -> NewsItemResponse:
     _require_admin_api_token(request)

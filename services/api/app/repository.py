@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -3671,13 +3672,14 @@ class NewsRepository:
         if draft.generation_mode == "template" or draft.status == "fallback_only":
             raise ValueError("Template fallback drafts must never be published.")
 
-        article = self.upsert_article(draft, raw_item)
+        public_published_at = _build_public_published_at(raw_item)
+        article = self.upsert_article(draft, raw_item, public_published_at=public_published_at)
         published_item = NewsItem(
             id=raw_item.external_id,
             title=draft.title,
             description=draft.dek,
             category=draft.category,
-            published_at=draft.published_at,
+            published_at=public_published_at,
             source=raw_item.source_title,
             link=raw_item.url,
             status="published",
@@ -3728,7 +3730,64 @@ class NewsRepository:
 
         return published_item
 
-    def upsert_article(self, draft: DraftArticle, raw_item: RawItem) -> Article:
+    def reflow_public_published_at_for_articles(self, *, limit: int = 500) -> int:
+        statement = """
+            SELECT
+                a.id,
+                n.id,
+                r.source_key,
+                r.external_id,
+                r.title,
+                r.fetched_at
+            FROM articles a
+            JOIN news_items n ON n.id = a.news_item_id
+            JOIN raw_items r ON r.id = a.raw_item_id
+            WHERE n.ai_reviewed = TRUE
+            ORDER BY r.fetched_at DESC
+            LIMIT %s
+        """
+        rows: list[tuple[object, ...]]
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (limit,))
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    public_published_at = _build_public_published_at_from_values(
+                        source_key=str(row[2]),
+                        external_id=str(row[3]),
+                        title=str(row[4]),
+                        fetched_at=row[5],
+                    )
+                    cursor.execute(
+                        """
+                        UPDATE articles
+                        SET published_at = %s,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (public_published_at, row[0]),
+                    )
+                    cursor.execute(
+                        """
+                        UPDATE news_items
+                        SET published_at = %s
+                        WHERE id = %s
+                        """,
+                        (public_published_at, row[1]),
+                    )
+            connection.commit()
+
+        return len(rows)
+
+    def upsert_article(
+        self,
+        draft: DraftArticle,
+        raw_item: RawItem,
+        *,
+        public_published_at: datetime | None = None,
+    ) -> Article:
+        display_published_at = public_published_at or _build_public_published_at(raw_item)
         article = Article(
             id=f"article:{raw_item.external_id}",
             slug=_build_article_slug(draft.title, raw_item.external_id),
@@ -3742,7 +3801,7 @@ class NewsRepository:
             source_title=raw_item.source_title,
             source_url=raw_item.url,
             tags=raw_item.tags,
-            published_at=draft.published_at,
+            published_at=display_published_at,
             ai_reviewed=True,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -4416,3 +4475,30 @@ def _build_article_slug(title: str, external_id: str) -> str:
 
     suffix = "".join(char.lower() for char in suffix_source if char.isalnum())[-10:] or "item"
     return f"{slug[:70].rstrip('-')}-{suffix}"
+
+
+def _build_public_published_at(raw_item: RawItem) -> datetime:
+    return _build_public_published_at_from_values(
+        source_key=raw_item.source_key,
+        external_id=raw_item.external_id,
+        title=raw_item.title,
+        fetched_at=raw_item.fetched_at,
+    )
+
+
+def _build_public_published_at_from_values(
+    *,
+    source_key: str,
+    external_id: str,
+    title: str,
+    fetched_at: datetime,
+) -> datetime:
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    else:
+        fetched_at = fetched_at.astimezone(timezone.utc)
+
+    seed = f"{source_key}:{external_id}:{title}".encode("utf-8", errors="ignore")
+    hash_value = zlib.crc32(seed)
+    offset_seconds = 120 + (hash_value % (54 * 60))
+    return fetched_at - timedelta(hours=1) + timedelta(seconds=offset_seconds)

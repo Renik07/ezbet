@@ -6,6 +6,7 @@ import { hidePublishedNewsNow, unhidePublishedNewsNow } from "@/app/admin/action
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { requireAdminSession } from "@/lib/auth";
 import { formatCategoryLabel } from "@/lib/category";
+import { formatMoscowDateTime } from "@/lib/dates";
 import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
 export const dynamic = "force-dynamic";
@@ -545,10 +546,7 @@ export default async function StudioPage({
                 <p className="footer-note" style={{ marginTop: 12 }}>
                   {draft.sourceTitle} ·{" "}
                   <time dateTime={draft.publishedAt}>
-                    {new Date(draft.publishedAt).toLocaleString("ru-RU", {
-                      dateStyle: "medium",
-                      timeStyle: "short"
-                    })}
+                    {formatMoscowDateTime(draft.publishedAt)}
                   </time>
                 </p>
                 <p className="footer-note">
@@ -596,10 +594,7 @@ export default async function StudioPage({
                 <p className="footer-note" style={{ marginTop: 12 }}>
                   {item.source} ·{" "}
                   <time dateTime={item.publishedAt}>
-                    {new Date(item.publishedAt).toLocaleString("ru-RU", {
-                      dateStyle: "medium",
-                      timeStyle: "short"
-                    })}
+                    {formatMoscowDateTime(item.publishedAt)}
                   </time>
                 </p>
                 <div className="hero-actions" style={{ marginTop: 16 }}>
@@ -677,10 +672,7 @@ export default async function StudioPage({
                   <p>
                     Дата публикации:{" "}
                     <time dateTime={rawItem.publishedAt}>
-                      {new Date(rawItem.publishedAt).toLocaleString("ru-RU", {
-                        dateStyle: "medium",
-                        timeStyle: "short"
-                      })}
+                      {formatMoscowDateTime(rawItem.publishedAt)}
                     </time>
                   </p>
                   <p>

@@ -3,6 +3,7 @@ import type { Route } from "next";
 import type { Metadata } from "next";
 import { NewsCard } from "@/components/news-card";
 import { formatCategoryLabel } from "@/lib/category";
+import { formatMoscowDate } from "@/lib/dates";
 import { getNews } from "@/lib/news";
 import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
 
@@ -27,20 +28,23 @@ export const metadata: Metadata = {
 function formatRelativeTime(date: string) {
   const diffMs = Date.now() - new Date(date).getTime();
   const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+  const formatter = new Intl.RelativeTimeFormat("ru-RU", { numeric: "always" });
 
   if (diffMinutes < 60) {
-    return `${diffMinutes} мин`;
+    return formatter.format(-diffMinutes, "minute");
   }
 
   const diffHours = Math.round(diffMinutes / 60);
   if (diffHours < 24) {
-    return `${diffHours} ч`;
+    return formatter.format(-diffHours, "hour");
   }
 
-  return new Date(date).toLocaleDateString("ru-RU", {
-    day: "numeric",
-    month: "short"
-  });
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays < 8) {
+    return formatter.format(-diffDays, "day");
+  }
+
+  return formatMoscowDate(date);
 }
 
 function categoryTone(category?: string) {
@@ -101,7 +105,7 @@ export default async function HomePage() {
             <div className="hero-category">
               <span className={`category-dot category-dot--${categoryTone(heroItem.category)}`} />
               <span className="category-label">{formatCategoryLabel(heroItem.category)}</span>
-              <span className="hero-time">{formatRelativeTime(heroItem.publishedAt)} назад</span>
+              <span className="hero-time">{formatRelativeTime(heroItem.publishedAt)}</span>
             </div>
             <h1 className="hero-title">{heroItem.title}</h1>
             <p className="hero-desc">{heroItem.description}</p>

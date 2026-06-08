@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Route } from "next";
 
 import { formatCategoryLabel } from "@/lib/category";
+import { formatMoscowDateTime } from "@/lib/dates";
 import type { NewsItem } from "@/lib/news";
 
 type NewsCardProps = {
@@ -22,10 +23,7 @@ function categoryTone(category?: string) {
 export function NewsCard({ item }: NewsCardProps) {
   const label = formatCategoryLabel(item.category);
   const href = item.articleSlug ? (`/news/${item.articleSlug}` as Route) : item.link;
-  const publishedAt = new Date(item.publishedAt).toLocaleString("ru-RU", {
-    dateStyle: "medium",
-    timeStyle: "short"
-  });
+  const publishedAt = formatMoscowDateTime(item.publishedAt);
 
   const content = (
     <article className="news-item">

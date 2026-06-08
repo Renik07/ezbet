@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { formatCategoryLabel } from "@/lib/category";
+import { formatMoscowDateTime } from "@/lib/dates";
 import { getEditorialStudioData, type DraftArticle, type RawItem } from "@/lib/editorial";
 import { requireAdminSession } from "@/lib/auth";
 import { logoutAdminNow } from "@/app/auth-actions";
@@ -1182,10 +1183,7 @@ function formatDateTime(value?: string) {
     return "ещё не было";
   }
 
-  return new Date(value).toLocaleString("ru-RU", {
-    dateStyle: "medium",
-    timeStyle: "short"
-  });
+  return formatMoscowDateTime(value);
 }
 
 function buildPipelineQueues(rawItems: RawItem[], drafts: DraftArticle[]) {

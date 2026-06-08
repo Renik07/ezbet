@@ -3,14 +3,12 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { formatCategoryLabel } from "@/lib/category";
+import { formatMoscowDateTime } from "@/lib/dates";
 import { getArticle, getNews } from "@/lib/news";
 import { absoluteUrl, SITE_NAME, truncateMeta } from "@/lib/site";
 
 function formatArticleDate(date: string) {
-  return new Date(date).toLocaleString("ru-RU", {
-    dateStyle: "long",
-    timeStyle: "short"
-  });
+  return formatMoscowDateTime(date, "long");
 }
 
 export async function generateMetadata({
