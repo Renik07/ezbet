@@ -223,6 +223,77 @@ function describePipelineState(rawItem: {
   return `В content plan: ${rawItem.contentPlanStatus}${rawItem.contentPlanPriorityLabel ? ` (${rawItem.contentPlanPriorityLabel})` : ""}.`;
 }
 
+function plannerRankWeight(triageLabel: string) {
+  switch (triageLabel) {
+    case "high":
+      return 0;
+    case "medium":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+function buildPlannerDiagnostics(
+  pairs: Array<{
+    rawItem: {
+      id: string;
+      title: string;
+      fetchedAt: string;
+      importanceScore: number;
+      triageLabel: string;
+      isDuplicate: boolean;
+      fullText?: string;
+      contentPlanStatus?: string;
+      contentPlanReason?: string;
+      contentPlanPriorityLabel?: string;
+    };
+  }>,
+  plannedLimit: number
+) {
+  const sorted = [...pairs].sort((left, right) => {
+    const triageDelta =
+      plannerRankWeight(left.rawItem.triageLabel) - plannerRankWeight(right.rawItem.triageLabel);
+    if (triageDelta !== 0) return triageDelta;
+
+    const scoreDelta = right.rawItem.importanceScore - left.rawItem.importanceScore;
+    if (scoreDelta !== 0) return scoreDelta;
+
+    return Date.parse(right.rawItem.fetchedAt) - Date.parse(left.rawItem.fetchedAt);
+  });
+
+  return new Map(
+    sorted.map(({ rawItem }, index) => {
+      const rank = index + 1;
+      const selected = Boolean(rawItem.contentPlanStatus);
+      let reason = rawItem.contentPlanReason;
+
+      if (!reason) {
+        if (rawItem.isDuplicate) {
+          reason = "Planner не берет дубликаты в content plan.";
+        } else if (selected) {
+          reason = `Planner выбрал материал в content plan${rawItem.contentPlanPriorityLabel ? ` (${rawItem.contentPlanPriorityLabel})` : ""}.`;
+        } else if (rank > plannedLimit) {
+          reason = `Не попала в текущий editorial batch: позиция ${rank}, лимит планировщика ${plannedLimit}.`;
+        } else if (!rawItem.fullText) {
+          reason = "Может ждать enrichment: full text пока не получен.";
+        } else {
+          reason = "Не выбрана planner в этом прогоне: проверьте batch, AI rerank и соседние материалы выше по score.";
+        }
+      }
+
+      return [
+        rawItem.id,
+        {
+          rank,
+          selected,
+          reason
+        }
+      ];
+    })
+  );
+}
+
 function describeEnrichmentBlock(rawItem: {
   isDuplicate: boolean;
   duplicateReason?: string;
@@ -442,7 +513,7 @@ export default async function StudioPage({
   await requireAdminSession("/studio");
   const params = (await searchParams) ?? {};
   const data = await getEditorialStudioData();
-  const { drafts, contentPlan, editorialStatus, isLive, publishedNews } = data;
+  const { drafts, contentPlan, editorialStatus, editorialScheduler, isLive, publishedNews } = data;
   const rawDraftPairs = buildRawDraftPairs(data, 8);
   const notice = getStudioNotice(params.notice, params.detail);
   const activeTab = getStudioTab(params.tab);
@@ -456,6 +527,7 @@ export default async function StudioPage({
   const currentPipelineContentPlan = contentPlan
     .filter((item) => diagnosticRawIds.has(item.rawItemId))
     .slice(0, 8);
+  const plannerDiagnostics = buildPlannerDiagnostics(rawDraftPairs, editorialScheduler.batchSize);
   const publishedVisibleNews = recentPublishedNews.filter((item) => item.visibility !== "hidden");
   const hiddenPublishedNews = recentPublishedNews.filter((item) => item.visibility === "hidden");
 
@@ -746,6 +818,14 @@ export default async function StudioPage({
                 <div className="compare-block">
                   <strong>Статус pipeline</strong>
                   <p>{describePipelineState(rawItem)}</p>
+                  {plannerDiagnostics.has(rawItem.id) ? (
+                    <p>
+                      <strong>Planner:</strong>{" "}
+                      {plannerDiagnostics.get(rawItem.id)?.selected ? "выбрана" : "не выбрана"} · позиция{" "}
+                      {plannerDiagnostics.get(rawItem.id)?.rank} из {rawDraftPairs.length} ·{" "}
+                      {plannerDiagnostics.get(rawItem.id)?.reason}
+                    </p>
+                  ) : null}
                   <p>
                     <strong>Full text:</strong> {describeEnrichmentBlock(rawItem)}
                   </p>

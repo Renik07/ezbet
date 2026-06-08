@@ -1239,6 +1239,10 @@ class NewsRepository:
                     parsed_count=int(item.get("parsed_count", item.get("found_count", 0)) or 0),
                     fresh_count=int(item.get("fresh_count", item.get("found_count", 0)) or 0),
                     filtered_count=int(item.get("filtered_count", 0) or 0),
+                    filter_reasons={
+                        str(reason): int(count or 0)
+                        for reason, count in dict(item.get("filter_reasons") or {}).items()
+                    },
                 )
                 for item in (source_breakdown or [])
                 if str(item.get("source_title", "")).strip()

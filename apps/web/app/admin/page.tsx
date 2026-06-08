@@ -1290,6 +1290,26 @@ function formatPipelineTrigger(value: string) {
   }
 }
 
+function formatSourceFilterReasons(reasons?: Record<string, number>) {
+  if (!reasons) {
+    return "";
+  }
+
+  const labels: Record<string, string> = {
+    older_than_max_age: "старше окна свежести",
+    reached_last_external_id: "достигли последней известной новости",
+    known_external_id: "уже известный external_id",
+    known_dedupe_key: "уже известный дубль",
+    not_newer_than_last_published: "не новее последней сохранённой",
+    batch_limit: "срезано лимитом batchSize"
+  };
+
+  return Object.entries(reasons)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${labels[reason] ?? reason}: ${count}`)
+    .join(" · ");
+}
+
 function renderPipelineRunMetrics(run: {
   phase: string;
   foundCount: number;
@@ -1311,6 +1331,7 @@ function renderPipelineRunMetrics(run: {
     parsedCount?: number;
     freshCount?: number;
     filteredCount?: number;
+    filterReasons?: Record<string, number>;
   }>;
 }) {
   switch (run.phase) {
@@ -1336,6 +1357,18 @@ function renderPipelineRunMetrics(run: {
                 })
                 .join(" · ")}
             </p>
+          ) : null}
+          {run.sourceBreakdown.some((item) => item.filterReasons && Object.keys(item.filterReasons).length > 0) ? (
+            <div style={{ marginTop: 8 }}>
+              {run.sourceBreakdown.map((item) => {
+                const reasons = formatSourceFilterReasons(item.filterReasons);
+                return reasons ? (
+                  <p key={`${item.sourceKey}-filters`} className="footer-note">
+                    {item.sourceTitle}: {reasons}
+                  </p>
+                ) : null;
+              })}
+            </div>
           ) : null}
           {run.skippedItems.length ? (
             <div style={{ marginTop: 10 }}>

@@ -253,6 +253,7 @@ class SourceIngestionResult:
     parse_status: str
     error: str | None
     retry_count: int
+    filter_reasons: dict[str, int] | None = None
 
 
 class SourceFetchError(RuntimeError):
@@ -372,13 +373,14 @@ def ingest_sources_with_results(
                 ai_search_prompt=ai_search_prompt,
             )
             collected_items = source_result.items
-            filtered_items = _filter_new_items(
+            filtered_items, filter_reasons = _filter_new_items_with_reasons(
                 collected_items,
                 source_state,
                 runtime_source.source_type,
                 known_external_ids=known_external_ids_map.get(source.key, set()),
                 known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
             )
+            source_result.filter_reasons = filter_reasons
         except Exception as exc:
             source_result = SourceIngestionResult(
                 source=runtime_source,
@@ -387,9 +389,15 @@ def ingest_sources_with_results(
                 parse_status="idle",
                 error=f"Unhandled source ingestion error: {exc}",
                 retry_count=max_retries,
+                filter_reasons={},
             )
             filtered_items = []
         if limit is not None and limit_per_source:
+            if len(filtered_items) > limit:
+                source_result.filter_reasons = dict(source_result.filter_reasons or {})
+                source_result.filter_reasons["batch_limit"] = (
+                    source_result.filter_reasons.get("batch_limit", 0) + len(filtered_items) - limit
+                )
             filtered_items = filtered_items[:limit]
         for item in filtered_items:
             dedupe_key = item.dedupe_key
@@ -1847,27 +1855,57 @@ def _filter_new_items(
     known_external_ids: set[str] | None = None,
     known_dedupe_keys: set[str] | None = None,
 ) -> list[RawItem]:
+    fresh_items, _ = _filter_new_items_with_reasons(
+        items,
+        state,
+        source_type,
+        known_external_ids=known_external_ids,
+        known_dedupe_keys=known_dedupe_keys,
+    )
+    return fresh_items
+
+
+def _add_filter_reason(reasons: dict[str, int], reason: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    reasons[reason] = reasons.get(reason, 0) + count
+
+
+def _filter_new_items_with_reasons(
+    items: list[RawItem],
+    state: SourceSyncState | None,
+    source_type: str,
+    *,
+    known_external_ids: set[str] | None = None,
+    known_dedupe_keys: set[str] | None = None,
+) -> tuple[list[RawItem], dict[str, int]]:
     cutoff = datetime.now(timezone.utc) - DEFAULT_INGEST_MAX_ITEM_AGE
-    items = [item for item in items if item.published_at >= cutoff]
+    reasons: dict[str, int] = {}
+    original_items = items
+    items = [item for item in original_items if item.published_at >= cutoff]
+    _add_filter_reason(reasons, "older_than_max_age", len(original_items) - len(items))
     if not items:
-        return []
+        return [], reasons
 
     known_ids = known_external_ids or set()
     known_keys = known_dedupe_keys or set()
     if state is not None and source_type == "scraping":
         fresh_items: list[RawItem] = []
         for item in items:
-            if (
-                (state.last_external_id and item.external_id == state.last_external_id)
-                or item.external_id in known_ids
-                or item.dedupe_key in known_keys
-            ):
-                return fresh_items
+            if state.last_external_id and item.external_id == state.last_external_id:
+                _add_filter_reason(reasons, "reached_last_external_id", len(items) - len(fresh_items))
+                return fresh_items, reasons
+            if item.external_id in known_ids:
+                _add_filter_reason(reasons, "known_external_id", len(items) - len(fresh_items))
+                return fresh_items, reasons
+            if item.dedupe_key in known_keys:
+                _add_filter_reason(reasons, "known_dedupe_key", len(items) - len(fresh_items))
+                return fresh_items, reasons
             fresh_items.append(item)
-        return fresh_items
+        return fresh_items, reasons
 
     if state is None or state.last_published_at is None:
-        return items
+        return items, reasons
 
     last_published_at = state.last_published_at
     last_external_id = state.last_external_id
@@ -1876,12 +1914,15 @@ def _filter_new_items(
         fresh_items: list[RawItem] = []
         for item in items:
             if last_external_id is not None and item.external_id == last_external_id:
+                _add_filter_reason(reasons, "reached_last_external_id", len(items) - len(fresh_items))
                 break
 
             if item.external_id in known_ids:
+                _add_filter_reason(reasons, "known_external_id", len(items) - len(fresh_items))
                 break
 
             if item.dedupe_key in known_keys:
+                _add_filter_reason(reasons, "known_dedupe_key", len(items) - len(fresh_items))
                 break
 
             if item.published_at > last_published_at:
@@ -1897,10 +1938,11 @@ def _filter_new_items(
                 continue
 
             if item.published_at < last_published_at:
+                _add_filter_reason(reasons, "not_newer_than_last_published", len(items) - len(fresh_items))
                 break
 
         if fresh_items:
-            return fresh_items
+            return fresh_items, reasons
 
     fresh_items: list[RawItem] = []
 
@@ -1912,11 +1954,14 @@ def _filter_new_items(
         if (
             item.published_at == last_published_at
             and last_external_id is not None
-            and item.external_id != last_external_id
+                and item.external_id != last_external_id
         ):
             fresh_items.append(item)
+            continue
 
-    return fresh_items
+        _add_filter_reason(reasons, "not_newer_than_last_published")
+
+    return fresh_items, reasons
 
 
 def _items_look_descending_by_freshness(items: list[RawItem]) -> bool:

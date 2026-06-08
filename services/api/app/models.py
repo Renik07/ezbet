@@ -235,6 +235,7 @@ class PipelineSourceBreakdownItem(BaseModel):
     parsed_count: int = Field(default=0, serialization_alias="parsedCount")
     fresh_count: int = Field(default=0, serialization_alias="freshCount")
     filtered_count: int = Field(default=0, serialization_alias="filteredCount")
+    filter_reasons: dict[str, int] = Field(default_factory=dict, serialization_alias="filterReasons")
 
 
 class NewsListResponse(BaseModel):

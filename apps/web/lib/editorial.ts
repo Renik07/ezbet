@@ -241,6 +241,7 @@ export type PipelineRun = {
     parsedCount?: number;
     freshCount?: number;
     filteredCount?: number;
+    filterReasons?: Record<string, number>;
   }>;
   error?: string;
 };

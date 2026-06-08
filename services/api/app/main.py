@@ -1329,6 +1329,7 @@ def _run_source_ingestion(
                     "parsed": len(result.items),
                     "fresh": len(source_items),
                     "filtered": max(0, len(result.items) - len(source_items)),
+                    "filter_reasons": result.filter_reasons or {},
                     "retry_count": result.retry_count,
                 },
                 fetch_status=result.fetch_status,
@@ -1367,6 +1368,7 @@ def _run_source_ingestion(
                     0,
                     len(result.items) - len([item for item in raw_items if item.source_key == result.source.key]),
                 ),
+                "filter_reasons": result.filter_reasons or {},
             }
             for result in source_results
         ]
