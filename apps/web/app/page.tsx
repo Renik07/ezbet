@@ -1,10 +1,28 @@
 import Link from "next/link";
 import type { Route } from "next";
+import type { Metadata } from "next";
 import { NewsCard } from "@/components/news-card";
 import { formatCategoryLabel } from "@/lib/category";
 import { getNews } from "@/lib/news";
+import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = {
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  alternates: {
+    canonical: "/"
+  },
+  openGraph: {
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    url: "/"
+  },
+  twitter: {
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION
+  }
+};
 
 function formatRelativeTime(date: string) {
   const diffMs = Date.now() - new Date(date).getTime();
@@ -46,9 +64,37 @@ export default async function HomePage() {
   const tickerNews = news.slice(1, 9);
   const featuredNews = news.slice(1, 9);
   const popularNews = news.slice(0, 5);
+  const homeJsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        name: SITE_NAME,
+        url: absoluteUrl("/")
+      },
+      {
+        "@type": "WebSite",
+        name: SITE_NAME,
+        url: absoluteUrl("/"),
+        description: SITE_DESCRIPTION,
+        inLanguage: "ru-RU",
+        potentialAction: {
+          "@type": "SearchAction",
+          target: `${absoluteUrl("/news")}?query={search_term_string}`,
+          "query-input": "required name=search_term_string"
+        }
+      }
+    ]
+  };
 
   return (
     <main>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(homeJsonLd)
+        }}
+      />
       <section className="home-hero container-wide">
         {heroItem ? (
           <article className="hero-article">

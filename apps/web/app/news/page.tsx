@@ -1,7 +1,9 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { NewsCard } from "@/components/news-card";
 import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
+import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, truncateMeta } from "@/lib/site";
 
 const NEWS_PER_PAGE = 20;
 
@@ -15,6 +17,43 @@ function buildNewsPageHref(page: number, query: string) {
   }
   const search = params.toString();
   return search ? `/news?${search}` : "/news";
+}
+
+export async function generateMetadata({
+  searchParams
+}: {
+  searchParams?: Promise<{ query?: string; page?: string }>;
+}): Promise<Metadata> {
+  const params = (await searchParams) ?? {};
+  const query = params.query?.trim() ?? "";
+  const page = params.page ? Number(params.page) : 1;
+  const title = query ? `Новости по запросу «${query}»` : "Лента спортивных новостей";
+  const description = query
+    ? truncateMeta(`Свежие спортивные новости ezbet.ru по запросу «${query}»: главные события, лента публикаций и материалы редакции.`)
+    : SITE_DESCRIPTION;
+
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: page > 1 ? `/news?page=${page}` : "/news"
+    },
+    robots: query
+      ? {
+          index: false,
+          follow: true
+        }
+      : undefined,
+    openGraph: {
+      title: `${title} | ${SITE_NAME}`,
+      description,
+      url: "/news"
+    },
+    twitter: {
+      title: `${title} | ${SITE_NAME}`,
+      description
+    }
+  };
 }
 
 export default async function NewsPage({
@@ -34,9 +73,39 @@ export default async function NewsPage({
   const fromItem = items.length ? startIndex + 1 : 0;
   const toItem = Math.min(startIndex + NEWS_PER_PAGE, items.length);
   const popularItems = items.slice(0, 5);
+  const collectionJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: query ? `Новости по запросу ${query}` : "Лента спортивных новостей",
+    url: absoluteUrl(buildNewsPageHref(currentPage, query)),
+    description: query
+      ? `Свежие спортивные новости по запросу ${query}.`
+      : SITE_DESCRIPTION,
+    inLanguage: "ru-RU",
+    isPartOf: {
+      "@type": "WebSite",
+      name: SITE_NAME,
+      url: absoluteUrl("/")
+    },
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: pagedItems.map((item, index) => ({
+        "@type": "ListItem",
+        position: startIndex + index + 1,
+        url: item.articleSlug ? absoluteUrl(`/news/${item.articleSlug}`) : item.link,
+        name: item.title
+      }))
+    }
+  };
 
   return (
     <main>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(collectionJsonLd)
+        }}
+      />
       <section className="news-page-hero container-wide">
         <div className="news-kicker">{isLive ? "Живая лента" : "Резервная лента"}</div>
         <h1>Лента новостей</h1>

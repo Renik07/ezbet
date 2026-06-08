@@ -3,7 +3,7 @@
 set -eu
 
 BASE_URL="${EZBET_API_BASE_URL:-http://localhost:8000}"
-MODE="${PIPELINE_MODE:-tick}"
+MODE="${PIPELINE_MODE:-run}"
 
 case "$MODE" in
   tick)

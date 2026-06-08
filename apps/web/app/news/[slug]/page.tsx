@@ -1,14 +1,66 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { formatCategoryLabel } from "@/lib/category";
 import { getArticle, getNews } from "@/lib/news";
+import { absoluteUrl, SITE_NAME, truncateMeta } from "@/lib/site";
 
 function formatArticleDate(date: string) {
   return new Date(date).toLocaleString("ru-RU", {
     dateStyle: "long",
     timeStyle: "short"
   });
+}
+
+export async function generateMetadata({
+  params
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const { item } = await getArticle(slug);
+
+  if (!item) {
+    return {
+      title: "Материал не найден",
+      robots: {
+        index: false,
+        follow: false
+      }
+    };
+  }
+
+  const description = truncateMeta(item.dek || item.lead || item.body);
+  const canonical = `/news/${item.slug}`;
+
+  return {
+    title: item.title,
+    description,
+    alternates: {
+      canonical
+    },
+    keywords: [
+      formatCategoryLabel(item.category),
+      item.sourceTitle,
+      ...item.tags.filter((tag) => !tag.toLowerCase().includes("ai"))
+    ],
+    openGraph: {
+      type: "article",
+      title: item.title,
+      description,
+      url: canonical,
+      siteName: SITE_NAME,
+      publishedTime: item.publishedAt,
+      authors: [SITE_NAME],
+      tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai"))
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: item.title,
+      description
+    }
+  };
 }
 
 export default async function ArticlePage({
@@ -28,9 +80,68 @@ export default async function ArticlePage({
     .slice(0, 4);
   const paragraphs = item.body.split("\n\n").filter(Boolean);
   const publicTags = item.tags.filter((tag) => !tag.toLowerCase().includes("ai"));
+  const articleUrl = absoluteUrl(`/news/${item.slug}`);
+  const articleJsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "NewsArticle",
+        headline: item.title,
+        description: truncateMeta(item.dek || item.lead || item.body),
+        articleBody: item.body,
+        datePublished: item.publishedAt,
+        dateModified: item.publishedAt,
+        mainEntityOfPage: articleUrl,
+        url: articleUrl,
+        inLanguage: "ru-RU",
+        articleSection: formatCategoryLabel(item.category),
+        keywords: publicTags.join(", "),
+        author: {
+          "@type": "Organization",
+          name: SITE_NAME,
+          url: absoluteUrl("/")
+        },
+        publisher: {
+          "@type": "Organization",
+          name: SITE_NAME,
+          url: absoluteUrl("/")
+        },
+        isBasedOn: item.sourceUrl
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            position: 1,
+            name: "Главная",
+            item: absoluteUrl("/")
+          },
+          {
+            "@type": "ListItem",
+            position: 2,
+            name: "Новости",
+            item: absoluteUrl("/news")
+          },
+          {
+            "@type": "ListItem",
+            position: 3,
+            name: item.title,
+            item: articleUrl
+          }
+        ]
+      }
+    ]
+  };
 
   return (
     <main className="article-page">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(articleJsonLd)
+        }}
+      />
       <section className="article-header container-wide">
         <Link className="article-back-link" href="/news">
           Назад к ленте

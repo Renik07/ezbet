@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { PendingSubmitButton } from "@/components/pending-submit-button";
@@ -7,6 +8,13 @@ import { loginAdminNow } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const metadata: Metadata = {
+  title: "Вход",
+  robots: {
+    index: false,
+    follow: false
+  }
+};
 
 type LoginSearchParams = {
   notice?: string;

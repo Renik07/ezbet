@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { formatCategoryLabel } from "@/lib/category";
@@ -27,6 +28,13 @@ import {
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const metadata: Metadata = {
+  title: "Админка",
+  robots: {
+    index: false,
+    follow: false
+  }
+};
 
 type AdminSearchParams = {
   notice?: string;

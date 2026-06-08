@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 
 import { logoutAdminNow } from "@/app/auth-actions";
 import { hidePublishedNewsNow, unhidePublishedNewsNow } from "@/app/admin/actions";
@@ -9,6 +10,13 @@ import { buildRawDraftPairs, getEditorialStudioData } from "@/lib/editorial";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const metadata: Metadata = {
+  title: "Studio",
+  robots: {
+    index: false,
+    follow: false
+  }
+};
 
 function formatExtractionMode(mode?: string) {
   switch (mode) {

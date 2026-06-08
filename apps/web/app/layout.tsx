@@ -1,10 +1,45 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Suspense } from "react";
+import { YandexMetrika } from "@/components/yandex-metrika";
+import { getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ezbet.ru",
-  description: "Автоматизированное спортивное медиа про новости, аналитику и букмекеров."
+  metadataBase: new URL(getSiteUrl()),
+  applicationName: SITE_NAME,
+  title: {
+    default: SITE_TITLE,
+    template: `%s | ${SITE_NAME}`
+  },
+  description: SITE_DESCRIPTION,
+  alternates: {
+    canonical: "/"
+  },
+  openGraph: {
+    type: "website",
+    locale: "ru_RU",
+    url: "/",
+    siteName: SITE_NAME,
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1
+    }
+  }
 };
 
 export default function RootLayout({
@@ -15,6 +50,9 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body>
+        <Suspense fallback={null}>
+          <YandexMetrika />
+        </Suspense>
         <header className="site-header">
           <div className="site-header-inner container-wide">
             <Link href="/" className="logo" aria-label="ezbet.ru - главная">

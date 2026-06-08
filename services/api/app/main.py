@@ -2070,17 +2070,49 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         trigger=mode,
         status="running",
     )
-    ingest = _run_scheduler(force=force)
-    enrichment = _run_enrichment_scheduler(force=force)
-    editorial = _run_editorial_scheduler(force=force)
-    publish = _run_publish_scheduler(force=force)
+    ingest = _run_pipeline_stage(
+        "ingest",
+        run_id=run_id,
+        trigger=mode,
+        run=lambda: _run_scheduler(force=force),
+        fallback=lambda error: SchedulerRunResponse(ran=False, reason=f"error: {error}"),
+    )
+    enrichment = _run_pipeline_stage(
+        "enrichment",
+        run_id=run_id,
+        trigger=mode,
+        run=lambda: _run_enrichment_scheduler(force=force),
+        fallback=lambda error: EnrichmentSchedulerRunResponse(ran=False, reason=f"error: {error}"),
+    )
+    editorial = _run_pipeline_stage(
+        "editorial",
+        run_id=run_id,
+        trigger=mode,
+        run=lambda: _run_editorial_scheduler(force=force),
+        fallback=lambda error: EditorialSchedulerRunResponse(ran=False, reason=f"error: {error}"),
+    )
+    publish = _run_pipeline_stage(
+        "publish",
+        run_id=run_id,
+        trigger=mode,
+        run=lambda: _run_publish_scheduler(force=force),
+        fallback=lambda error: PublishSchedulerRunResponse(ran=False, reason=f"error: {error}"),
+    )
     finished_at = datetime.now(timezone.utc)
+    pipeline_status = (
+        "partial_error"
+        if any(
+            response.reason.startswith("error:")
+            for response in (ingest, enrichment, editorial, publish)
+        )
+        else "ok"
+    )
     _log_pipeline_event(
         "pipeline_run_finished",
         phase="pipeline",
         run_id=run_id,
         trigger=mode,
-        status="ok",
+        status=pipeline_status,
         duration_ms=_duration_ms(started_at, finished_at),
         ingest_reason=ingest.reason,
         enrichment_reason=enrichment.reason,
@@ -2096,6 +2128,30 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         started_at=started_at,
         finished_at=finished_at,
     )
+
+
+def _run_pipeline_stage(
+    stage: str,
+    *,
+    run_id: str,
+    trigger: str,
+    run,
+    fallback,
+):
+    try:
+        return run()
+    except Exception as exc:
+        _log_pipeline_event(
+            "pipeline_stage_failed",
+            phase="pipeline",
+            run_id=run_id,
+            trigger=trigger,
+            status="error",
+            error_reason=str(exc),
+            failed_phase=stage,
+        )
+        logger.exception("Pipeline stage failed: %s", stage)
+        return fallback(str(exc))
 
 
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:

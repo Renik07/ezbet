@@ -1193,4 +1193,5 @@ docker compose -f docker-compose.prod.yml logs --since=12h api | grep pipeline_e
 docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "source_result|Unhandled source ingestion error|scheduler_run_failed|run_failed"
 
 # Cron
-0 */3 * * * curl -s -X POST http://localhost:8000/api/v1/pipeline/run >> /var/log/ezbet/pipeline-cron.log 2>&1
+crontab -e
+0 * * * * curl -s -X POST http://localhost:8000/api/v1/pipeline/run >> /var/log/ezbet/pipeline-cron.log 2>&1
