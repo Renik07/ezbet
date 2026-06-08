@@ -452,8 +452,9 @@ export default async function StudioPage({
     (draft) => isNeedsAttentionDraft(draft) && Date.parse(draft.publishedAt) >= cutoff24h
   );
   const recentPublishedNews = publishedNews.filter((item) => Date.parse(item.publishedAt) >= cutoff48h);
-  const recentContentPlan = contentPlan
-    .filter((item) => Date.parse(item.updatedAt || item.createdAt) >= cutoff24h)
+  const diagnosticRawIds = new Set(rawDraftPairs.map(({ rawItem }) => rawItem.id));
+  const currentPipelineContentPlan = contentPlan
+    .filter((item) => diagnosticRawIds.has(item.rawItemId))
     .slice(0, 8);
   const publishedVisibleNews = recentPublishedNews.filter((item) => item.visibility !== "hidden");
   const hiddenPublishedNews = recentPublishedNews.filter((item) => item.visibility === "hidden");
@@ -850,12 +851,15 @@ export default async function StudioPage({
         <div className="section-head">
           <div>
             <h2>Контент-план</h2>
-            <p>Это промежуточный слой между triage raw_items и генерацией draft-статей. Показываем только свежие записи за последние 24 часа.</p>
+            <p>
+              Это промежуточный слой между triage raw_items и генерацией draft-статей.
+              Показываем только записи, связанные с текущей диагностикой последнего pipeline.
+            </p>
           </div>
         </div>
         <div className="news-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {recentContentPlan.length ? (
-            recentContentPlan.map((item) => (
+          {currentPipelineContentPlan.length ? (
+            currentPipelineContentPlan.map((item) => (
             <article key={item.id} className="news-card">
               <span>
                 {item.priorityLabel} · {item.plannedFormat}
@@ -869,8 +873,8 @@ export default async function StudioPage({
             ))
           ) : (
             <article className="news-card">
-              <h3>Свежих записей контент-плана нет</h3>
-              <p>Здесь показываются только недавние записи за последние 24 часа, чтобы диагностика не превращалась в архив.</p>
+              <h3>Для текущего pipeline записей контент-плана нет</h3>
+              <p>Если raw-новости есть выше, но тут пусто, значит planner ещё не взял их в editorial batch.</p>
             </article>
           )}
         </div>

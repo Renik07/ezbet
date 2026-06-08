@@ -1308,6 +1308,9 @@ function renderPipelineRunMetrics(run: {
     sourceKey: string;
     sourceTitle: string;
     foundCount: number;
+    parsedCount?: number;
+    freshCount?: number;
+    filteredCount?: number;
   }>;
 }) {
   switch (run.phase) {
@@ -1321,7 +1324,16 @@ function renderPipelineRunMetrics(run: {
             <p className="footer-note">
               По источникам:{" "}
               {run.sourceBreakdown
-                .map((item) => `${item.sourceTitle}: ${item.foundCount}`)
+                .map((item) => {
+                  if (
+                    typeof item.parsedCount === "number" ||
+                    typeof item.freshCount === "number" ||
+                    typeof item.filteredCount === "number"
+                  ) {
+                    return `${item.sourceTitle}: свежих ${item.freshCount ?? item.foundCount} / прочитано ${item.parsedCount ?? item.foundCount} / отсечено ${item.filteredCount ?? 0}`;
+                  }
+                  return `${item.sourceTitle}: ${item.foundCount}`;
+                })
                 .join(" · ")}
             </p>
           ) : null}

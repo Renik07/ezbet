@@ -238,6 +238,9 @@ export type PipelineRun = {
     sourceKey: string;
     sourceTitle: string;
     foundCount: number;
+    parsedCount?: number;
+    freshCount?: number;
+    filteredCount?: number;
   }>;
   error?: string;
 };

@@ -1390,7 +1390,7 @@ class NewsRepository:
 
         return [self._map_raw_preview_row(row) for row in rows]
 
-    def list_pending_enrichment_raw_items(self, limit: int = 20) -> list[RawItem]:
+    def list_pending_enrichment_raw_items(self, limit: int = 20, since: datetime | None = None) -> list[RawItem]:
         statement = """
             SELECT
                 r.id,
@@ -1436,6 +1436,12 @@ class NewsRepository:
                 OR BTRIM(r.lead) = ''
                 OR COALESCE(array_length(r.tags, 1), 0) = 0
               )
+        """
+        params: list[object] = []
+        if since is not None:
+            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            params.append(since)
+        statement += """
             ORDER BY
               CASE
                 WHEN r.full_text IS NULL OR BTRIM(r.full_text) = '' THEN 0
@@ -1466,10 +1472,11 @@ class NewsRepository:
               r.published_at DESC
             LIMIT %s
         """
+        params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
+                cursor.execute(statement, tuple(params))
                 rows = cursor.fetchall()
 
         return [self._map_raw_row(row) for row in rows]

@@ -1661,7 +1661,11 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
         try:
             repository.set_enrichment_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
-            raw_items = repository.list_pending_enrichment_raw_items(limit=batch_size)
+            ingest_settings = repository.get_scheduler_settings()
+            raw_items = repository.list_pending_enrichment_raw_items(
+                limit=batch_size,
+                since=ingest_settings.last_run_at,
+            )
             _log_pipeline_event(
                 "scheduler_run_started",
                 phase="enrichment",
