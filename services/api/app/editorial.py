@@ -467,6 +467,21 @@ def evaluate_quality_gate(
             ),
         )
 
+    source_access_marker = detect_source_access_problem_marker(
+        title=title,
+        dek=dek,
+        body=body,
+        raw_item=raw_item,
+    )
+    if source_access_marker is not None:
+        return QualityGateResult(
+            "skip",
+            (
+                "Quality gate: материал раскрывает техническую неполноту источника вместо полноценной новости "
+                f"({source_access_marker})."
+            ),
+        )
+
     paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
 
     repeated_paragraphs = len(set(paragraphs)) != len(paragraphs)
@@ -562,6 +577,46 @@ def detect_verification_style_marker(*, title: str, dek: str, body: str) -> str 
         "для проверки",
         "не найдено на",
         "не найдено в архиве",
+    )
+    for marker in markers:
+        if marker in haystack:
+            return marker
+    return None
+
+
+def detect_source_access_problem_marker(*, title: str, dek: str, body: str, raw_item: RawItem) -> str | None:
+    haystack = "\n".join(
+        value
+        for value in (
+            title,
+            dek,
+            body,
+            raw_item.title,
+            raw_item.summary,
+            raw_item.lead or "",
+            raw_item.full_text or "",
+            raw_item.enrichment_error or "",
+        )
+        if value
+    ).lower()
+    markers = (
+        "полный список недоступ",
+        "полный текст недоступ",
+        "полный текст не доступ",
+        "не удалось извлечь",
+        "не удалось получить",
+        "не отображается",
+        "проблем с кеш",
+        "проблемы с кеш",
+        "из-за кеш",
+        "ограничений доступа",
+        "ограничения доступа",
+        "доступном фрагменте",
+        "открытом фрагменте",
+        "без полного текста",
+        "без полного доступа",
+        "называть других фамилий нельзя",
+        "технических огранич",
     )
     for marker in markers:
         if marker in haystack:

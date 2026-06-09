@@ -65,7 +65,11 @@ def build_editorial_shortlist(
         return []
 
     preferred_candidates = [
-        item for item in candidates if item.triage_label in {"high", "medium"} and not is_live_match_tracker_candidate(item)
+        item
+        for item in candidates
+        if item.triage_label in {"high", "medium"}
+        and not is_live_match_tracker_candidate(item)
+        and not is_incomplete_or_inaccessible_source_candidate(item)
     ]
     shortlisted: list[RawItem] = preferred_candidates[:shortlist_limit]
     if len(shortlisted) >= shortlist_limit:
@@ -76,6 +80,7 @@ def build_editorial_shortlist(
         for item in candidates
         if item.triage_label == "low"
         and not is_live_match_tracker_candidate(item)
+        and not is_incomplete_or_inaccessible_source_candidate(item)
         and is_viable_low_priority_candidate(item)
     ]
     remaining_slots = shortlist_limit - len(shortlisted)
@@ -129,6 +134,34 @@ def is_live_match_tracker_candidate(raw_item: RawItem) -> bool:
     if re.search(r"^\s*.+\s+[–-]\s+\d+\s*:\s*\d+\s+.+\s*$", raw_item.title.strip().lower()):
         return True
     return False
+
+
+def is_incomplete_or_inaccessible_source_candidate(raw_item: RawItem) -> bool:
+    haystack = " ".join(
+        part.strip().lower()
+        for part in (raw_item.title, raw_item.summary or "", raw_item.lead or "", raw_item.full_text or "")
+        if part
+    )
+    markers = (
+        "полный список недоступ",
+        "полный текст недоступ",
+        "полный текст не доступ",
+        "полный текст доступен",
+        "не удалось извлечь",
+        "не удалось получить",
+        "не отображается",
+        "проблем с кеш",
+        "проблемы с кеш",
+        "из-за кеш",
+        "ограничений доступа",
+        "ограничения доступа",
+        "доступном фрагменте",
+        "открытом фрагменте",
+        "без полного текста",
+        "называть других",
+        "технических огранич",
+    )
+    return any(marker in haystack for marker in markers)
 
 
 def select_reranked_candidates(
@@ -201,6 +234,12 @@ def build_non_selected_plan_item(raw_item: RawItem, shortlisted_candidates: list
         reason = (
             "Planner не отправил материал в writer/editor: новость похожа на live/match tracker, "
             "трансляцию, коэффициенты или служебный матч-центр."
+        )
+    elif is_incomplete_or_inaccessible_source_candidate(raw_item):
+        status = "skip_incomplete_source"
+        reason = (
+            "Planner не отправил материал в writer/editor: исходник или enrichment содержит признаки "
+            "неполного доступа к статье, кеш-проблем или отсутствия полного текста."
         )
     elif raw_item.triage_label == "low" and not is_viable_low_priority_candidate(raw_item):
         status = "skip_low_quality"

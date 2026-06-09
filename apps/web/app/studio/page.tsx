@@ -87,6 +87,8 @@ function formatContentPlanStatus(status?: string) {
       return "не выбрано: низкая фактическая плотность";
     case "skip_live_tracker":
       return "не выбрано: live/match tracker";
+    case "skip_incomplete_source":
+      return "не выбрано: неполный источник";
     case "skip_shortlist_rules":
       return "не выбрано shortlist-правилами";
     default:
@@ -386,6 +388,7 @@ function describeEditorialBlock(
   if (
     rawItem.contentPlanStatus === "skip_low_quality" ||
     rawItem.contentPlanStatus === "skip_live_tracker" ||
+    rawItem.contentPlanStatus === "skip_incomplete_source" ||
     rawItem.contentPlanStatus === "skip_shortlist_rules"
   ) {
     return `Editorial не стартовал: ${rawItem.contentPlanReason ?? "planner не выбрал материал для writer/editor."}`;
