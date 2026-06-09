@@ -2664,7 +2664,7 @@ class NewsRepository:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT id
+                    SELECT id, name, notes
                     FROM prompt_configs
                     WHERE agent_key = %s AND status = 'active'
                     ORDER BY version DESC
@@ -2682,11 +2682,38 @@ class NewsRepository:
                     return
 
                 active_id = str(row[0])
+                active_name = str(row[1] or "")
+                active_notes = str(row[2] or "")
                 legacy_system_prompt_ids = {
-                    "writer": {"prompt:writer:v1", "prompt:writer:v2", "prompt:writer:v3"},
-                    "editor": {"prompt:editor:v1", "prompt:editor:v2", "prompt:editor:v3"},
+                    "writer": {
+                        "prompt:writer:v1",
+                        "prompt:writer:v2",
+                        "prompt:writer:v3",
+                        "prompt:writer:v4",
+                        "prompt:writer:v5",
+                        "prompt:writer:v6",
+                    },
+                    "editor": {
+                        "prompt:editor:v1",
+                        "prompt:editor:v2",
+                        "prompt:editor:v3",
+                        "prompt:editor:v4",
+                        "prompt:editor:v5",
+                        "prompt:editor:v6",
+                        "prompt:editor:v7",
+                    },
                 }
-                if active_id not in legacy_system_prompt_ids.get(agent_key, set()):
+                legacy_default_names = {
+                    "writer": {"Writer Editorial v1", "Writer Editorial v2", "Writer Editorial v3"},
+                    "editor": {"Editor Editorial v1", "Editor Editorial v2", "Editor Editorial v3"},
+                }
+                is_legacy_system_prompt = (
+                    active_id in legacy_system_prompt_ids.get(agent_key, set())
+                    or active_name in legacy_default_names.get(agent_key, set())
+                    or active_notes.startswith("Recommended default writer prompt")
+                    or active_notes.startswith("Recommended default editor prompt")
+                )
+                if not is_legacy_system_prompt:
                     return
 
                 cursor.execute(

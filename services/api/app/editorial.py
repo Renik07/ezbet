@@ -13,10 +13,10 @@ from .repository import NewsRepository
 def default_prompt_configs() -> list[PromptConfig]:
     return [
         PromptConfig(
-            id="prompt:writer:v4",
+            id="prompt:writer:v7",
             agent_key="writer",
-            name="Writer Author v4",
-            version=4,
+            name="Writer Author v7",
+            version=7,
             status="draft",
             system_prompt=(
                 "Ты — спортивный журналист редакции ezbet.ru. Пиши оригинальный, живой материал "
@@ -55,10 +55,10 @@ def default_prompt_configs() -> list[PromptConfig]:
             notes="Author-style writer prompt adapted from ezbet_writer_prompt.txt to the internal title/dek/body schema.",
         ),
         PromptConfig(
-            id="prompt:editor:v4",
+            id="prompt:editor:v8",
             agent_key="editor",
-            name="Editor Chief v4",
-            version=4,
+            name="Editor Chief v8",
+            version=8,
             status="draft",
             system_prompt=(
                 "Ты — главный редактор ezbet.ru. Сравни материал Writer Agent с оригинальной новостью "
