@@ -2683,8 +2683,8 @@ class NewsRepository:
 
                 active_id = str(row[0])
                 legacy_system_prompt_ids = {
-                    "writer": {"prompt:writer:v1", "prompt:writer:v2"},
-                    "editor": {"prompt:editor:v1", "prompt:editor:v2"},
+                    "writer": {"prompt:writer:v1", "prompt:writer:v2", "prompt:writer:v3"},
+                    "editor": {"prompt:editor:v1", "prompt:editor:v2", "prompt:editor:v3"},
                 }
                 if active_id not in legacy_system_prompt_ids.get(agent_key, set()):
                     return
