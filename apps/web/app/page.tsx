@@ -61,6 +61,51 @@ function newsHref(articleSlug?: string) {
   return articleSlug ? (`/news/${articleSlug}` as Route) : ("/news" as Route);
 }
 
+const guideItems: Array<{
+  label: string;
+  tone: "football" | "hockey" | "tennis" | "cyber";
+  title: string;
+  description: string;
+  readTime: string;
+  href: Route;
+  featured?: boolean;
+}> = [
+  {
+    label: "Аналитика",
+    tone: "football",
+    title: "Ценность ставок в российских лигах: где искать нестандартные рынки",
+    description:
+      "Разбираем, почему букмекеры иногда недооценивают хозяев на кубковых матчах и какие данные полезно держать под рукой перед линией.",
+    readTime: "8 мин чтения",
+    href: "/news?query=Аналитика",
+    featured: true
+  },
+  {
+    label: "Гайд",
+    tone: "cyber",
+    title: "Ставки на CS2: как читать карту и состав команды",
+    description: "Базовые метрики для анализа матчей: карты, форма игроков, роли и стабильность состава.",
+    readTime: "5 мин чтения",
+    href: "/news?query=Киберспорт"
+  },
+  {
+    label: "Гайд",
+    tone: "hockey",
+    title: "Ставки на тоталы в хоккее: методология и статистика КХЛ",
+    description: "На что смотреть в темпе команд, большинстве, вратарской форме и календарной нагрузке.",
+    readTime: "6 мин чтения",
+    href: "/news?query=Хоккей"
+  },
+  {
+    label: "Гайд",
+    tone: "tennis",
+    title: "Теннис на грунте: ключевые показатели для прогнозов",
+    description: "Подача, прием, длина розыгрышей и профиль покрытия как быстрый фильтр перед матчем.",
+    readTime: "4 мин чтения",
+    href: "/news?query=Теннис"
+  }
+];
+
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true, fallbackToAll: true });
   const heroItem = news[0];
@@ -227,6 +272,33 @@ export default async function HomePage() {
           </div>
         </aside>
       </div>
+
+      <section className="guides-section container-wide" aria-labelledby="guides-heading">
+        <div className="section-header">
+          <h2 className="section-title" id="guides-heading">
+            Аналитика и гайды
+          </h2>
+          <Link href="/news?query=Аналитика" className="section-link">
+            Все материалы
+          </Link>
+        </div>
+
+        <div className="guides-grid">
+          {guideItems.map((item) => (
+            <article key={item.title} className={`guide-card${item.featured ? " guide-card--featured" : ""}`}>
+              <div className={`guide-cat cat-pill cat-pill--${item.tone}`}>{item.label}</div>
+              <h3 className="guide-title">{item.title}</h3>
+              <p className="guide-desc">{item.description}</p>
+              <div className="guide-meta">
+                <span className="guide-read-time">{item.readTime}</span>
+                <Link href={item.href} className="guide-read">
+                  Читать
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </main>
   );
 }

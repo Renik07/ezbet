@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Script from "next/script";
 import { Suspense } from "react";
+import { SiteFooter } from "@/components/site-footer";
 import { YandexMetrikaPageViews } from "@/components/yandex-metrika";
 import { METRIKA_ID } from "@/lib/metrika";
 import { getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
@@ -101,6 +102,7 @@ export default function RootLayout({
           </div>
         </header>
         {children}
+        <SiteFooter />
       </body>
     </html>
   );
