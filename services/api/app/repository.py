@@ -1077,7 +1077,8 @@ class NewsRepository:
             clauses.append("n.ai_reviewed = TRUE")
 
         if guide_only:
-            clauses.append("a.raw_item_id LIKE 'guide-topic:%'")
+            clauses.append("a.raw_item_id LIKE %s")
+            params.append("guide-topic:%")
 
         if query:
             clauses.append(

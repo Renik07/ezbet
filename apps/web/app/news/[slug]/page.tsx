@@ -4,12 +4,16 @@ import { notFound } from "next/navigation";
 
 import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
-import { formatMoscowDate } from "@/lib/dates";
+import { formatMoscowDate, formatMoscowDateTime } from "@/lib/dates";
 import { getArticle, getNews } from "@/lib/news";
 import { absoluteUrl, SITE_NAME, truncateMeta } from "@/lib/site";
 
-function formatArticleDate(date: string) {
-  return formatMoscowDate(date, "long");
+function isGuideArticle(newsItemId: string) {
+  return newsItemId.startsWith("guide:");
+}
+
+function formatArticleDate(date: string, guideArticle: boolean) {
+  return guideArticle ? formatMoscowDate(date, "long") : formatMoscowDateTime(date);
 }
 
 export async function generateMetadata({
@@ -32,7 +36,8 @@ export async function generateMetadata({
 
   const description = truncateMeta(item.dek || item.lead || item.body);
   const canonical = `/news/${item.slug}`;
-  const articleAuthor = getArticleAuthor(item.category);
+  const guideArticle = isGuideArticle(item.newsItemId);
+  const articleAuthor = guideArticle ? getArticleAuthor(item.category) : undefined;
 
   return {
     title: item.title,
@@ -52,7 +57,7 @@ export async function generateMetadata({
       url: canonical,
       siteName: SITE_NAME,
       publishedTime: item.publishedAt,
-      authors: [articleAuthor],
+      ...(articleAuthor ? { authors: [articleAuthor] } : {}),
       tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai"))
     },
     twitter: {
@@ -81,7 +86,9 @@ export default async function ArticlePage({
   const paragraphs = item.body.split("\n\n").filter(Boolean);
   const publicTags = item.tags.filter((tag) => !tag.toLowerCase().includes("ai"));
   const articleUrl = absoluteUrl(`/news/${item.slug}`);
-  const articleAuthor = getArticleAuthor(item.category);
+  const guideArticle = isGuideArticle(item.newsItemId);
+  const articleAuthor = guideArticle ? getArticleAuthor(item.category) : undefined;
+  const displayDate = formatArticleDate(item.publishedAt, guideArticle);
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -97,11 +104,15 @@ export default async function ArticlePage({
         inLanguage: "ru-RU",
         articleSection: formatCategoryLabel(item.category),
         keywords: publicTags.join(", "),
-        author: {
-          "@type": "Person",
-          name: articleAuthor,
-          url: absoluteUrl("/")
-        },
+        ...(articleAuthor
+          ? {
+              author: {
+                "@type": "Person",
+                name: articleAuthor,
+                url: absoluteUrl("/")
+              }
+            }
+          : {}),
         publisher: {
           "@type": "Organization",
           name: SITE_NAME,
@@ -149,8 +160,8 @@ export default async function ArticlePage({
         </Link>
         <div className="article-kicker-row">
           <span className="cat-pill cat-pill--football">{formatCategoryLabel(item.category)}</span>
-          <time dateTime={item.publishedAt}>{formatArticleDate(item.publishedAt)}</time>
-          <span>Автор: {articleAuthor}</span>
+          <time dateTime={item.publishedAt}>{displayDate}</time>
+          {articleAuthor ? <span>Автор: {articleAuthor}</span> : null}
         </div>
         <h1>{item.title}</h1>
         <p>{item.dek}</p>
@@ -180,12 +191,14 @@ export default async function ArticlePage({
               </div>
               <div>
                 <dt>Опубликовано</dt>
-                <dd>{formatArticleDate(item.publishedAt)}</dd>
+                <dd>{displayDate}</dd>
               </div>
-              <div>
-                <dt>Автор</dt>
-                <dd>{articleAuthor}</dd>
-              </div>
+              {articleAuthor ? (
+                <div>
+                  <dt>Автор</dt>
+                  <dd>{articleAuthor}</dd>
+                </div>
+              ) : null}
             </dl>
           </div>
 
