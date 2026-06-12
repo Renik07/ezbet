@@ -38,10 +38,7 @@ def load_guide_topic_seed() -> list[dict[str, object]]:
 
 def _find_topics_markdown() -> Path | None:
     current = Path(__file__).resolve()
-    candidates = [
-        current.parents[1] / "docs" / "guide-topics-365.md",
-        current.parents[3] / "docs" / "guide-topics-365.md",
-    ]
+    candidates = [parent / "docs" / "guide-topics-365.md" for parent in current.parents]
     for candidate in candidates:
         if candidate.exists():
             return candidate
