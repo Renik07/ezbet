@@ -507,6 +507,9 @@ class NewsRepository:
                     "ALTER TABLE news_items ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public'"
                 )
                 cursor.execute(
+                    "ALTER TABLE news_items ADD COLUMN IF NOT EXISTS ai_reviewed BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
                     "ALTER TABLE editor_reviews ADD COLUMN IF NOT EXISTS decision TEXT NOT NULL DEFAULT 'approve'"
                 )
                 cursor.execute(
@@ -667,10 +670,26 @@ class NewsRepository:
                     "ALTER TABLE articles ADD COLUMN IF NOT EXISTS lead TEXT"
                 )
                 cursor.execute(
+                    "ALTER TABLE articles ADD COLUMN IF NOT EXISTS news_item_id TEXT"
+                )
+                cursor.execute(
+                    "ALTER TABLE articles ADD COLUMN IF NOT EXISTS raw_item_id TEXT"
+                )
+                cursor.execute(
+                    """
+                    UPDATE articles
+                    SET raw_item_id = COALESCE(NULLIF(raw_item_id, ''), NULLIF(news_item_id, ''), id)
+                    WHERE raw_item_id IS NULL OR raw_item_id = ''
+                    """
+                )
+                cursor.execute(
                     "ALTER TABLE articles ADD COLUMN IF NOT EXISTS authors TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"
                 )
                 cursor.execute(
                     "ALTER TABLE articles ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"
+                )
+                cursor.execute(
+                    "ALTER TABLE articles ADD COLUMN IF NOT EXISTS ai_reviewed BOOLEAN NOT NULL DEFAULT TRUE"
                 )
                 cursor.execute(
                     """
@@ -4673,7 +4692,7 @@ class NewsRepository:
             id=str(row[0]),
             slug=str(row[1]),
             news_item_id=str(row[2]),
-            raw_item_id=str(row[3]),
+            raw_item_id=str(row[3] or row[2] or row[0]),
             title=str(row[4]),
             lead=row[5],
             dek=str(row[6]),
