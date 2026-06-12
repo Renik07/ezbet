@@ -7,10 +7,13 @@ import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, truncateMeta } from "@/lib/si
 
 const NEWS_PER_PAGE = 20;
 
-function buildNewsPageHref(page: number, query: string) {
+function buildNewsPageHref(page: number, query: string, type: string) {
   const params = new URLSearchParams();
   if (query) {
     params.set("query", query);
+  }
+  if (type) {
+    params.set("type", type);
   }
   if (page > 1) {
     params.set("page", String(page));
@@ -22,21 +25,24 @@ function buildNewsPageHref(page: number, query: string) {
 export async function generateMetadata({
   searchParams
 }: {
-  searchParams?: Promise<{ query?: string; page?: string }>;
+  searchParams?: Promise<{ query?: string; page?: string; type?: string }>;
 }): Promise<Metadata> {
   const params = (await searchParams) ?? {};
   const query = params.query?.trim() ?? "";
+  const isGuides = params.type === "guides";
   const page = params.page ? Number(params.page) : 1;
-  const title = query ? `Новости по запросу «${query}»` : "Лента спортивных новостей";
+  const title = isGuides ? "Полезные статьи" : query ? `Новости по запросу «${query}»` : "Лента спортивных новостей";
   const description = query
     ? truncateMeta(`Свежие спортивные новости ezbet.ru по запросу «${query}»: главные события, лента публикаций и материалы редакции.`)
-    : SITE_DESCRIPTION;
+    : isGuides
+      ? "Полезные статьи ezbet.ru о спорте, киберспорте, автоспорте, здоровье, технологиях и деньгах в индустрии."
+      : SITE_DESCRIPTION;
 
   return {
     title,
     description,
     alternates: {
-      canonical: page > 1 ? `/news?page=${page}` : "/news"
+      canonical: buildNewsPageHref(page, query, isGuides ? "guides" : "")
     },
     robots: query
       ? {
@@ -59,13 +65,15 @@ export async function generateMetadata({
 export default async function NewsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ query?: string; page?: string }>;
+  searchParams?: Promise<{ query?: string; page?: string; type?: string }>;
 }) {
   const params = (await searchParams) ?? {};
   const query = params.query ?? "";
+  const type = params.type === "guides" ? "guides" : "";
+  const isGuides = type === "guides";
   const requestedPage = Number(params.page ?? "1");
   const safeRequestedPage = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
-  const { items, isLive } = await getNews(query, { aiOnly: true });
+  const { items, isLive } = await getNews(query, { aiOnly: true, guideOnly: isGuides });
   const totalPages = Math.max(1, Math.ceil(items.length / NEWS_PER_PAGE));
   const currentPage = Math.min(safeRequestedPage, totalPages);
   const startIndex = (currentPage - 1) * NEWS_PER_PAGE;
@@ -76,11 +84,13 @@ export default async function NewsPage({
   const collectionJsonLd = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
-    name: query ? `Новости по запросу ${query}` : "Лента спортивных новостей",
-    url: absoluteUrl(buildNewsPageHref(currentPage, query)),
+    name: isGuides ? "Полезные статьи" : query ? `Новости по запросу ${query}` : "Лента спортивных новостей",
+    url: absoluteUrl(buildNewsPageHref(currentPage, query, type)),
     description: query
       ? `Свежие спортивные новости по запросу ${query}.`
-      : SITE_DESCRIPTION,
+      : isGuides
+        ? "Полезные статьи ezbet.ru о спорте, киберспорте, автоспорте, здоровье, деньгах и технологиях."
+        : SITE_DESCRIPTION,
     inLanguage: "ru-RU",
     isPartOf: {
       "@type": "WebSite",
@@ -108,9 +118,11 @@ export default async function NewsPage({
       />
       <section className="news-page-hero container-wide">
         <div className="news-kicker">{isLive ? "Живая лента" : "Резервная лента"}</div>
-        <h1>Лента новостей</h1>
+        <h1>{isGuides ? "Полезные статьи" : "Лента новостей"}</h1>
         <p>
-          {isLive
+          {isGuides
+            ? "Большие материалы о спорте, киберспорте, автоспорте, здоровье, деньгах и технологиях."
+            : isLive
             ? "Свежие публикации с поиском по темам, командам, турнирам и источникам."
             : "API временно недоступен, поэтому здесь показаны резервные публикации."}
         </p>
@@ -120,7 +132,9 @@ export default async function NewsPage({
       <div className="content-layout container-wide">
         <section className="news-feed" aria-label="Все новости">
           <div className="section-header">
-            <h2 className="section-title">{query ? `Результаты: ${query}` : "Все новости"}</h2>
+            <h2 className="section-title">
+              {isGuides ? "Все полезные статьи" : query ? `Результаты: ${query}` : "Все новости"}
+            </h2>
             <span className="section-count">
               {items.length ? `${fromItem}-${toItem} из ${items.length}` : "Ничего не найдено"}
             </span>
@@ -143,7 +157,7 @@ export default async function NewsPage({
           {totalPages > 1 ? (
             <nav className="pagination-row" aria-label="Навигация по страницам">
               {currentPage > 1 ? (
-                <a className="button-secondary" href={buildNewsPageHref(currentPage - 1, query)}>
+                <a className="button-secondary" href={buildNewsPageHref(currentPage - 1, query, type)}>
                   Назад
                 </a>
               ) : (
@@ -155,7 +169,7 @@ export default async function NewsPage({
                 Страница {currentPage} из {totalPages}
               </span>
               {currentPage < totalPages ? (
-                <a className="button-secondary" href={buildNewsPageHref(currentPage + 1, query)}>
+                <a className="button-secondary" href={buildNewsPageHref(currentPage + 1, query, type)}>
                   Вперед
                 </a>
               ) : (

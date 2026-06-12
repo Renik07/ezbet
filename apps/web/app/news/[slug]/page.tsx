@@ -2,13 +2,14 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
-import { formatMoscowDateTime } from "@/lib/dates";
+import { formatMoscowDate } from "@/lib/dates";
 import { getArticle, getNews } from "@/lib/news";
 import { absoluteUrl, SITE_NAME, truncateMeta } from "@/lib/site";
 
 function formatArticleDate(date: string) {
-  return formatMoscowDateTime(date, "long");
+  return formatMoscowDate(date, "long");
 }
 
 export async function generateMetadata({
@@ -31,6 +32,7 @@ export async function generateMetadata({
 
   const description = truncateMeta(item.dek || item.lead || item.body);
   const canonical = `/news/${item.slug}`;
+  const articleAuthor = getArticleAuthor(item.category);
 
   return {
     title: item.title,
@@ -50,7 +52,7 @@ export async function generateMetadata({
       url: canonical,
       siteName: SITE_NAME,
       publishedTime: item.publishedAt,
-      authors: [SITE_NAME],
+      authors: [articleAuthor],
       tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai"))
     },
     twitter: {
@@ -79,6 +81,7 @@ export default async function ArticlePage({
   const paragraphs = item.body.split("\n\n").filter(Boolean);
   const publicTags = item.tags.filter((tag) => !tag.toLowerCase().includes("ai"));
   const articleUrl = absoluteUrl(`/news/${item.slug}`);
+  const articleAuthor = getArticleAuthor(item.category);
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -95,8 +98,8 @@ export default async function ArticlePage({
         articleSection: formatCategoryLabel(item.category),
         keywords: publicTags.join(", "),
         author: {
-          "@type": "Organization",
-          name: SITE_NAME,
+          "@type": "Person",
+          name: articleAuthor,
           url: absoluteUrl("/")
         },
         publisher: {
@@ -147,6 +150,7 @@ export default async function ArticlePage({
         <div className="article-kicker-row">
           <span className="cat-pill cat-pill--football">{formatCategoryLabel(item.category)}</span>
           <time dateTime={item.publishedAt}>{formatArticleDate(item.publishedAt)}</time>
+          <span>Автор: {articleAuthor}</span>
         </div>
         <h1>{item.title}</h1>
         <p>{item.dek}</p>
@@ -177,6 +181,10 @@ export default async function ArticlePage({
               <div>
                 <dt>Опубликовано</dt>
                 <dd>{formatArticleDate(item.publishedAt)}</dd>
+              </div>
+              <div>
+                <dt>Автор</dt>
+                <dd>{articleAuthor}</dd>
               </div>
             </dl>
           </div>

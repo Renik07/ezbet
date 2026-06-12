@@ -20,6 +20,7 @@ from .models import (
     EnrichmentSchedulerSettings,
     EditorialSchedulerSettings,
     EditorReview,
+    GuideTopic,
     NewsItem,
     PipelineRun,
     PipelineSkippedItem,
@@ -247,6 +248,26 @@ class NewsRepository:
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS guide_topics (
+                        id SERIAL PRIMARY KEY,
+                        topic_number INTEGER NOT NULL UNIQUE,
+                        title TEXT NOT NULL,
+                        section TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'planned',
+                        article_id TEXT,
+                        article_slug TEXT,
+                        last_error TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_guide_topics_status_number ON guide_topics (status, topic_number)"
                 )
                 cursor.execute(
                     """
@@ -712,6 +733,40 @@ class NewsRepository:
                     )
             connection.commit()
 
+    def ensure_guide_topic_defaults(self, topics: list[dict[str, object]]) -> None:
+        if not topics:
+            return
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                for topic in topics:
+                    cursor.execute(
+                        """
+                        INSERT INTO guide_topics (
+                            topic_number,
+                            title,
+                            section,
+                            category
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (topic_number) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            section = EXCLUDED.section,
+                            category = EXCLUDED.category,
+                            updated_at = CASE
+                                WHEN guide_topics.status = 'planned' THEN NOW()
+                                ELSE guide_topics.updated_at
+                            END
+                        """,
+                        (
+                            topic["topic_number"],
+                            topic["title"],
+                            topic["section"],
+                            topic["category"],
+                        ),
+                    )
+            connection.commit()
+
     def ensure_source_defaults(self, sources: list[SourceItem]) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -968,6 +1023,15 @@ class NewsRepository:
                       AND d.status = 'published'
                     """
                 )
+                cursor.execute(
+                    """
+                    UPDATE news_items n
+                    SET ai_reviewed = TRUE
+                    FROM articles a
+                    WHERE a.news_item_id = n.id
+                      AND a.raw_item_id LIKE 'guide-topic:%'
+                    """
+                )
             connection.commit()
 
     def list(
@@ -975,6 +1039,7 @@ class NewsRepository:
         query: Optional[str] = None,
         ai_only: bool = False,
         *,
+        guide_only: bool = False,
         include_hidden: bool = False,
         limit: int | None = None,
     ) -> list[NewsItem]:
@@ -991,6 +1056,9 @@ class NewsRepository:
 
         if ai_only:
             clauses.append("n.ai_reviewed = TRUE")
+
+        if guide_only:
+            clauses.append("a.raw_item_id LIKE 'guide-topic:%'")
 
         if query:
             clauses.append(
@@ -1568,6 +1636,290 @@ class NewsRepository:
             return None
 
         return self._map_news_row(row)
+
+    def list_guide_topics(self, limit: int = 50, status: str | None = None) -> list[GuideTopic]:
+        statement = """
+            SELECT
+                id,
+                topic_number,
+                title,
+                section,
+                category,
+                status,
+                article_id,
+                article_slug,
+                last_error,
+                created_at,
+                updated_at
+            FROM guide_topics
+        """
+        params: list[object] = []
+        if status:
+            statement += " WHERE status = %s"
+            params.append(status)
+        statement += " ORDER BY topic_number ASC LIMIT %s"
+        params.append(limit)
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, tuple(params))
+                rows = cursor.fetchall()
+
+        return [self._map_guide_topic_row(row) for row in rows]
+
+    def claim_next_guide_topic(self) -> GuideTopic | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE guide_topics
+                    SET status = 'planned',
+                        last_error = COALESCE(last_error, 'Recovered stale in_progress topic.'),
+                        updated_at = NOW()
+                    WHERE status = 'in_progress'
+                      AND updated_at < NOW() - INTERVAL '12 hours'
+                    """
+                )
+                cursor.execute(
+                    """
+                    SELECT section
+                    FROM guide_topics
+                    WHERE status = 'published'
+                    ORDER BY updated_at DESC
+                    LIMIT 3
+                    """
+                )
+                recent_sections = [str(row[0]) for row in cursor.fetchall()]
+
+                if recent_sections:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM guide_topics
+                        WHERE status = 'planned'
+                          AND section <> ALL(%s)
+                        ORDER BY MD5(topic_number::TEXT || ':ezbet-guide-shuffle-v1') ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                        """,
+                        (recent_sections,),
+                    )
+                    row = cursor.fetchone()
+                else:
+                    row = None
+
+                if row is None:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM guide_topics
+                        WHERE status = 'planned'
+                        ORDER BY MD5(topic_number::TEXT || ':ezbet-guide-shuffle-v1') ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                        """
+                    )
+                    row = cursor.fetchone()
+
+                if row is None:
+                    connection.commit()
+                    return None
+
+                topic_id = int(row[0])
+                cursor.execute(
+                    """
+                    UPDATE guide_topics
+                    SET status = 'in_progress',
+                        last_error = NULL,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (topic_id,),
+                )
+            connection.commit()
+
+        return self.get_guide_topic(topic_id)
+
+    def get_guide_topic(self, topic_id: int) -> GuideTopic | None:
+        statement = """
+            SELECT
+                id,
+                topic_number,
+                title,
+                section,
+                category,
+                status,
+                article_id,
+                article_slug,
+                last_error,
+                created_at,
+                updated_at
+            FROM guide_topics
+            WHERE id = %s
+        """
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (topic_id,))
+                row = cursor.fetchone()
+
+        return self._map_guide_topic_row(row) if row else None
+
+    def mark_guide_topic_error(self, topic_id: int, error: str) -> GuideTopic | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE guide_topics
+                    SET status = 'planned',
+                        last_error = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (error[:1000], topic_id),
+                )
+            connection.commit()
+
+        return self.get_guide_topic(topic_id)
+
+    def publish_guide_article(
+        self,
+        *,
+        topic: GuideTopic,
+        title: str,
+        dek: str,
+        body: str,
+        model: str,
+        generation_mode: str,
+        prompt: PromptConfig,
+    ) -> Article:
+        published_at = datetime.now(timezone.utc)
+        news_item_id = f"guide:{topic.topic_number}"
+        raw_item_id = f"guide-topic:{topic.topic_number}"
+        article_id = f"article:{news_item_id}"
+        tags = [topic.category, topic.section, "Аналитика", "Гайд"]
+        article = Article(
+            id=article_id,
+            slug=_build_article_slug(title, news_item_id),
+            news_item_id=news_item_id,
+            raw_item_id=raw_item_id,
+            title=title,
+            lead=dek,
+            dek=dek,
+            body=body,
+            category=topic.category,
+            source_title="ezbet.ru",
+            source_url=None,
+            tags=tags,
+            published_at=published_at,
+            ai_reviewed=True,
+            created_at=published_at,
+            updated_at=published_at,
+        )
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO articles (
+                        id,
+                        slug,
+                        news_item_id,
+                        raw_item_id,
+                        title,
+                        lead,
+                        dek,
+                        body,
+                        category,
+                        source_title,
+                        source_url,
+                        tags,
+                        published_at,
+                        ai_reviewed
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                    ON CONFLICT (id) DO UPDATE SET
+                        slug = EXCLUDED.slug,
+                        title = EXCLUDED.title,
+                        lead = EXCLUDED.lead,
+                        dek = EXCLUDED.dek,
+                        body = EXCLUDED.body,
+                        category = EXCLUDED.category,
+                        source_title = EXCLUDED.source_title,
+                        source_url = EXCLUDED.source_url,
+                        tags = EXCLUDED.tags,
+                        published_at = EXCLUDED.published_at,
+                        ai_reviewed = TRUE,
+                        updated_at = NOW()
+                    """,
+                    (
+                        article.id,
+                        article.slug,
+                        article.news_item_id,
+                        article.raw_item_id,
+                        article.title,
+                        article.lead,
+                        article.dek,
+                        article.body,
+                        article.category,
+                        article.source_title,
+                        article.source_url,
+                        article.tags,
+                        article.published_at,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO news_items (
+                        id,
+                        title,
+                        description,
+                        category,
+                        published_at,
+                        source,
+                        link,
+                        status,
+                        visibility,
+                        ai_reviewed
+                    )
+                    VALUES (%s, %s, %s, %s, %s, 'ezbet.ru', NULL, 'published', 'public', TRUE)
+                    ON CONFLICT (id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        description = EXCLUDED.description,
+                        category = EXCLUDED.category,
+                        published_at = EXCLUDED.published_at,
+                        source = EXCLUDED.source,
+                        link = EXCLUDED.link,
+                        status = EXCLUDED.status,
+                        visibility = EXCLUDED.visibility,
+                        ai_reviewed = TRUE
+                    """,
+                    (
+                        news_item_id,
+                        title,
+                        dek,
+                        topic.category,
+                        published_at,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE guide_topics
+                    SET status = 'published',
+                        article_id = %s,
+                        article_slug = %s,
+                        last_error = NULL,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (article.id, article.slug, topic.id),
+                )
+            connection.commit()
+
+        stored = self.get_article_by_slug(article.slug)
+        if stored is None:
+            raise LookupError(f"Guide article {article.slug} was not stored.")
+        return stored
 
     def set_news_visibility(self, news_item_id: str, visibility: str) -> NewsItem | None:
         with self.connect() as connection:
@@ -4417,6 +4769,22 @@ class NewsRepository:
             provider=str(row[8]),
             notes=str(row[9]),
             created_at=row[10],
+        )
+
+    @staticmethod
+    def _map_guide_topic_row(row: tuple[object, ...]) -> GuideTopic:
+        return GuideTopic(
+            id=int(row[0]),
+            topic_number=int(row[1]),
+            title=str(row[2]),
+            section=str(row[3]),
+            category=str(row[4]),
+            status=str(row[5]),
+            article_id=row[6],
+            article_slug=row[7],
+            last_error=row[8],
+            created_at=row[9],
+            updated_at=row[10],
         )
 
     @staticmethod

@@ -108,10 +108,12 @@ const guideItems: Array<{
 
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true, fallbackToAll: true });
-  const heroItem = news[0];
-  const tickerNews = news.slice(1, 9);
-  const featuredNews = news.slice(1, 9);
-  const popularNews = news.slice(0, 5);
+  const guideNews = news.filter((item) => item.id.startsWith("guide:") && item.articleSlug).slice(0, 4);
+  const editorialNews = news.filter((item) => !item.id.startsWith("guide:"));
+  const heroItem = editorialNews[0];
+  const tickerNews = editorialNews.slice(1, 9);
+  const featuredNews = editorialNews.slice(1, 9);
+  const popularNews = editorialNews.slice(0, 5);
   const homeJsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -276,27 +278,43 @@ export default async function HomePage() {
       <section className="guides-section container-wide" aria-labelledby="guides-heading">
         <div className="section-header">
           <h2 className="section-title" id="guides-heading">
-            Аналитика и гайды
+            Полезные статьи
           </h2>
-          <Link href="/news?query=Аналитика" className="section-link">
+          <Link href="/news?type=guides" className="section-link">
             Все материалы
           </Link>
         </div>
 
         <div className="guides-grid">
-          {guideItems.map((item) => (
-            <article key={item.title} className={`guide-card${item.featured ? " guide-card--featured" : ""}`}>
-              <div className={`guide-cat cat-pill cat-pill--${item.tone}`}>{item.label}</div>
-              <h3 className="guide-title">{item.title}</h3>
-              <p className="guide-desc">{item.description}</p>
-              <div className="guide-meta">
-                <span className="guide-read-time">{item.readTime}</span>
-                <Link href={item.href} className="guide-read">
-                  Читать
-                </Link>
-              </div>
-            </article>
-          ))}
+          {guideNews.length
+            ? guideNews.map((item, index) => (
+                <article key={item.id} className={`guide-card${index === 0 ? " guide-card--featured" : ""}`}>
+                  <div className={`guide-cat cat-pill cat-pill--${categoryTone(item.category)}`}>
+                    {index === 0 ? "Аналитика" : "Гайд"}
+                  </div>
+                  <h3 className="guide-title">{item.title}</h3>
+                  <p className="guide-desc">{item.description}</p>
+                  <div className="guide-meta">
+                    <span className="guide-read-time">{formatRelativeTime(item.publishedAt)}</span>
+                    <Link href={newsHref(item.articleSlug)} className="guide-read">
+                      Читать
+                    </Link>
+                  </div>
+                </article>
+              ))
+            : guideItems.map((item) => (
+                <article key={item.title} className={`guide-card${item.featured ? " guide-card--featured" : ""}`}>
+                  <div className={`guide-cat cat-pill cat-pill--${item.tone}`}>{item.label}</div>
+                  <h3 className="guide-title">{item.title}</h3>
+                  <p className="guide-desc">{item.description}</p>
+                  <div className="guide-meta">
+                    <span className="guide-read-time">{item.readTime}</span>
+                    <Link href={item.href} className="guide-read">
+                      Читать
+                    </Link>
+                  </div>
+                </article>
+              ))}
         </div>
       </section>
     </main>

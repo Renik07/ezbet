@@ -18,6 +18,7 @@ from .editorial import (
     default_prompt_configs,
     run_editorial_cycle,
 )
+from .guide_topics import load_guide_topic_seed
 from .ingestion import (
     _capability_supports_adapter,
     build_importance_score_breakdown,
@@ -49,6 +50,8 @@ from .models import (
     EditorialStatusResponse,
     EditorialRunResponse,
     EditorReviewListResponse,
+    GuideSchedulerRunResponse,
+    GuideTopicListResponse,
     IngestResponse,
     NewsListResponse,
     NewsItemResponse,
@@ -90,6 +93,7 @@ async def lifespan(_: FastAPI):
     repository.ensure_schema()
     _recover_runtime_state(trigger="startup")
     repository.ensure_prompt_defaults(default_prompt_configs())
+    repository.ensure_guide_topic_defaults(load_guide_topic_seed())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v7")
     repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v8")
     repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
@@ -109,6 +113,7 @@ SCHEDULER_LOCK_KEY = 4815162342
 ENRICHMENT_SCHEDULER_LOCK_KEY = 4815162343
 EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
 PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
+GUIDE_SCHEDULER_LOCK_KEY = 4815162346
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
@@ -500,6 +505,7 @@ def list_news(
     request: Request,
     query: Optional[str] = Query(default=None),
     ai_only: bool = Query(default=False, alias="aiOnly"),
+    guide_only: bool = Query(default=False, alias="guideOnly"),
     include_hidden: bool = Query(default=False, alias="includeHidden"),
     limit: Optional[int] = Query(default=None, ge=1, le=100),
 ) -> NewsListResponse:
@@ -507,7 +513,13 @@ def list_news(
         _require_admin_api_token(request)
 
     return NewsListResponse(
-        items=repository.list(query, ai_only=ai_only, include_hidden=include_hidden, limit=limit)
+        items=repository.list(
+            query,
+            ai_only=ai_only,
+            guide_only=guide_only,
+            include_hidden=include_hidden,
+            limit=limit,
+        )
     )
 
 
@@ -931,6 +943,19 @@ def run_pipeline_tick() -> PipelineSchedulerRunResponse:
 @app.post("/api/v1/pipeline/run", response_model=PipelineSchedulerRunResponse)
 def run_pipeline_now() -> PipelineSchedulerRunResponse:
     return _run_pipeline_scheduler(force=True)
+
+
+@app.get("/api/v1/guides/topics", response_model=GuideTopicListResponse)
+def list_guide_topics(
+    limit: int = Query(default=50, ge=1, le=365),
+    status: Optional[str] = Query(default=None),
+) -> GuideTopicListResponse:
+    return GuideTopicListResponse(items=repository.list_guide_topics(limit=limit, status=status))
+
+
+@app.post("/api/v1/guides/scheduler/run", response_model=GuideSchedulerRunResponse)
+def run_guide_scheduler_now() -> GuideSchedulerRunResponse:
+    return _run_guide_scheduler()
 
 
 @app.post("/api/v1/pipeline/start")
@@ -2206,6 +2231,126 @@ def _run_pipeline_stage(
 
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
     _run_enrichment_for_raw_items(raw_items)
+
+
+def _run_guide_scheduler() -> GuideSchedulerRunResponse:
+    started_at = datetime.now(timezone.utc)
+    run_id = _run_id("guide")
+    _log_pipeline_event(
+        "scheduler_tick",
+        phase="guide",
+        run_id=run_id,
+        trigger="run",
+        status="starting",
+    )
+
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (GUIDE_SCHEDULER_LOCK_KEY,))
+            row = cursor.fetchone()
+            locked = bool(row and row[0])
+
+        if not locked:
+            _log_pipeline_event(
+                "scheduler_skipped",
+                phase="guide",
+                run_id=run_id,
+                trigger="run",
+                status="skipped",
+                error_reason="locked",
+            )
+            return GuideSchedulerRunResponse(ran=False, reason="locked")
+
+        topic = None
+        try:
+            topic = repository.claim_next_guide_topic()
+            if topic is None:
+                finished_at = datetime.now(timezone.utc)
+                repository.record_pipeline_run(
+                    run_id=run_id,
+                    phase="guide",
+                    trigger="scheduler",
+                    status="ok",
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    duration_ms=_duration_ms(started_at, finished_at),
+                )
+                return GuideSchedulerRunResponse(ran=False, reason="no_planned_topics")
+
+            prompt = repository.get_active_prompt("guide_writer")
+            generated = OpenAIEditorialClient().generate_guide_article(topic, prompt)
+            if generated is None:
+                raise RuntimeError("Guide writer did not return a valid article.")
+
+            article = repository.publish_guide_article(
+                topic=topic,
+                title=generated.title,
+                dek=generated.dek,
+                body=generated.body,
+                model=generated.model,
+                generation_mode=generated.generation_mode,
+                prompt=prompt,
+            )
+            stored_topic = repository.get_guide_topic(topic.id) or topic
+            finished_at = datetime.now(timezone.utc)
+            repository.record_pipeline_run(
+                run_id=run_id,
+                phase="guide",
+                trigger="scheduler",
+                status="ok",
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=_duration_ms(started_at, finished_at),
+                generated_count=1,
+                published_count=1,
+            )
+            _log_pipeline_event(
+                "scheduler_run_finished",
+                phase="guide",
+                run_id=run_id,
+                trigger="run",
+                status="ok",
+                duration_ms=_duration_ms(started_at, finished_at),
+                counts={"generated": 1, "published": 1},
+                topic_number=topic.topic_number,
+                article_slug=article.slug,
+            )
+            return GuideSchedulerRunResponse(
+                ran=True,
+                reason="ok",
+                generated=1,
+                published=1,
+                topic=stored_topic,
+                article=article,
+            )
+        except Exception as exc:
+            if topic is not None:
+                repository.mark_guide_topic_error(topic.id, str(exc))
+            finished_at = datetime.now(timezone.utc)
+            repository.record_pipeline_run(
+                run_id=run_id,
+                phase="guide",
+                trigger="scheduler",
+                status="error",
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=_duration_ms(started_at, finished_at),
+                error=str(exc),
+            )
+            _log_pipeline_event(
+                "scheduler_run_failed",
+                phase="guide",
+                run_id=run_id,
+                trigger="run",
+                status="error",
+                error_reason=str(exc),
+                duration_ms=_duration_ms(started_at, finished_at),
+            )
+            logger.exception("Guide scheduler failed: %s", exc)
+            raise
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (GUIDE_SCHEDULER_LOCK_KEY,))
 
 
 def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int:

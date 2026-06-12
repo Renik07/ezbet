@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .config import OpenAISettings, get_openai_settings
-from .models import DraftArticle, PromptConfig, RawItem, SourceItem
+from .models import DraftArticle, GuideTopic, PromptConfig, RawItem, SourceItem
 
 
 @dataclass
@@ -126,6 +126,42 @@ class OpenAIEditorialClient:
             body=body,
             model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}",
+        )
+
+    def generate_guide_article(self, topic: GuideTopic, prompt: PromptConfig) -> DraftGenerationResult | None:
+        if not self.enabled:
+            return None
+
+        input_text = (
+            "Return only valid JSON with keys title, dek, body.\n"
+            f"topic: {topic.title}\n"
+            f"section: {topic.section}\n"
+            f"category: {topic.category}\n"
+            "Audience: Russian sports media readers. The article should be evergreen, useful for search traffic, "
+            "and readable as a standalone longform piece on ezbet.ru.\n"
+            "Constraints: write in Russian, do not invent precise current facts, avoid betting calls to action, "
+            "and separate body paragraphs with two newline characters."
+        )
+        instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
+
+        try:
+            payload = self._create_response(instructions=instructions, input_text=input_text)
+            data = json.loads(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        title = _clean_text(data.get("title")) or topic.title
+        dek = _clean_text(data.get("dek"))
+        body = _clean_text(data.get("body"))
+        if not dek or not body:
+            return None
+
+        return DraftGenerationResult(
+            title=title,
+            dek=dek,
+            body=body,
+            model=self.settings.editorial_model,
+            generation_mode=f"llm_{self.settings.api_style}_guide",
         )
 
     def review_draft(

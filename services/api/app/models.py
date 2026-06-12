@@ -238,6 +238,24 @@ class PipelineSourceBreakdownItem(BaseModel):
     filter_reasons: dict[str, int] = Field(default_factory=dict, serialization_alias="filterReasons")
 
 
+class GuideTopic(BaseModel):
+    id: int
+    topic_number: int = Field(serialization_alias="topicNumber")
+    title: str
+    section: str
+    category: str
+    status: str = "planned"
+    article_id: Optional[str] = Field(default=None, serialization_alias="articleId")
+    article_slug: Optional[str] = Field(default=None, serialization_alias="articleSlug")
+    last_error: Optional[str] = Field(default=None, serialization_alias="lastError")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+
+
+class GuideTopicListResponse(BaseModel):
+    items: list[GuideTopic]
+
+
 class NewsListResponse(BaseModel):
     items: list[NewsItem]
 
@@ -539,6 +557,15 @@ class EnrichmentRunResponse(BaseModel):
 
 class PublishRunResponse(BaseModel):
     published: int
+
+
+class GuideSchedulerRunResponse(BaseModel):
+    ran: bool
+    reason: str
+    generated: int = 0
+    published: int = 0
+    topic: Optional[GuideTopic] = None
+    article: Optional[Article] = None
 
 
 class PipelineSchedulerRunResponse(BaseModel):
