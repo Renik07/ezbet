@@ -1508,6 +1508,30 @@ a:hover .ni-title,
   line-height: 1.6;
 }
 
+.guides-empty {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 38%),
+    var(--color-surface);
+  padding: var(--space-6);
+}
+
+.guides-empty h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 900;
+}
+
+.guides-empty p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+
 .guide-meta {
   display: flex;
   align-items: center;

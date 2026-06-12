@@ -61,51 +61,6 @@ function newsHref(articleSlug?: string) {
   return articleSlug ? (`/news/${articleSlug}` as Route) : ("/news" as Route);
 }
 
-const guideItems: Array<{
-  label: string;
-  tone: "football" | "hockey" | "tennis" | "cyber";
-  title: string;
-  description: string;
-  readTime: string;
-  href: Route;
-  featured?: boolean;
-}> = [
-  {
-    label: "Аналитика",
-    tone: "football",
-    title: "Ценность ставок в российских лигах: где искать нестандартные рынки",
-    description:
-      "Разбираем, почему букмекеры иногда недооценивают хозяев на кубковых матчах и какие данные полезно держать под рукой перед линией.",
-    readTime: "8 мин чтения",
-    href: "/news?query=Аналитика",
-    featured: true
-  },
-  {
-    label: "Гайд",
-    tone: "cyber",
-    title: "Ставки на CS2: как читать карту и состав команды",
-    description: "Базовые метрики для анализа матчей: карты, форма игроков, роли и стабильность состава.",
-    readTime: "5 мин чтения",
-    href: "/news?query=Киберспорт"
-  },
-  {
-    label: "Гайд",
-    tone: "hockey",
-    title: "Ставки на тоталы в хоккее: методология и статистика КХЛ",
-    description: "На что смотреть в темпе команд, большинстве, вратарской форме и календарной нагрузке.",
-    readTime: "6 мин чтения",
-    href: "/news?query=Хоккей"
-  },
-  {
-    label: "Гайд",
-    tone: "tennis",
-    title: "Теннис на грунте: ключевые показатели для прогнозов",
-    description: "Подача, прием, длина розыгрышей и профиль покрытия как быстрый фильтр перед матчем.",
-    readTime: "4 мин чтения",
-    href: "/news?query=Теннис"
-  }
-];
-
 export default async function HomePage() {
   const { items: news, isLive } = await getNews(undefined, { aiOnly: true, fallbackToAll: true });
   const guideNews = news.filter((item) => item.id.startsWith("guide:") && item.articleSlug).slice(0, 4);
@@ -285,9 +240,9 @@ export default async function HomePage() {
           </Link>
         </div>
 
-        <div className="guides-grid">
-          {guideNews.length
-            ? guideNews.map((item, index) => (
+        {guideNews.length ? (
+          <div className="guides-grid">
+            {guideNews.map((item, index) => (
                 <article key={item.id} className={`guide-card${index === 0 ? " guide-card--featured" : ""}`}>
                   <div className={`guide-cat cat-pill cat-pill--${categoryTone(item.category)}`}>
                     {index === 0 ? "Аналитика" : "Гайд"}
@@ -301,21 +256,14 @@ export default async function HomePage() {
                     </Link>
                   </div>
                 </article>
-              ))
-            : guideItems.map((item) => (
-                <article key={item.title} className={`guide-card${item.featured ? " guide-card--featured" : ""}`}>
-                  <div className={`guide-cat cat-pill cat-pill--${item.tone}`}>{item.label}</div>
-                  <h3 className="guide-title">{item.title}</h3>
-                  <p className="guide-desc">{item.description}</p>
-                  <div className="guide-meta">
-                    <span className="guide-read-time">{item.readTime}</span>
-                    <Link href={item.href} className="guide-read">
-                      Читать
-                    </Link>
-                  </div>
-                </article>
               ))}
-        </div>
+          </div>
+        ) : (
+          <div className="guides-empty">
+            <h3>Полезные статьи появятся после первого ежедневного запуска</h3>
+            <p>Раздел уже готов принимать материалы из расписания: тема выбирается из годового плана, статья пишется writer-агентом и публикуется на сайте.</p>
+          </div>
+        )}
       </section>
     </main>
   );

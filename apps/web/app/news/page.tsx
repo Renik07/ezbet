@@ -73,7 +73,11 @@ export default async function NewsPage({
   const isGuides = type === "guides";
   const requestedPage = Number(params.page ?? "1");
   const safeRequestedPage = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
-  const { items, isLive } = await getNews(query, { aiOnly: true, guideOnly: isGuides });
+  const { items, isLive } = await getNews(query, {
+    aiOnly: true,
+    fallbackToAll: !isGuides,
+    guideOnly: isGuides
+  });
   const totalPages = Math.max(1, Math.ceil(items.length / NEWS_PER_PAGE));
   const currentPage = Math.min(safeRequestedPage, totalPages);
   const startIndex = (currentPage - 1) * NEWS_PER_PAGE;
