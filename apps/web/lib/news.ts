@@ -205,8 +205,12 @@ export async function getArticle(slug: string): Promise<{ item?: Article; isLive
   }
 }
 
-function filterNews(items: NewsItem[], query?: string, options?: { aiOnly?: boolean }) {
+function filterNews(items: NewsItem[], query?: string, options?: { aiOnly?: boolean; guideOnly?: boolean }) {
   let filtered = items;
+
+  if (options?.guideOnly) {
+    filtered = filtered.filter((item) => item.id.startsWith("guide:") && item.articleSlug);
+  }
 
   if (options?.aiOnly) {
     filtered = filtered.filter((item) => item.aiReviewed && item.articleSlug);

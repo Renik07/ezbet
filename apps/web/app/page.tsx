@@ -62,8 +62,11 @@ function newsHref(articleSlug?: string) {
 }
 
 export default async function HomePage() {
-  const { items: news, isLive } = await getNews(undefined, { aiOnly: true, fallbackToAll: true });
-  const guideNews = news.filter((item) => item.id.startsWith("guide:") && item.articleSlug).slice(0, 4);
+  const [{ items: news, isLive }, { items: guideItems }] = await Promise.all([
+    getNews(),
+    getNews(undefined, { guideOnly: true })
+  ]);
+  const guideNews = guideItems.slice(0, 4);
   const editorialNews = news.filter((item) => !item.id.startsWith("guide:"));
   const heroItem = editorialNews[0];
   const tickerNews = editorialNews.slice(1, 9);
