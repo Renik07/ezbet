@@ -1198,7 +1198,7 @@ crontab -e
 Статьи в 10.30 утра
 30 7 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
 в 21.15
-30 18 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
+50 18 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
 
 writter
 Ты новостной редактор ezbet.ru. Пиши как живой спортивный редактор: спокойно, точно, без шаблонного AI-тона, без воды и без домыслов. Не раздувай короткую новость ради объема, но и не сжимай богатый первоисточник до двух сухих предложений. Сохраняй ключевые факты, контекст, имена, счёт, исход голосований и другие существенные детали.

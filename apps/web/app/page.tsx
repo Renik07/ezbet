@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import type { Metadata } from "next";
 import { NewsCard } from "@/components/news-card";
+import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDate } from "@/lib/dates";
 import { getNews } from "@/lib/news";
@@ -246,19 +247,25 @@ export default async function HomePage() {
         {guideNews.length ? (
           <div className="guides-grid">
             {guideNews.map((item, index) => (
-                <article key={item.id} className={`guide-card${index === 0 ? " guide-card--featured" : ""}`}>
+                <Link
+                  key={item.id}
+                  href={newsHref(item.articleSlug)}
+                  className={`guide-card${index === 0 ? " guide-card--featured" : ""}`}
+                >
                   <div className={`guide-cat cat-pill cat-pill--${categoryTone(item.category)}`}>
-                    {index === 0 ? "Аналитика" : "Гайд"}
+                    {formatCategoryLabel(item.category)}
                   </div>
                   <h3 className="guide-title">{item.title}</h3>
                   <p className="guide-desc">{item.description}</p>
                   <div className="guide-meta">
-                    <span className="guide-read-time">{formatRelativeTime(item.publishedAt)}</span>
-                    <Link href={newsHref(item.articleSlug)} className="guide-read">
+                    <span className="guide-byline">
+                      {formatMoscowDate(item.publishedAt, "long")} · {getArticleAuthor(item.category)}
+                    </span>
+                    <span className="guide-read" aria-hidden="true">
                       Читать
-                    </Link>
+                    </span>
                   </div>
-                </article>
+                </Link>
               ))}
           </div>
         ) : (

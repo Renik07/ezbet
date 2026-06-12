@@ -158,11 +158,6 @@ export default async function ArticlePage({
         <Link className="article-back-link" href="/news">
           Назад к ленте
         </Link>
-        <div className="article-kicker-row">
-          <span className="cat-pill cat-pill--football">{formatCategoryLabel(item.category)}</span>
-          <time dateTime={item.publishedAt}>{displayDate}</time>
-          {articleAuthor ? <span>Автор: {articleAuthor}</span> : null}
-        </div>
         <h1>{item.title}</h1>
         <p>{item.dek}</p>
       </section>
@@ -181,10 +176,6 @@ export default async function ArticlePage({
           <div className="sidebar-block article-info-card">
             <h3 className="sidebar-block-title">Коротко</h3>
             <dl className="article-facts">
-              <div>
-                <dt>Источник</dt>
-                <dd>{item.sourceTitle}</dd>
-              </div>
               <div>
                 <dt>Рубрика</dt>
                 <dd>{formatCategoryLabel(item.category)}</dd>

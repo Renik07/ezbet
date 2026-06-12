@@ -1467,14 +1467,22 @@ a:hover .ni-title,
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
+  color: inherit;
   padding: var(--space-5);
+  text-decoration: none;
   transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
-.guide-card:hover {
+.guide-card:hover,
+.guide-card:focus-visible {
   border-color: rgba(37, 99, 235, 0.24);
   box-shadow: 0 14px 32px rgba(15, 17, 23, 0.08);
   transform: translateY(-2px);
+}
+
+.guide-card:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 3px;
 }
 
 .guide-card--featured {
@@ -1542,19 +1550,21 @@ a:hover .ni-title,
   border-top: 1px solid var(--color-divider);
 }
 
-.guide-read-time {
+.guide-byline {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-weight: 700;
+  line-height: 1.45;
 }
 
 .guide-read {
+  flex: 0 0 auto;
   color: var(--color-primary);
   font-size: var(--text-sm);
   font-weight: 900;
 }
 
-.guide-read:hover {
+.guide-card:hover .guide-read {
   text-decoration: underline;
 }
 
