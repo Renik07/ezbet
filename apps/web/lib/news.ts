@@ -210,6 +210,8 @@ function filterNews(items: NewsItem[], query?: string, options?: { aiOnly?: bool
 
   if (options?.guideOnly) {
     filtered = filtered.filter((item) => item.id.startsWith("guide:") && item.articleSlug);
+  } else {
+    filtered = filtered.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
   }
 
   if (options?.aiOnly) {

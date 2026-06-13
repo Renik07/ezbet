@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import type { Route } from "next";
 import { NewsCard } from "@/components/news-card";
 import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
@@ -126,7 +127,7 @@ export default async function NewsPage({
             ? "Свежие публикации с поиском по темам, командам, турнирам и источникам."
             : "API временно недоступен, поэтому здесь показаны резервные публикации."}
         </p>
-        <SearchForm initialQuery={query} />
+        <SearchForm initialQuery={query} type={type} />
       </section>
 
       <div className="content-layout container-wide">
@@ -186,7 +187,7 @@ export default async function NewsPage({
             <h3 className="sidebar-block-title">Быстрый поиск</h3>
             <div className="topic-cloud">
               {["Футбол", "Хоккей", "Баскетбол", "Теннис", "Беттинг", "Киберспорт"].map((topic) => (
-                <Link key={topic} href={`/news?query=${encodeURIComponent(topic)}`} className="topic-chip">
+                <Link key={topic} href={buildNewsPageHref(1, topic, type) as Route} className="topic-chip">
                   {topic}
                 </Link>
               ))}

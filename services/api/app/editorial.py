@@ -13,10 +13,10 @@ from .repository import NewsRepository
 def default_prompt_configs() -> list[PromptConfig]:
     return [
         PromptConfig(
-            id="prompt:writer:v7",
+            id="prompt:writer:v8",
             agent_key="writer",
-            name="Writer Author v7",
-            version=7,
+            name="Writer Author v8",
+            version=8,
             status="draft",
             system_prompt=(
                 "Ты — спортивный журналист редакции ezbet.ru. Пиши оригинальный, живой материал "
@@ -47,18 +47,21 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "- беттинг-контекст допускается только как рыночный фон без советов ставить;\n"
                 "- запрещены канцеляризмы: 'следует отметить', 'стоит подчеркнуть', 'в данном контексте', "
                 "'на сегодняшний день', 'является', 'осуществляет', 'в целях';\n"
-                "- не пиши о технических проблемах извлечения, кеше, недоступном полном тексте или ограничениях доступа. "
-                "Если данных недостаточно для полноценной новости, верни короткий осторожный материал только по подтвержденным фактам."
+                "- категорически запрещены служебные концовки и объяснения редакционной кухни: не пиши, что 'информации немного', "
+                "'материал оставлен коротким', 'источник не приводит деталей', 'нет официального подтверждения', "
+                "'подробностей нет', 'текст основан на сообщении источника' или похожие самооправдания;\n"
+                "- не пиши о технических проблемах извлечения, кеше, недоступном полном тексте или ограничениях доступа;\n"
+                "- если фактов мало, просто дай короткую новость по подтвержденным фактам и закончи естественной фактической фразой."
             ),
             model="editorial-default-v2",
             provider="internal",
             notes="Author-style writer prompt adapted from ezbet_writer_prompt.txt to the internal title/dek/body schema.",
         ),
         PromptConfig(
-            id="prompt:editor:v8",
+            id="prompt:editor:v9",
             agent_key="editor",
-            name="Editor Chief v8",
-            version=8,
+            name="Editor Chief v9",
+            version=9,
             status="draft",
             system_prompt=(
                 "Ты — главный редактор ezbet.ru. Сравни материал Writer Agent с оригинальной новостью "
@@ -80,7 +83,10 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "5. Беттинг: не допускай советов ставить или формулировок 'выгодная ставка'.\n"
                 "6. Стоп-фактор: если текст говорит о проблемах кеша, недоступном полном тексте, ограничениях доступа, "
                 "невозможности назвать факты или технической неполноте источника, выбирай rewrite или укажи в notes, "
-                "что материал нельзя выпускать без полного источника.\n\n"
+                "что материал нельзя выпускать без полного источника.\n"
+                "7. Удали любые служебные концовки: 'информации немного', 'материал оставлен коротким', "
+                "'источник не приводит деталей', 'подробностей нет', 'официальных подтверждений нет', "
+                "'текст основан на сообщении'. Читатель не должен видеть объяснения, почему материал короткий.\n\n"
                 "decision:\n"
                 "- approve: текст точен, оригинален, читаем; revised_* должны быть null;\n"
                 "- light_edit: нужны точечные правки; верни полный revised_title, revised_dek, revised_body;\n"
@@ -271,13 +277,13 @@ def generate_draft(
     if generated is None:
         title = raw_item.title
         dek = build_dek(raw_item)
-        body = build_body(raw_item)
+        body = sanitize_public_body(build_body(raw_item))
         model = prompt.model
         generation_mode = "template"
     else:
         title = generated.title
         dek = generated.dek
-        body = generated.body
+        body = sanitize_public_body(generated.body)
         model = generated.model
         generation_mode = generated.generation_mode
 
@@ -324,7 +330,7 @@ def rewrite_draft(
         raw_item_id=draft.raw_item_id,
         title=rewritten.title,
         dek=rewritten.dek,
-        body=rewritten.body,
+        body=sanitize_public_body(rewritten.body),
         writer_title=draft.writer_title,
         writer_dek=draft.writer_dek,
         writer_body=draft.writer_body,
@@ -418,6 +424,7 @@ def apply_editor_review(draft: DraftArticle, review: EditorReview) -> DraftArtic
     revised_title = (review.revised_title or "").strip()
     revised_dek = (review.revised_dek or "").strip()
     revised_body = (review.revised_body or "").strip()
+    revised_body = sanitize_public_body(revised_body)
     if not revised_title or not revised_dek or not revised_body:
         return draft
 
@@ -601,6 +608,50 @@ def evaluate_published_duplicate_guard(
     return None
 
 
+def sanitize_public_body(body: str) -> str:
+    paragraphs = [paragraph.strip() for paragraph in body.split("\n\n") if paragraph.strip()]
+    cleaned: list[str] = []
+    for paragraph in paragraphs:
+        cleaned_paragraph = strip_service_disclaimer_sentences(paragraph)
+        if cleaned_paragraph:
+            cleaned.append(cleaned_paragraph)
+    return "\n\n".join(cleaned).strip() or body.strip()
+
+
+def strip_service_disclaimer_sentences(paragraph: str) -> str:
+    sentence_pattern = re.compile(r"[^.!?。！？]+(?:[.!?。！？]+|$)", re.MULTILINE)
+    sentences = [match.group(0).strip() for match in sentence_pattern.finditer(paragraph)]
+    if not sentences:
+        return "" if contains_service_disclaimer(paragraph) else paragraph.strip()
+    kept = [sentence for sentence in sentences if not contains_service_disclaimer(sentence)]
+    return " ".join(kept).strip()
+
+
+def contains_service_disclaimer(value: str) -> bool:
+    haystack = value.lower()
+    markers = (
+        "информации немного",
+        "материал оставлен корот",
+        "источник не приводит",
+        "источник не сообщает",
+        "подробностей нет",
+        "подробности не приводятся",
+        "официальных подтверждений",
+        "официального подтверждения",
+        "текст основан на сообщении",
+        "материал основан на сообщении",
+        "поэтому текст оставлен",
+        "поэтому материал оставлен",
+        "до появления дополнительных деталей",
+        "до официального подтверждения",
+        "дополнительных деталей",
+        "дальнейших планах",
+        "в короткой фактической форме",
+        "коротким и исключительно фактологичным",
+    )
+    return any(marker in haystack for marker in markers)
+
+
 def normalize_gate_text(value: str) -> str:
     return " ".join(tokenize_text(value))
 
@@ -648,6 +699,15 @@ def detect_source_access_problem_marker(*, title: str, dek: str, body: str, raw_
         "полный текст не доступ",
         "не удалось извлечь",
         "не удалось получить",
+        "информации немного",
+        "материал оставлен корот",
+        "источник не приводит",
+        "подробностей нет",
+        "официальных подтверждений",
+        "официального подтверждения",
+        "текст основан на сообщении",
+        "материал основан на сообщении",
+        "в короткой фактической форме",
         "не отображается",
         "проблем с кеш",
         "проблемы с кеш",

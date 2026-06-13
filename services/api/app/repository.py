@@ -3064,6 +3064,7 @@ class NewsRepository:
                         "prompt:writer:v4",
                         "prompt:writer:v5",
                         "prompt:writer:v6",
+                        "prompt:writer:v7",
                     },
                     "editor": {
                         "prompt:editor:v1",
@@ -3073,6 +3074,7 @@ class NewsRepository:
                         "prompt:editor:v5",
                         "prompt:editor:v6",
                         "prompt:editor:v7",
+                        "prompt:editor:v8",
                     },
                 }
                 legacy_default_names = {
@@ -3084,6 +3086,8 @@ class NewsRepository:
                     or active_name in legacy_default_names.get(agent_key, set())
                     or active_notes.startswith("Recommended default writer prompt")
                     or active_notes.startswith("Recommended default editor prompt")
+                    or active_notes.startswith("Author-style writer prompt")
+                    or active_notes.startswith("Chief editor prompt")
                 )
                 if not is_legacy_system_prompt:
                     return

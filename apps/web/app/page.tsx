@@ -68,9 +68,9 @@ export default async function HomePage() {
     getNews(undefined, { guideOnly: true })
   ]);
   const guideNews = guideItems.slice(0, 4);
-  const editorialNews = news.filter((item) => !item.id.startsWith("guide:"));
+  const editorialNews = news.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
   const heroItem = editorialNews[0];
-  const tickerNews = editorialNews.slice(1, 9);
+  const tickerNews = editorialNews.slice(1, 7);
   const featuredNews = editorialNews.slice(1, 9);
   const popularNews = editorialNews.slice(0, 5);
   const homeJsonLd = {
