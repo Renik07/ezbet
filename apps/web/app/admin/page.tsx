@@ -63,7 +63,7 @@ type AdminSearchParams = {
   probeSampleUrl?: string;
 };
 
-type AdminTab = "pipeline" | "sources" | "prompts" | "diagnostics";
+type AdminTab = "pipeline" | "sources" | "prompts" | "diagnostics" | "costs";
 
 export default async function AdminPage({
   searchParams
@@ -112,6 +112,7 @@ export default async function AdminPage({
     editorialScheduler,
     publishScheduler,
     pipelineRuns,
+    aiUsageSummary,
     isLive,
     liveError
   } = await getEditorialStudioData();
@@ -123,6 +124,15 @@ export default async function AdminPage({
   const activeTab = getAdminTab(params.tab);
   const currentRawItemIds = new Set(rawItems.map((item) => item.id));
   const currentPipelineContentPlan = contentPlan.filter((item) => currentRawItemIds.has(item.rawItemId));
+  const aiUsageGroupTotals = buildAiUsageGroupTotals(aiUsageSummary.items);
+  const aiUsageDailyTotals = buildAiUsageDailyTotals(aiUsageSummary.items);
+  const latestPipelineFunnel = buildLatestPipelineFunnel({
+    pipelineRuns,
+    activeSourceCount: activeSources.length,
+    ingestBatchSize: scheduler.batchSize,
+    currentRawItems: rawItems,
+    currentContentPlan: currentPipelineContentPlan
+  });
 
   return (
     <main className="page-shell">
@@ -183,6 +193,12 @@ export default async function AdminPage({
           >
             Диагностика
           </Link>
+          <Link
+            className={`tab-link${activeTab === "costs" ? " is-active" : ""}`}
+            href="/admin?tab=costs"
+          >
+            Стоимость
+          </Link>
         </div>
         {notice ? (
           <div className="section-card" style={{ marginTop: 18 }}>
@@ -193,6 +209,92 @@ export default async function AdminPage({
 
       {activeTab === "pipeline" ? (
       <section>
+        <div className="section-head">
+          <div>
+            <h2>Воронка последнего pipeline</h2>
+            <p>
+              Быстрый ответ на главный вопрос: сколько новостей могли взять, сколько реально нашли и где они отсеклись.
+            </p>
+          </div>
+        </div>
+        {latestPipelineFunnel ? (
+          <>
+            <div className="stats-grid" style={{ marginBottom: 18 }}>
+              {latestPipelineFunnel.steps.map((step) => (
+                <div key={step.label} className="stat">
+                  <strong>{formatNumber(step.value)}</strong>
+                  <span>{step.label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="admin-table-wrap" style={{ marginBottom: 24 }}>
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Источник</th>
+                    <th>Лимит</th>
+                    <th>Прочитано</th>
+                    <th>Свежие</th>
+                    <th>Отсечено</th>
+                    <th>Причины</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {latestPipelineFunnel.sources.map((source) => (
+                    <tr key={source.key}>
+                      <td>{source.title}</td>
+                      <td>{formatNumber(source.limit)}</td>
+                      <td>{formatNumber(source.parsed)}</td>
+                      <td>{formatNumber(source.fresh)}</td>
+                      <td>{formatNumber(source.filtered)}</td>
+                      <td>{source.reasons || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {latestPipelineFunnel.notes.length ? (
+              <div className="news-grid" style={{ gridTemplateColumns: "1fr", marginBottom: 28 }}>
+                <article className="news-card">
+                  <span>вывод</span>
+                  <h3>Где сузилась воронка</h3>
+                  <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 8 }}>
+                    {latestPipelineFunnel.notes.map((note) => (
+                      <li key={note} className="footer-note">{note}</li>
+                    ))}
+                  </ul>
+                </article>
+              </div>
+            ) : null}
+            {latestPipelineFunnel.skippedItems.length ? (
+              <div className="news-grid" style={{ gridTemplateColumns: "1fr", marginBottom: 28 }}>
+                <article className="news-card">
+                  <span>отсеченные новости</span>
+                  <h3>Конкретные причины по материалам</h3>
+                  <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 8 }}>
+                    {latestPipelineFunnel.skippedItems.slice(0, 10).map((item, index) => (
+                      <li key={`${item.title}-${index}`} className="footer-note">
+                        <strong>{item.title}</strong>
+                        {item.reason ? ` — ${item.reason}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                  {latestPipelineFunnel.skippedItems.length > 10 ? (
+                    <p className="footer-note" style={{ marginTop: 10 }}>
+                      И ещё {latestPipelineFunnel.skippedItems.length - 10}.
+                    </p>
+                  ) : null}
+                </article>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <article className="news-card" style={{ marginBottom: 24 }}>
+            <h3>Последний ingest еще не найден</h3>
+            <p>После следующего запуска pipeline здесь появится воронка по источникам и этапам.</p>
+          </article>
+        )}
+
         <div className="section-head">
           <div>
             <h2>История прогонов</h2>
@@ -1066,6 +1168,139 @@ export default async function AdminPage({
         </div>
       </section>
       ) : null}
+
+      {activeTab === "costs" ? (
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Стоимость AI</h2>
+            <p>
+              Учет строится по фактическим token usage из ответов OpenAI. Стоимость расчетная по ставкам модели и web search.
+            </p>
+          </div>
+        </div>
+        <div className="stats-grid" style={{ marginBottom: 18 }}>
+          <div className="stat">
+            <strong>{formatUsd(aiUsageSummary.totals.estimatedCostUsd)}</strong>
+            <span>за последние {aiUsageSummary.days} дней</span>
+          </div>
+          <div className="stat">
+            <strong>{formatNumber(aiUsageSummary.totals.requestCount)}</strong>
+            <span>AI-запросов</span>
+          </div>
+          <div className="stat">
+            <strong>{formatCompactNumber(aiUsageSummary.totals.totalTokens)}</strong>
+            <span>токенов всего</span>
+          </div>
+          <div className="stat">
+            <strong>{formatNumber(aiUsageSummary.totals.webSearchCalls)}</strong>
+            <span>web search вызовов</span>
+          </div>
+        </div>
+
+        <div className="news-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 24 }}>
+          {aiUsageGroupTotals.map((group) => (
+            <article key={group.usageGroup} className="news-card">
+              <span>{formatAiUsageGroup(group.usageGroup)}</span>
+              <h3>{formatUsd(group.estimatedCostUsd)}</h3>
+              <p>
+                {formatNumber(group.requestCount)} запросов · {formatCompactNumber(group.totalTokens)} токенов
+              </p>
+              <p className="footer-note">
+                input {formatCompactNumber(group.inputTokens)} · output {formatCompactNumber(group.outputTokens)}
+              </p>
+            </article>
+          ))}
+          {!aiUsageGroupTotals.length ? (
+            <article className="news-card">
+              <span>Данных пока нет</span>
+              <h3>Статистика начнёт наполняться после новых AI-запросов</h3>
+              <p>Старые расходы из OpenAI CSV здесь не разложить по операциям, потому что раньше проект не сохранял тип запроса.</p>
+            </article>
+          ) : null}
+        </div>
+
+        <div className="section-head">
+          <div>
+            <h2>По дням</h2>
+            <p>Даты сгруппированы по московскому времени: {aiUsageSummary.timezone}.</p>
+          </div>
+        </div>
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>День</th>
+                <th>Стоимость</th>
+                <th>Запросы</th>
+                <th>Токены</th>
+                <th>Web search</th>
+              </tr>
+            </thead>
+            <tbody>
+              {aiUsageDailyTotals.map((day) => (
+                <tr key={day.usageDate ?? "unknown"}>
+                  <td>{formatShortDate(day.usageDate ?? "")}</td>
+                  <td>{formatUsd(day.estimatedCostUsd)}</td>
+                  <td>{formatNumber(day.requestCount)}</td>
+                  <td>{formatCompactNumber(day.totalTokens)}</td>
+                  <td>{formatNumber(day.webSearchCalls)}</td>
+                </tr>
+              ))}
+              {!aiUsageDailyTotals.length ? (
+                <tr>
+                  <td colSpan={5}>Пока нет записанных AI-запросов.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="section-head" style={{ marginTop: 28 }}>
+          <div>
+            <h2>По операциям</h2>
+            <p>Здесь видно, что дороже: новости, статьи, редактор, rewrite или добор full text.</p>
+          </div>
+        </div>
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>День</th>
+                <th>Группа</th>
+                <th>Операция</th>
+                <th>Модель</th>
+                <th>Стоимость</th>
+                <th>Запросы</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Cached</th>
+              </tr>
+            </thead>
+            <tbody>
+              {aiUsageSummary.items.map((row) => (
+                <tr key={`${row.usageDate}:${row.usageGroup}:${row.operation}:${row.model}`}>
+                  <td>{formatShortDate(row.usageDate)}</td>
+                  <td>{formatAiUsageGroup(row.usageGroup)}</td>
+                  <td>{formatAiOperation(row.operation)}</td>
+                  <td>{formatAiModel(row.model)}</td>
+                  <td>{formatUsd(row.estimatedCostUsd)}</td>
+                  <td>{formatNumber(row.requestCount)}</td>
+                  <td>{formatCompactNumber(row.inputTokens)}</td>
+                  <td>{formatCompactNumber(row.outputTokens)}</td>
+                  <td>{formatCompactNumber(row.cachedInputTokens)}</td>
+                </tr>
+              ))}
+              {!aiUsageSummary.items.length ? (
+                <tr>
+                  <td colSpan={9}>После первого нового AI-запроса здесь появится разбивка.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      ) : null}
     </main>
   );
 }
@@ -1073,11 +1308,250 @@ export default async function AdminPage({
 type Prompt = Awaited<ReturnType<typeof getEditorialStudioData>>["prompts"][number];
 
 function getAdminTab(tab?: string): AdminTab {
-  if (tab === "sources" || tab === "prompts" || tab === "diagnostics") {
+  if (tab === "sources" || tab === "prompts" || tab === "diagnostics" || tab === "costs") {
     return tab;
   }
 
   return "pipeline";
+}
+
+type AiUsageAggregate = {
+  usageGroup: string;
+  usageDate?: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  totalTokens: number;
+  webSearchCalls: number;
+  estimatedCostUsd: number;
+};
+
+type PipelineRunRecord = Awaited<ReturnType<typeof getEditorialStudioData>>["pipelineRuns"][number];
+
+function buildLatestPipelineFunnel({
+  pipelineRuns,
+  activeSourceCount,
+  ingestBatchSize,
+  currentRawItems,
+  currentContentPlan
+}: {
+  pipelineRuns: PipelineRunRecord[];
+  activeSourceCount: number;
+  ingestBatchSize: number;
+  currentRawItems: RawItem[];
+  currentContentPlan: Awaited<ReturnType<typeof getEditorialStudioData>>["contentPlan"];
+}) {
+  const latestIngest = pipelineRuns.find((run) => run.phase === "ingest" && run.status === "ok");
+  if (!latestIngest) {
+    return null;
+  }
+
+  const ingestStartedAt = new Date(latestIngest.startedAt).getTime();
+  const latestEnrichment = findStageAfterIngest(pipelineRuns, "enrichment", ingestStartedAt);
+  const latestEditorial = findStageAfterIngest(pipelineRuns, "editorial", ingestStartedAt);
+  const latestPublish = findStageAfterIngest(pipelineRuns, "publish", ingestStartedAt);
+  const expectedMax = Math.max(0, activeSourceCount * Math.max(1, ingestBatchSize));
+  const parsedFromSources = sumSourceMetric(latestIngest, "parsedCount") || latestIngest.foundCount;
+  const freshFromSources = sumSourceMetric(latestIngest, "freshCount") || latestIngest.savedCount || latestIngest.publishedCount;
+  const duplicateCount = latestIngest.skippedItems.length;
+  const contentPlanCount = latestEditorial?.plannedCount || currentContentPlan.length;
+  const generatedCount = latestEditorial?.generatedCount || 0;
+  const reviewedCount = latestEditorial?.reviewedCount || 0;
+  const publishedCount = latestPublish?.publishedCount || latestEditorial?.publishedCount || 0;
+  const waitingEditorial = currentRawItems.filter((item) => !item.isDuplicate && !item.contentPlanStatus).length;
+
+  const steps = [
+    { label: "максимум по настройкам", value: expectedMax },
+    { label: "прочитано из источников", value: parsedFromSources },
+    { label: "свежие после фильтров", value: freshFromSources },
+    { label: "сохранено raw_items", value: latestIngest.savedCount },
+    { label: "отсечено/дубли", value: duplicateCount },
+    { label: "content plan", value: contentPlanCount },
+    { label: "writer создал drafts", value: generatedCount },
+    { label: "editor проверил", value: reviewedCount },
+    { label: "опубликовано", value: publishedCount }
+  ];
+
+  const sources = latestIngest.sourceBreakdown.map((source) => ({
+    key: source.sourceKey,
+    title: source.sourceTitle,
+    limit: Math.max(1, ingestBatchSize),
+    parsed: source.parsedCount ?? source.foundCount,
+    fresh: source.freshCount ?? source.foundCount,
+    filtered: source.filteredCount ?? Math.max(0, (source.parsedCount ?? source.foundCount) - (source.freshCount ?? source.foundCount)),
+    reasons: formatSourceFilterReasons(source.filterReasons)
+  }));
+
+  const funnelNotes = [
+    expectedMax > parsedFromSources
+      ? `Источники отдали меньше максимума: ${expectedMax - parsedFromSources} материалов не нашлись или не распарсились.`
+      : "",
+    parsedFromSources > freshFromSources
+      ? `Фильтр свежести/известных материалов отсек ${parsedFromSources - freshFromSources}.`
+      : "",
+    freshFromSources > latestIngest.savedCount
+      ? `До raw_items не дошло ${freshFromSources - latestIngest.savedCount}: чаще всего это уже существующие записи или дубли.`
+      : "",
+    latestIngest.savedCount > contentPlanCount
+      ? `Content plan не взял ${latestIngest.savedCount - contentPlanCount}; ${waitingEditorial} из текущей диагностики еще без content plan status.`
+      : "",
+    contentPlanCount > generatedCount
+      ? `Writer не создал draft для ${contentPlanCount - generatedCount} материалов.`
+      : "",
+    generatedCount > publishedCount
+      ? `До publish не дошло ${generatedCount - publishedCount} drafts: проверь review_status/quality gate.`
+      : ""
+  ].filter(Boolean);
+
+  return {
+    steps,
+    sources,
+    skippedItems: latestIngest.skippedItems,
+    notes: funnelNotes,
+    startedAt: latestIngest.startedAt,
+    enrichment: latestEnrichment,
+    editorial: latestEditorial,
+    publish: latestPublish
+  };
+}
+
+function findStageAfterIngest(pipelineRuns: PipelineRunRecord[], phase: string, ingestStartedAt: number) {
+  return pipelineRuns.find((run) => run.phase === phase && run.status === "ok" && new Date(run.startedAt).getTime() >= ingestStartedAt);
+}
+
+function sumSourceMetric(run: PipelineRunRecord, key: "parsedCount" | "freshCount" | "filteredCount") {
+  return run.sourceBreakdown.reduce((sum, source) => sum + (source[key] ?? 0), 0);
+}
+
+function buildAiUsageGroupTotals(items: Awaited<ReturnType<typeof getEditorialStudioData>>["aiUsageSummary"]["items"]) {
+  const grouped = new Map<string, AiUsageAggregate>();
+
+  for (const item of items) {
+    const current = grouped.get(item.usageGroup) ?? {
+      usageGroup: item.usageGroup,
+      requestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      totalTokens: 0,
+      webSearchCalls: 0,
+      estimatedCostUsd: 0
+    };
+    current.requestCount += item.requestCount;
+    current.inputTokens += item.inputTokens;
+    current.outputTokens += item.outputTokens;
+    current.cachedInputTokens += item.cachedInputTokens;
+    current.totalTokens += item.totalTokens;
+    current.webSearchCalls += item.webSearchCalls;
+    current.estimatedCostUsd += item.estimatedCostUsd;
+    grouped.set(item.usageGroup, current);
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => right.estimatedCostUsd - left.estimatedCostUsd);
+}
+
+function buildAiUsageDailyTotals(items: Awaited<ReturnType<typeof getEditorialStudioData>>["aiUsageSummary"]["items"]) {
+  const grouped = new Map<string, AiUsageAggregate>();
+
+  for (const item of items) {
+    const current = grouped.get(item.usageDate) ?? {
+      usageGroup: "daily",
+      usageDate: item.usageDate,
+      requestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      totalTokens: 0,
+      webSearchCalls: 0,
+      estimatedCostUsd: 0
+    };
+    current.requestCount += item.requestCount;
+    current.inputTokens += item.inputTokens;
+    current.outputTokens += item.outputTokens;
+    current.cachedInputTokens += item.cachedInputTokens;
+    current.totalTokens += item.totalTokens;
+    current.webSearchCalls += item.webSearchCalls;
+    current.estimatedCostUsd += item.estimatedCostUsd;
+    grouped.set(item.usageDate, current);
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => (right.usageDate ?? "").localeCompare(left.usageDate ?? ""));
+}
+
+function formatUsd(value: number) {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: value < 1 ? 4 : 2,
+    maximumFractionDigits: value < 1 ? 4 : 2
+  }).format(value);
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("ru-RU").format(value);
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("ru-RU", {
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value);
+}
+
+function formatShortDate(value: string) {
+  const date = new Date(`${value}T00:00:00+03:00`);
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  }).format(date);
+}
+
+function formatAiUsageGroup(group: string) {
+  switch (group) {
+    case "news":
+      return "Новости";
+    case "guides":
+      return "Статьи";
+    case "enrichment":
+      return "Full text / поиск";
+    case "planning":
+      return "Контент-план";
+    default:
+      return "Другое";
+  }
+}
+
+function formatAiOperation(operation: string) {
+  switch (operation) {
+    case "news_writer":
+      return "Новости: writer";
+    case "news_editor":
+      return "Новости: editor";
+    case "news_rewrite":
+      return "Новости: rewrite";
+    case "guide_writer":
+      return "Статьи: writer";
+    case "content_plan_rerank":
+      return "Content plan rerank";
+    case "source_discovery":
+      return "Поиск новостей";
+    case "source_resolve_url":
+      return "Поиск canonical URL";
+    case "enrichment_html_extract":
+      return "Full text из HTML";
+    case "enrichment_web_extract":
+      return "Full text + web search";
+    case "enrichment_search_extract":
+      return "Full text через search";
+    default:
+      return operation;
+  }
+}
+
+function formatAiModel(model: string) {
+  return model.replace("-2025-08-07", "");
 }
 
 function getNoticeMessage(notice?: string, detail?: string) {

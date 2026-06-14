@@ -35,7 +35,7 @@ def run_content_planner(
 ) -> list[ContentPlanItem]:
     shortlist_limit = max(limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
     pool_limit = max(shortlist_limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
-    candidate_pool = repository.list_raw_candidates_for_plan(limit=pool_limit, since=since)
+    candidate_pool = repository.list_raw_candidates_for_plan(limit=pool_limit, since=since, require_full_text=True)
     candidates = build_editorial_shortlist(candidate_pool, shortlist_limit=shortlist_limit, batch_limit=limit)
     planned_items: list[ContentPlanItem] = []
     ai_client = OpenAIEditorialClient()
@@ -53,6 +53,15 @@ def run_content_planner(
         repository.upsert_content_plan_item(audit_item)
 
     return planned_items
+
+
+def select_pre_enrichment_candidates(raw_items: list[RawItem], *, limit: int) -> list[RawItem]:
+    shortlist_limit = max(1, limit)
+    return build_editorial_shortlist(
+        raw_items,
+        shortlist_limit=shortlist_limit,
+        batch_limit=shortlist_limit,
+    )[:shortlist_limit]
 
 
 def build_editorial_shortlist(

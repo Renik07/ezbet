@@ -246,6 +246,35 @@ export type PipelineRun = {
   error?: string;
 };
 
+export type AiUsageSummaryRow = {
+  usageDate: string;
+  usageGroup: string;
+  operation: string;
+  model: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  totalTokens: number;
+  webSearchCalls: number;
+  estimatedCostUsd: number;
+};
+
+export type AiUsageSummary = {
+  items: AiUsageSummaryRow[];
+  totals: {
+    requestCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    totalTokens: number;
+    webSearchCalls: number;
+    estimatedCostUsd: number;
+  };
+  days: number;
+  timezone: string;
+};
+
 export type EditorialStudioData = {
   prompts: PromptConfig[];
   rawItems: RawItem[];
@@ -261,6 +290,7 @@ export type EditorialStudioData = {
   publishScheduler: PublishSchedulerSettings;
   pipelineRuns: PipelineRun[];
   publishedNews: NewsItem[];
+  aiUsageSummary: AiUsageSummary;
   isLive: boolean;
   liveError?: string;
 };
@@ -531,6 +561,20 @@ const fallbackPublishScheduler: PublishSchedulerSettings = {
 
 const fallbackPipelineRuns: PipelineRun[] = [];
 const fallbackPublishedNews: NewsItem[] = [];
+const fallbackAiUsageSummary: AiUsageSummary = {
+  items: [],
+  totals: {
+    requestCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedInputTokens: 0,
+    totalTokens: 0,
+    webSearchCalls: 0,
+    estimatedCostUsd: 0
+  },
+  days: 14,
+  timezone: "Europe/Moscow"
+};
 
 async function loadStudioResource<T>(
   baseUrl: string,
@@ -580,6 +624,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
       publishedNews: fallbackPublishedNews,
+      aiUsageSummary: fallbackAiUsageSummary,
       isLive: false,
       liveError: "EZBET_API_BASE_URL is not configured."
     };
@@ -599,7 +644,8 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialSchedulerResult,
     publishSchedulerResult,
     pipelineRunsResult,
-    publishedNewsResult
+    publishedNewsResult,
+    aiUsageResult
   ] = await Promise.all([
     loadStudioResource(baseUrl, "/api/v1/prompts", (payload) => (payload as { items: PromptConfig[] }).items, fallbackPrompts),
     loadStudioResource(
@@ -655,6 +701,13 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       (payload) => (payload as { items: NewsItem[] }).items,
       fallbackPublishedNews,
       { admin: true }
+    ),
+    loadStudioResource(
+      baseUrl,
+      "/api/v1/ai-usage/summary?days=14",
+      (payload) => payload as AiUsageSummary,
+      fallbackAiUsageSummary,
+      { admin: true }
     )
   ]);
 
@@ -672,10 +725,11 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialSchedulerResult.error,
     publishSchedulerResult.error,
     pipelineRunsResult.error,
-    publishedNewsResult.error
+    publishedNewsResult.error,
+    aiUsageResult.error
   ].filter((value): value is string => Boolean(value));
 
-  const expectedResourceCount = 14;
+  const expectedResourceCount = 15;
   const isLive = partialErrors.length < expectedResourceCount;
 
   return {
@@ -693,6 +747,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     publishScheduler: publishSchedulerResult.data,
     pipelineRuns: pipelineRunsResult.data,
     publishedNews: publishedNewsResult.data,
+    aiUsageSummary: aiUsageResult.data,
     isLive,
     liveError: partialErrors.length ? partialErrors.join("; ") : undefined
   };

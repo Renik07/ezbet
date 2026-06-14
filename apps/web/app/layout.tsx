@@ -5,7 +5,7 @@ import { Suspense } from "react";
 import { SiteFooter } from "@/components/site-footer";
 import { YandexMetrikaPageViews } from "@/components/yandex-metrika";
 import { METRIKA_ID } from "@/lib/metrika";
-import { getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
+import { getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -25,12 +25,21 @@ export const metadata: Metadata = {
     url: "/",
     siteName: SITE_NAME,
     title: SITE_TITLE,
-    description: SITE_DESCRIPTION
+    description: SITE_DESCRIPTION,
+    images: [
+      {
+        url: SITE_OG_IMAGE,
+        width: 1200,
+        height: 630,
+        alt: SITE_TITLE
+      }
+    ]
   },
   twitter: {
     card: "summary_large_image",
     title: SITE_TITLE,
-    description: SITE_DESCRIPTION
+    description: SITE_DESCRIPTION,
+    images: [SITE_OG_IMAGE]
   },
   robots: {
     index: true,

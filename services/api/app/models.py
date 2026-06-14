@@ -280,6 +280,37 @@ class PipelineRunListResponse(BaseModel):
     items: list[PipelineRun]
 
 
+class AiUsageSummaryRow(BaseModel):
+    usage_date: str = Field(serialization_alias="usageDate")
+    usage_group: str = Field(serialization_alias="usageGroup")
+    operation: str
+    model: str
+    request_count: int = Field(serialization_alias="requestCount")
+    input_tokens: int = Field(serialization_alias="inputTokens")
+    output_tokens: int = Field(serialization_alias="outputTokens")
+    cached_input_tokens: int = Field(serialization_alias="cachedInputTokens")
+    total_tokens: int = Field(serialization_alias="totalTokens")
+    web_search_calls: int = Field(serialization_alias="webSearchCalls")
+    estimated_cost_usd: float = Field(serialization_alias="estimatedCostUsd")
+
+
+class AiUsageSummaryTotals(BaseModel):
+    request_count: int = Field(serialization_alias="requestCount")
+    input_tokens: int = Field(serialization_alias="inputTokens")
+    output_tokens: int = Field(serialization_alias="outputTokens")
+    cached_input_tokens: int = Field(serialization_alias="cachedInputTokens")
+    total_tokens: int = Field(serialization_alias="totalTokens")
+    web_search_calls: int = Field(serialization_alias="webSearchCalls")
+    estimated_cost_usd: float = Field(serialization_alias="estimatedCostUsd")
+
+
+class AiUsageSummaryResponse(BaseModel):
+    items: list[AiUsageSummaryRow]
+    totals: AiUsageSummaryTotals
+    days: int
+    timezone: str = "Europe/Moscow"
+
+
 class IngestResponse(BaseModel):
     ingested: int
     published: int

@@ -6,7 +6,7 @@ import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDate, formatMoscowDateTime } from "@/lib/dates";
 import { getArticle, getNews } from "@/lib/news";
-import { absoluteUrl, SITE_NAME, truncateMeta } from "@/lib/site";
+import { absoluteUrl, SITE_NAME, SITE_OG_IMAGE, truncateMeta } from "@/lib/site";
 
 function isGuideArticle(newsItemId: string) {
   return newsItemId.startsWith("guide:");
@@ -58,12 +58,21 @@ export async function generateMetadata({
       siteName: SITE_NAME,
       publishedTime: item.publishedAt,
       ...(articleAuthor ? { authors: [articleAuthor] } : {}),
-      tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai"))
+      tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai")),
+      images: [
+        {
+          url: SITE_OG_IMAGE,
+          width: 1200,
+          height: 630,
+          alt: item.title
+        }
+      ]
     },
     twitter: {
       card: "summary_large_image",
       title: item.title,
-      description
+      description,
+      images: [SITE_OG_IMAGE]
     }
   };
 }

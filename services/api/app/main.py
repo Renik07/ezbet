@@ -31,6 +31,7 @@ from .ingestion import (
 )
 from .models import (
     ArticleResponse,
+    AiUsageSummaryResponse,
     ContentPlanListResponse,
     ContentPlanRunResponse,
     DraftArticleListResponse,
@@ -84,7 +85,7 @@ from .models import (
     SourceSyncStateListResponse,
     SourceItem,
 )
-from .planner import run_content_planner
+from .planner import run_content_planner, select_pre_enrichment_candidates
 from .repository import NewsRepository
 
 
@@ -142,6 +143,11 @@ def _require_admin_api_token(request: Request) -> None:
     provided = (request.headers.get("x-admin-token") or "").strip()
     if provided != expected:
         raise HTTPException(status_code=403, detail="Admin token is required for this action.")
+
+
+def _current_ingest_started_at() -> datetime | None:
+    latest_ingest_run = repository.get_latest_pipeline_run(phase="ingest", status="ok")
+    return latest_ingest_run.started_at if latest_ingest_run else None
 
 
 def _log_pipeline_event(
@@ -504,6 +510,16 @@ def editorial_status() -> EditorialStatusResponse:
     )
 
 
+@app.get("/api/v1/ai-usage/summary", response_model=AiUsageSummaryResponse)
+def ai_usage_summary(
+    request: Request,
+    days: int = Query(default=14, ge=1, le=90),
+) -> AiUsageSummaryResponse:
+    _require_admin_api_token(request)
+    items, totals = repository.list_ai_usage_summary(days=days)
+    return AiUsageSummaryResponse(items=items, totals=totals, days=days)
+
+
 @app.get("/api/v1/news", response_model=NewsListResponse)
 def list_news(
     request: Request,
@@ -810,7 +826,12 @@ def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRun
         status="running",
         counts={"limit": limit},
     )
-    raw_items = repository.list_pending_enrichment_raw_items(limit=limit)
+    current_ingest_started_at = _current_ingest_started_at()
+    raw_items = (
+        _select_pre_enrichment_raw_items(limit=limit, since=current_ingest_started_at)
+        if current_ingest_started_at
+        else []
+    )
     try:
         processed, enriched = _run_enrichment_for_raw_items(raw_items)
         finished_at = datetime.now(timezone.utc)
@@ -833,7 +854,11 @@ def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRun
             trigger="manual",
             status="ok",
             duration_ms=duration_ms,
-            counts={"processed": processed, "enriched": enriched},
+            counts={
+                "processed": processed,
+                "enriched": enriched,
+                "current_ingest_started_at": current_ingest_started_at.isoformat() if current_ingest_started_at else None,
+            },
         )
         return EnrichmentRunResponse(processed=processed, enriched=enriched)
     except Exception as exc:
@@ -951,7 +976,7 @@ def run_pipeline_now() -> PipelineSchedulerRunResponse:
 
 @app.get("/api/v1/guides/topics", response_model=GuideTopicListResponse)
 def list_guide_topics(
-    limit: int = Query(default=50, ge=1, le=365),
+    limit: int = Query(default=50, ge=1, le=800),
     status: Optional[str] = Query(default=None),
 ) -> GuideTopicListResponse:
     return GuideTopicListResponse(items=repository.list_guide_topics(limit=limit, status=status))
@@ -1012,10 +1037,10 @@ def list_raw_item_previews(
     scope: str = Query(default="latest"),
 ) -> RawItemPreviewListResponse:
     if scope == "latest_ingest":
-        scheduler_settings = repository.get_scheduler_settings()
+        current_ingest_started_at = _current_ingest_started_at()
         raw_items = (
-            repository.list_raw_item_previews_since(scheduler_settings.last_run_at, limit)
-            if scheduler_settings.last_run_at
+            repository.list_raw_item_previews_since(current_ingest_started_at, limit)
+            if current_ingest_started_at
             else []
         )
     else:
@@ -1058,7 +1083,12 @@ def list_content_plan(
 
 @app.post("/api/v1/content-plan/run", response_model=ContentPlanRunResponse)
 def run_planner(limit: int = Query(default=6, ge=1, le=20)) -> ContentPlanRunResponse:
-    items = run_content_planner(repository, limit=limit)
+    current_ingest_started_at = _current_ingest_started_at()
+    items = (
+        run_content_planner(repository, limit=limit, since=current_ingest_started_at)
+        if current_ingest_started_at
+        else []
+    )
     return ContentPlanRunResponse(planned=len(items), items=items)
 
 
@@ -1122,7 +1152,12 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
         counts={"limit": limit},
     )
     try:
-        drafts, reviews = run_editorial_cycle(repository, limit=limit)
+        current_ingest_started_at = _current_ingest_started_at()
+        drafts, reviews = (
+            run_editorial_cycle(repository, limit=limit, since=current_ingest_started_at)
+            if current_ingest_started_at
+            else ([], [])
+        )
         published_count = len([draft for draft in drafts if draft.status == "published"])
         finished_at = datetime.now(timezone.utc)
         duration_ms = _duration_ms(started_at, finished_at)
@@ -1190,7 +1225,12 @@ def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunRespons
         counts={"limit": limit},
     )
     try:
-        published = _run_publish_for_drafts(limit=limit)
+        current_ingest_started_at = _current_ingest_started_at()
+        published = (
+            _run_publish_for_drafts(limit=limit, since=current_ingest_started_at)
+            if current_ingest_started_at
+            else 0
+        )
         finished_at = datetime.now(timezone.utc)
         duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
@@ -1386,11 +1426,12 @@ def _run_source_ingestion(
                 if item.is_duplicate
             ],
         )
+        total_parsed_items = sum(len(result.items) for result in source_results)
         source_breakdown = [
             {
                 "source_key": result.source.key,
                 "source_title": result.source.title,
-                "found_count": len([item for item in raw_items if item.source_key == result.source.key]),
+                "found_count": len(result.items),
                 "parsed_count": len(result.items),
                 "fresh_count": len([item for item in raw_items if item.source_key == result.source.key]),
                 "filtered_count": max(
@@ -1411,7 +1452,7 @@ def _run_source_ingestion(
             started_at=started_at,
             finished_at=finished_at,
             duration_ms=duration_ms,
-            found_count=len(raw_items),
+            found_count=total_parsed_items,
             saved_count=inserted_raw_items,
             published_count=len(published),
             skipped_items=skipped_items,
@@ -1426,6 +1467,7 @@ def _run_source_ingestion(
             duration_ms=duration_ms,
             counts={
                 "raw_items": len(raw_items),
+                "parsed": total_parsed_items,
                 "inserted": inserted_raw_items,
                 "published": len(published),
                 "skipped": len(skipped_items),
@@ -1483,7 +1525,7 @@ def _merge_skipped_ingest_items(
     return merged
 
 
-def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
+def _run_scheduler(*, force: bool, allow_inline_enrichment: bool = True) -> SchedulerRunResponse:
     settings = repository.get_scheduler_settings()
     now = datetime.now(timezone.utc)
     run_id = _run_id("scheduler")
@@ -1556,7 +1598,7 @@ def _run_scheduler(*, force: bool) -> SchedulerRunResponse:
             ingest_response = _run_source_ingestion(
                 limit=scheduler_batch_size,
                 per_source=True,
-                run_enrichment=settings.run_enrichment,
+                run_enrichment=settings.run_enrichment and allow_inline_enrichment,
                 trigger="scheduler",
             )
             latest_settings = repository.get_scheduler_settings()
@@ -1692,10 +1734,11 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
         try:
             repository.set_enrichment_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
-            ingest_settings = repository.get_scheduler_settings()
-            raw_items = repository.list_pending_enrichment_raw_items(
-                limit=batch_size,
-                since=ingest_settings.last_run_at,
+            current_ingest_started_at = _current_ingest_started_at()
+            raw_items = (
+                _select_pre_enrichment_raw_items(limit=batch_size, since=current_ingest_started_at)
+                if current_ingest_started_at
+                else []
             )
             _log_pipeline_event(
                 "scheduler_run_started",
@@ -1703,7 +1746,13 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
                 run_id=run_id,
                 trigger=trigger,
                 status="running",
-                counts={"batch_size": batch_size, "candidates_found": len(raw_items)},
+                counts={
+                    "batch_size": batch_size,
+                    "candidates_found": len(raw_items),
+                    "current_ingest_started_at": current_ingest_started_at.isoformat()
+                    if current_ingest_started_at
+                    else None,
+                },
             )
             processed, enriched = _run_enrichment_for_raw_items(raw_items)
             latest_settings = repository.get_enrichment_scheduler_settings()
@@ -1858,13 +1907,12 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
         try:
             repository.set_editorial_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
-            ingest_settings = repository.get_scheduler_settings()
-            current_ingest_started_at = ingest_settings.last_run_at
+            current_ingest_started_at = _current_ingest_started_at()
             planned_items = run_content_planner(
                 repository,
                 limit=batch_size,
                 since=current_ingest_started_at,
-            )
+            ) if current_ingest_started_at else []
             _log_pipeline_event(
                 "scheduler_run_started",
                 phase="editorial",
@@ -1877,7 +1925,7 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
                 repository,
                 limit=batch_size,
                 since=current_ingest_started_at,
-            )
+            ) if current_ingest_started_at else ([], [])
             published_count = len([draft for draft in drafts if draft.status == "published"])
             latest_settings = repository.get_editorial_scheduler_settings()
             next_run_at = (
@@ -2048,8 +2096,12 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
                 status="running",
                 counts={"batch_size": batch_size},
             )
-            ingest_settings = repository.get_scheduler_settings()
-            published = _run_publish_for_drafts(limit=batch_size, since=ingest_settings.last_run_at)
+            current_ingest_started_at = _current_ingest_started_at()
+            published = (
+                _run_publish_for_drafts(limit=batch_size, since=current_ingest_started_at)
+                if current_ingest_started_at
+                else 0
+            )
             latest_settings = repository.get_publish_scheduler_settings()
             next_run_at = (
                 now + timedelta(minutes=latest_settings.interval_minutes)
@@ -2153,7 +2205,7 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         "ingest",
         run_id=run_id,
         trigger=mode,
-        run=lambda: _run_scheduler(force=force),
+        run=lambda: _run_scheduler(force=force, allow_inline_enrichment=False),
         fallback=lambda error: SchedulerRunResponse(ran=False, reason=f"error: {error}"),
     )
     enrichment = _run_pipeline_stage(
@@ -2234,7 +2286,19 @@ def _run_pipeline_stage(
 
 
 def _run_ingestion_enrichment(raw_items: list[RawItem]) -> None:
-    _run_enrichment_for_raw_items(raw_items)
+    batch_size = max(1, repository.get_enrichment_scheduler_settings().batch_size)
+    shortlist = select_pre_enrichment_candidates(raw_items, limit=batch_size)
+    _log_pipeline_event(
+        "pre_enrichment_shortlist",
+        phase="ingest",
+        status="ok",
+        counts={
+            "candidate_pool": len(raw_items),
+            "selected": len(shortlist),
+            "batch_size": batch_size,
+        },
+    )
+    _run_enrichment_for_raw_items(shortlist)
 
 
 def _run_guide_scheduler() -> GuideSchedulerRunResponse:
@@ -2381,6 +2445,15 @@ def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int
         repository.sync_news_ai_review_flags()
 
     return published
+
+
+def _select_pre_enrichment_raw_items(*, limit: int, since: datetime | None) -> list[RawItem]:
+    if since is None:
+        return []
+
+    pool_limit = max(limit * 3, limit)
+    candidate_pool = repository.list_pending_enrichment_raw_items(limit=pool_limit, since=since)
+    return select_pre_enrichment_candidates(candidate_pool, limit=limit)
 
 
 def _run_enrichment_for_raw_items(raw_items: list[RawItem]) -> tuple[int, int]:

@@ -6,7 +6,7 @@ import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDate } from "@/lib/dates";
 import { getNews } from "@/lib/news";
-import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
+import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -18,11 +18,20 @@ export const metadata: Metadata = {
   openGraph: {
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
-    url: "/"
+    url: "/",
+    images: [
+      {
+        url: SITE_OG_IMAGE,
+        width: 1200,
+        height: 630,
+        alt: SITE_TITLE
+      }
+    ]
   },
   twitter: {
     title: SITE_TITLE,
-    description: SITE_DESCRIPTION
+    description: SITE_DESCRIPTION,
+    images: [SITE_OG_IMAGE]
   }
 };
 

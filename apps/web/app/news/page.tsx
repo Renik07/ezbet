@@ -4,7 +4,7 @@ import type { Route } from "next";
 import { NewsCard } from "@/components/news-card";
 import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
-import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, truncateMeta } from "@/lib/site";
+import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, truncateMeta } from "@/lib/site";
 
 const NEWS_PER_PAGE = 20;
 
@@ -54,11 +54,20 @@ export async function generateMetadata({
     openGraph: {
       title: `${title} | ${SITE_NAME}`,
       description,
-      url: "/news"
+      url: "/news",
+      images: [
+        {
+          url: SITE_OG_IMAGE,
+          width: 1200,
+          height: 630,
+          alt: `${title} | ${SITE_NAME}`
+        }
+      ]
     },
     twitter: {
       title: `${title} | ${SITE_NAME}`,
-      description
+      description,
+      images: [SITE_OG_IMAGE]
     }
   };
 }

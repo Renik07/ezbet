@@ -2,6 +2,7 @@ export const SITE_NAME = "ezbet.ru";
 export const SITE_TITLE = "ezbet.ru - спортивные новости, аналитика и беттинг";
 export const SITE_DESCRIPTION =
   "Свежие спортивные новости, материалы о футболе, хоккее, баскетболе, теннисе, киберспорте и беттинге.";
+export const SITE_OG_IMAGE = "/opengraph-image";
 
 export function getSiteUrl() {
   const rawUrl =

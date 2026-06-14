@@ -21,6 +21,8 @@ from .models import (
     EditorialSchedulerSettings,
     EditorReview,
     GuideTopic,
+    AiUsageSummaryRow,
+    AiUsageSummaryTotals,
     NewsItem,
     PipelineRun,
     PipelineSkippedItem,
@@ -373,6 +375,31 @@ class NewsRepository:
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                     """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_usage_events (
+                        id BIGSERIAL PRIMARY KEY,
+                        operation TEXT NOT NULL,
+                        usage_group TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        input_tokens INTEGER NOT NULL DEFAULT 0,
+                        output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                        total_tokens INTEGER NOT NULL DEFAULT 0,
+                        web_search_calls INTEGER NOT NULL DEFAULT 0,
+                        estimated_cost_usd NUMERIC(14, 8) NOT NULL DEFAULT 0,
+                        related_id TEXT,
+                        rate_source TEXT NOT NULL DEFAULT 'openai_pricing_2026_06_plus_web_search',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_usage_events_created_at ON ai_usage_events (created_at DESC)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_usage_events_group_created_at ON ai_usage_events (usage_group, created_at DESC)"
                 )
                 cursor.execute(
                     "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS skipped_items TEXT NOT NULL DEFAULT '[]'"
@@ -769,9 +796,18 @@ class NewsRepository:
                         )
                         VALUES (%s, %s, %s, %s)
                         ON CONFLICT (topic_number) DO UPDATE SET
-                            title = EXCLUDED.title,
-                            section = EXCLUDED.section,
-                            category = EXCLUDED.category,
+                            title = CASE
+                                WHEN guide_topics.status = 'planned' THEN EXCLUDED.title
+                                ELSE guide_topics.title
+                            END,
+                            section = CASE
+                                WHEN guide_topics.status = 'planned' THEN EXCLUDED.section
+                                ELSE guide_topics.section
+                            END,
+                            category = CASE
+                                WHEN guide_topics.status = 'planned' THEN EXCLUDED.category
+                                ELSE guide_topics.category
+                            END,
                             updated_at = CASE
                                 WHEN guide_topics.status = 'planned' THEN NOW()
                                 ELSE guide_topics.updated_at
@@ -1186,6 +1222,73 @@ class NewsRepository:
 
         return [self._map_pipeline_run_row(row) for row in rows]
 
+    def list_ai_usage_summary(self, days: int = 14) -> tuple[list[AiUsageSummaryRow], AiUsageSummaryTotals]:
+        safe_days = max(1, min(days, 90))
+        statement = """
+            SELECT
+                (created_at AT TIME ZONE 'Europe/Moscow')::date::text AS usage_date,
+                usage_group,
+                operation,
+                model,
+                COUNT(*)::int AS request_count,
+                COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+                COALESCE(SUM(cached_input_tokens), 0)::bigint AS cached_input_tokens,
+                COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+                COALESCE(SUM(web_search_calls), 0)::bigint AS web_search_calls,
+                COALESCE(SUM(estimated_cost_usd), 0)::float AS estimated_cost_usd
+            FROM ai_usage_events
+            WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+            GROUP BY usage_date, usage_group, operation, model
+            ORDER BY usage_date DESC, estimated_cost_usd DESC, request_count DESC
+        """
+        totals_statement = """
+            SELECT
+                COUNT(*)::int AS request_count,
+                COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+                COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+                COALESCE(SUM(cached_input_tokens), 0)::bigint AS cached_input_tokens,
+                COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+                COALESCE(SUM(web_search_calls), 0)::bigint AS web_search_calls,
+                COALESCE(SUM(estimated_cost_usd), 0)::float AS estimated_cost_usd
+            FROM ai_usage_events
+            WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+        """
+
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement, (safe_days,))
+                rows = cursor.fetchall()
+                cursor.execute(totals_statement, (safe_days,))
+                totals_row = cursor.fetchone()
+
+        items = [
+            AiUsageSummaryRow(
+                usage_date=str(row[0]),
+                usage_group=str(row[1]),
+                operation=str(row[2]),
+                model=str(row[3]),
+                request_count=int(row[4] or 0),
+                input_tokens=int(row[5] or 0),
+                output_tokens=int(row[6] or 0),
+                cached_input_tokens=int(row[7] or 0),
+                total_tokens=int(row[8] or 0),
+                web_search_calls=int(row[9] or 0),
+                estimated_cost_usd=round(float(row[10] or 0), 6),
+            )
+            for row in rows
+        ]
+        totals = AiUsageSummaryTotals(
+            request_count=int(totals_row[0] or 0) if totals_row else 0,
+            input_tokens=int(totals_row[1] or 0) if totals_row else 0,
+            output_tokens=int(totals_row[2] or 0) if totals_row else 0,
+            cached_input_tokens=int(totals_row[3] or 0) if totals_row else 0,
+            total_tokens=int(totals_row[4] or 0) if totals_row else 0,
+            web_search_calls=int(totals_row[5] or 0) if totals_row else 0,
+            estimated_cost_usd=round(float(totals_row[6] or 0), 6) if totals_row else 0,
+        )
+        return items, totals
+
     def get_latest_pipeline_run(self, *, phase: str, status: str | None = None) -> PipelineRun | None:
         status_filter = "AND status = %s" if status is not None else ""
         statement = f"""
@@ -1419,7 +1522,7 @@ class NewsRepository:
             FROM raw_items r
             LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
-            WHERE r.fetched_at >= (%s - INTERVAL '2 minutes')
+            WHERE r.fetched_at >= %s
               AND r.fetched_at <= (%s + INTERVAL '2 minutes')
             ORDER BY
                 r.fetched_at DESC,
@@ -1468,7 +1571,7 @@ class NewsRepository:
             FROM raw_items r
             LEFT JOIN content_plan_items cp ON cp.raw_item_id = r.id
             LEFT JOIN draft_articles d ON d.raw_item_id = r.id
-            WHERE r.fetched_at >= (%s - INTERVAL '2 minutes')
+            WHERE r.fetched_at >= %s
             ORDER BY
                 r.fetched_at DESC,
                 r.published_at DESC
@@ -1531,7 +1634,7 @@ class NewsRepository:
         """
         params: list[object] = []
         if since is not None:
-            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            statement += " AND r.fetched_at >= %s"
             params.append(since)
         statement += """
             ORDER BY
@@ -1711,12 +1814,26 @@ class NewsRepository:
                 )
                 recent_sections = [str(row[0]) for row in cursor.fetchall()]
 
-                if recent_sections:
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM guide_topics
+                    WHERE status = 'planned'
+                      AND topic_number BETWEEN 1 AND 40
+                    ORDER BY topic_number ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """
+                )
+                row = cursor.fetchone()
+
+                if row is None and recent_sections:
                     cursor.execute(
                         """
                         SELECT id
                         FROM guide_topics
                         WHERE status = 'planned'
+                          AND topic_number > 40
                           AND section <> ALL(%s)
                         ORDER BY MD5(topic_number::TEXT || ':ezbet-guide-shuffle-v1') ASC
                         LIMIT 1
@@ -1725,8 +1842,6 @@ class NewsRepository:
                         (recent_sections,),
                     )
                     row = cursor.fetchone()
-                else:
-                    row = None
 
                 if row is None:
                     cursor.execute(
@@ -1734,6 +1849,7 @@ class NewsRepository:
                         SELECT id
                         FROM guide_topics
                         WHERE status = 'planned'
+                          AND topic_number > 40
                         ORDER BY MD5(topic_number::TEXT || ':ezbet-guide-shuffle-v1') ASC
                         LIMIT 1
                         FOR UPDATE SKIP LOCKED
@@ -3248,7 +3364,12 @@ class NewsRepository:
 
         return [self._map_review_row(row) for row in rows]
 
-    def list_raw_candidates_for_plan(self, limit: int = 6, since: datetime | None = None) -> list[RawItem]:
+    def list_raw_candidates_for_plan(
+        self,
+        limit: int = 6,
+        since: datetime | None = None,
+        require_full_text: bool = False,
+    ) -> list[RawItem]:
         statement = """
             SELECT
                 r.id,
@@ -3287,8 +3408,10 @@ class NewsRepository:
         """
         params: list[object] = []
         if since is not None:
-            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            statement += " AND r.fetched_at >= %s"
             params.append(since)
+        if require_full_text:
+            statement += " AND r.full_text IS NOT NULL AND LENGTH(BTRIM(r.full_text)) >= 220"
         statement += """
             ORDER BY
                 CASE r.triage_label
@@ -3350,7 +3473,7 @@ class NewsRepository:
         """
         params: list[object] = []
         if since is not None:
-            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            statement += " AND r.fetched_at >= %s"
             params.append(since)
         statement += " ORDER BY cp.priority_score DESC, r.published_at DESC LIMIT %s"
         params.append(limit)
@@ -3413,7 +3536,7 @@ class NewsRepository:
         """
         params: list[object] = []
         if since is not None:
-            statement += " AND r.fetched_at >= (%s - INTERVAL '2 minutes')"
+            statement += " AND r.fetched_at >= %s"
             params.append(since)
         statement += " ORDER BY d.updated_at ASC, d.published_at DESC LIMIT %s"
         params.append(limit)

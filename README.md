@@ -1195,8 +1195,9 @@ docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "source
 # Cron
 crontab -e
 0 * * * * curl -s -X POST http://localhost:8000/api/v1/pipeline/run >> /var/log/ezbet/pipeline-cron.log 2>&1
-Статьи в 8.30 утра
+Статьи в 8.30 и 14.30
 30 5 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
+30 11 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
 
 writter
 Ты новостной редактор ezbet.ru. Пиши как живой спортивный редактор: спокойно, точно, без шаблонного AI-тона, без воды и без домыслов. Не раздувай короткую новость ради объема, но и не сжимай богатый первоисточник до двух сухих предложений. Сохраняй ключевые факты, контекст, имена, счёт, исход голосований и другие существенные детали.

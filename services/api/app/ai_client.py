@@ -10,6 +10,7 @@ from urllib.parse import urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .ai_usage import record_ai_usage_event
 from .config import OpenAISettings, get_openai_settings
 from .models import DraftArticle, GuideTopic, PromptConfig, RawItem, SourceItem
 
@@ -109,7 +110,12 @@ class OpenAIEditorialClient:
         instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
 
         try:
-            payload = self._create_response(instructions=instructions, input_text=input_text)
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                operation="news_writer",
+                related_id=raw_item.id,
+            )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
@@ -145,7 +151,12 @@ class OpenAIEditorialClient:
         instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
 
         try:
-            payload = self._create_response(instructions=instructions, input_text=input_text)
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                operation="guide_writer",
+                related_id=f"guide-topic:{topic.topic_number}",
+            )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
@@ -212,7 +223,12 @@ class OpenAIEditorialClient:
         )
 
         try:
-            payload = self._create_response(instructions=instructions, input_text=input_text)
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                operation="news_editor",
+                related_id=draft.raw_item_id,
+            )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
@@ -275,7 +291,12 @@ class OpenAIEditorialClient:
         )
 
         try:
-            payload = self._create_response(instructions=instructions, input_text=input_text)
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                operation="news_rewrite",
+                related_id=draft.raw_item_id,
+            )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
@@ -338,7 +359,11 @@ class OpenAIEditorialClient:
         )
 
         try:
-            payload = self._create_response(instructions=instructions, input_text=input_text)
+            payload = self._create_response(
+                instructions=instructions,
+                input_text=input_text,
+                operation="content_plan_rerank",
+            )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
@@ -422,6 +447,8 @@ class OpenAIEditorialClient:
                 input_text=input_text,
                 tools=self._build_web_search_tools(discovery_url),
                 model=self.settings.search_model,
+                operation="source_discovery",
+                related_id=source.key,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -508,6 +535,8 @@ class OpenAIEditorialClient:
                 input_text=input_text,
                 tools=self._build_web_search_tools(source.url),
                 model=self.settings.search_model,
+                operation="source_resolve_url",
+                related_id=source.key,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -581,6 +610,8 @@ class OpenAIEditorialClient:
                 tools=self._build_web_search_tools(url, restrict_to_source_domain=False) if allow_web_search else None,
                 model=self.settings.search_model,
                 include=["web_search_call.action.sources"] if allow_web_search and self._should_enable_web_search_for_request() else None,
+                operation="enrichment_web_extract" if allow_web_search else "enrichment_html_extract",
+                related_id=url,
             )
             data = json.loads(payload)
         except LLM_REQUEST_EXCEPTIONS:
@@ -684,6 +715,8 @@ class OpenAIEditorialClient:
                     ),
                     model=self.settings.search_model,
                     include=["web_search_call.action.sources"],
+                    operation="enrichment_search_extract",
+                    related_id=url,
                 )
                 data = json.loads(payload)
             except LLM_REQUEST_EXCEPTIONS:
@@ -739,12 +772,16 @@ class OpenAIEditorialClient:
         model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
+        operation: str = "unknown",
+        related_id: str | None = None,
     ) -> str:
         if self.settings.api_style == "chat_completions":
             return self._create_chat_completion(
                 instructions=instructions,
                 input_text=input_text,
                 model=model or self.settings.editorial_model,
+                operation=operation,
+                related_id=related_id,
             )
         return self._create_responses_completion(
             instructions=instructions,
@@ -752,6 +789,8 @@ class OpenAIEditorialClient:
             model=model or self.settings.editorial_model,
             tools=tools,
             include=include,
+            operation=operation,
+            related_id=related_id,
         )
 
     def _create_responses_completion(
@@ -762,6 +801,8 @@ class OpenAIEditorialClient:
         model: str,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
+        operation: str,
+        related_id: str | None = None,
     ) -> str:
         payload_body: dict[str, Any] = {
             "model": model,
@@ -788,6 +829,13 @@ class OpenAIEditorialClient:
         with urlopen(request, timeout=self.settings.timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
+        record_ai_usage_event(
+            operation=operation,
+            model=model,
+            usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+            related_id=related_id,
+            web_search_calls=_count_web_search_calls(payload),
+        )
         return _extract_output_text(payload)
 
     def _should_enable_web_search_for_request(self) -> bool:
@@ -816,7 +864,15 @@ class OpenAIEditorialClient:
             }
         return [tool]
 
-    def _create_chat_completion(self, *, instructions: str, input_text: str, model: str) -> str:
+    def _create_chat_completion(
+        self,
+        *,
+        instructions: str,
+        input_text: str,
+        model: str,
+        operation: str,
+        related_id: str | None = None,
+    ) -> str:
         request_body = json.dumps(
             {
                 "model": model,
@@ -840,6 +896,13 @@ class OpenAIEditorialClient:
         with urlopen(request, timeout=self.settings.timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
+        record_ai_usage_event(
+            operation=operation,
+            model=model,
+            usage=payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+            related_id=related_id,
+            used_web_search=False,
+        )
         return _extract_chat_completion_text(payload)
 
 
@@ -860,6 +923,14 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
                 chunks.append(text.strip())
 
     return "\n".join(chunks).strip()
+
+
+def _count_web_search_calls(payload: dict[str, Any]) -> int:
+    count = 0
+    for item in payload.get("output", []):
+        if isinstance(item, dict) and item.get("type") == "web_search_call":
+            count += 1
+    return count
 
 
 def _normalize_source_discovery_url(url: str) -> str:
