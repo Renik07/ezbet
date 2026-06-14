@@ -1352,7 +1352,10 @@ function buildLatestPipelineFunnel({
   const latestEditorial = findStageAfterIngest(pipelineRuns, "editorial", ingestStartedAt);
   const latestPublish = findStageAfterIngest(pipelineRuns, "publish", ingestStartedAt);
   const expectedMax = Math.max(0, activeSourceCount * Math.max(1, ingestBatchSize));
-  const parsedFromSources = sumSourceMetric(latestIngest, "parsedCount") || latestIngest.foundCount;
+  const sourceParsedTotal = sumSourceMetric(latestIngest, "parsedCount");
+  const rawParsedFromRun = sourceParsedTotal || latestIngest.foundCount;
+  const parsedCounterLooksSuspicious = expectedMax > 0 && rawParsedFromRun > expectedMax * 3;
+  const parsedFromSources = parsedCounterLooksSuspicious ? Math.max(latestIngest.savedCount, latestIngest.publishedCount) : rawParsedFromRun;
   const freshFromSources = sumSourceMetric(latestIngest, "freshCount") || latestIngest.savedCount || latestIngest.publishedCount;
   const duplicateCount = latestIngest.skippedItems.length;
   const contentPlanCount = latestEditorial?.plannedCount || currentContentPlan.length;
@@ -1389,6 +1392,9 @@ function buildLatestPipelineFunnel({
       : "",
     parsedFromSources > freshFromSources
       ? `Фильтр свежести/известных материалов отсек ${parsedFromSources - freshFromSources}.`
+      : "",
+    parsedCounterLooksSuspicious
+      ? "Счетчик прочитанных материалов в старой записи ingest выглядит некорректно, поэтому воронка использует безопасную оценку по сохраненным raw_items."
       : "",
     freshFromSources > latestIngest.savedCount
       ? `До raw_items не дошло ${freshFromSources - latestIngest.savedCount}: чаще всего это уже существующие записи или дубли.`
@@ -1500,12 +1506,25 @@ function formatCompactNumber(value: number) {
 }
 
 function formatShortDate(value: string) {
-  const date = new Date(`${value}T00:00:00+03:00`);
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric",
-    month: "short",
-    year: "numeric"
-  }).format(date);
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return value || "—";
+  }
+  const monthNames = [
+    "янв.",
+    "февр.",
+    "мар.",
+    "апр.",
+    "мая",
+    "июн.",
+    "июл.",
+    "авг.",
+    "сент.",
+    "окт.",
+    "нояб.",
+    "дек."
+  ];
+  return `${day} ${monthNames[month - 1] ?? ""} ${year} г.`;
 }
 
 function formatAiUsageGroup(group: string) {
