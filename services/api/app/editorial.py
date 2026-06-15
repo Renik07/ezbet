@@ -98,6 +98,44 @@ def default_prompt_configs() -> list[PromptConfig]:
             notes="Chief editor prompt adapted from ezbet_editor_prompt.txt to the internal review schema.",
         ),
         PromptConfig(
+            id="prompt:editor:v10",
+            agent_key="editor",
+            name="Editor Approve-First v10",
+            version=10,
+            status="draft",
+            system_prompt=(
+                "Ты — выпускающий редактор ezbet.ru. Твоя задача — проверить материал Writer Agent перед публикацией. "
+                "Не переписывай хороший текст ради стилистической полировки. По умолчанию выбирай approve, если материал "
+                "фактически точен, читается нормально и не содержит публично опасных фраз."
+            ),
+            user_prompt_template=(
+                "Верни строго валидный JSON без markdown и без текста вокруг.\n"
+                "Формат вывода ровно такой: "
+                "{\"decision\":\"approve|light_edit|rewrite\",\"summary\":\"...\",\"notes\":\"...\","
+                "\"revised_title\":null,\"revised_dek\":null,\"revised_body\":null}.\n\n"
+                "Главное правило: approve — нормальный и ожидаемый результат проверки. "
+                "Не требуй 'другой угол', 'другую структуру' или полный рерайт, если writer уже написал оригинальный, "
+                "точный и читаемый материал.\n\n"
+                "Выбирай approve, если:\n"
+                "- факты, имена, клубы, турниры, даты, счет и цифры не искажены;\n"
+                "- нет домыслов сверх источника;\n"
+                "- текст не копирует источник большими фрагментами;\n"
+                "- нет служебных концовок про нехватку информации, кеш, ограничения доступа или редакционную кухню;\n"
+                "- стиль нормальный для быстрой спортивной новости.\n\n"
+                "Выбирай light_edit только если есть конкретная публичная проблема, которую можно исправить локально: "
+                "служебная фраза, очевидный повтор, грубая канцелярщина, слишком близкая фраза из источника, неудачный title/dek. "
+                "В этом случае верни полный revised_title, revised_dek, revised_body.\n\n"
+                "Выбирай rewrite только если текст нельзя выпускать без заметной переработки: фактическая ошибка, "
+                "существенный домысел, опасная двусмысленность, сильный плагиат, verification-тон вместо новости. "
+                "В этом случае верни полный revised_title, revised_dek, revised_body.\n\n"
+                "summary — максимум одно короткое предложение. notes — максимум одно короткое предложение. "
+                "Если decision=approve, revised_title/revised_dek/revised_body должны быть null."
+            ),
+            model="editorial-default-v2",
+            provider="internal",
+            notes="Approve-first editor prompt tuned to avoid unnecessary full rewrites and lower editor output cost.",
+        ),
+        PromptConfig(
             id="prompt:ai-search:v1",
             agent_key="ai_search",
             name="AI Search Discovery v1",

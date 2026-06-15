@@ -204,11 +204,11 @@ class OpenAIEditorialClient:
             "Rules:\n"
             "- decision must be one of: approve, light_edit, rewrite\n"
             "- approve: the draft is already good enough; revised_* must be null or omitted\n"
-            "- light_edit: only local editorial fixes are needed; return full revised_title, revised_dek, revised_body\n"
-            "- rewrite: the draft needs a substantial rewrite; return full revised_title, revised_dek, revised_body\n"
+            "- light_edit: choose only for a concrete public-facing issue; return full revised_title, revised_dek, revised_body\n"
+            "- rewrite: choose only for factual errors, unsafe invention, strong plagiarism, or unusable news tone; return full revised_title, revised_dek, revised_body\n"
             "- review in Russian\n"
-            "- mention whether the draft stays close to the source\n"
-            "- if data is thin, say directly that the material should stay short\n"
+            "- summary and notes must be short, one sentence each\n"
+            "- if the draft is acceptable, approve it instead of rewriting for style\n"
             "- do not invent facts beyond the source"
         )
         instructions = (
@@ -218,8 +218,9 @@ class OpenAIEditorialClient:
             "Approve должен быть выбором по умолчанию, если текст фактически точный, читаемый и любые правки были бы лишь вкусовой микрополировкой. "
             "Не переписывай материал только ради легкой стилистической шлифовки. "
             "Не считай проблемой само по себе то, что dek частично перекликается с первым абзацем, если body дальше добавляет факты и не топчется на месте. "
-            "Если нужны точечные правки без полной переработки, выбери light_edit и верни полную исправленную версию. "
-            "Если текст нужно заметно переписать, выбери rewrite и тоже верни полную исправленную версию."
+            "Если нужны точечные правки из-за реальной публичной проблемы, выбери light_edit и верни полную исправленную версию. "
+            "Если текст нужно заметно переписать из-за фактической ошибки, домысла, сильного плагиата или verification-тона, выбери rewrite. "
+            "Во всех остальных случаях выбери approve и не возвращай revised_body."
         )
 
         try:

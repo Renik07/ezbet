@@ -3191,6 +3191,7 @@ class NewsRepository:
                         "prompt:editor:v6",
                         "prompt:editor:v7",
                         "prompt:editor:v8",
+                        "prompt:editor:v9",
                     },
                 }
                 legacy_default_names = {

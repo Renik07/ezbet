@@ -95,7 +95,7 @@ async def lifespan(_: FastAPI):
     _recover_runtime_state(trigger="startup")
     repository.ensure_prompt_defaults(default_prompt_configs())
     repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v8")
-    repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v9")
+    repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v10")
     repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
     try:
         repository.ensure_guide_topic_defaults(load_guide_topic_seed())
