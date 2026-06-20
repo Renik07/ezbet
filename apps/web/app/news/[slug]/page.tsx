@@ -96,7 +96,7 @@ export default async function ArticlePage({
   const publicTags = item.tags.filter((tag) => !tag.toLowerCase().includes("ai"));
   const articleUrl = absoluteUrl(`/news/${item.slug}`);
   const guideArticle = isGuideArticle(item.newsItemId);
-  const articleAuthor = guideArticle ? getArticleAuthor(item.category) : undefined;
+  const articleEditor = getArticleAuthor(item.category);
   const displayDate = formatArticleDate(item.publishedAt, guideArticle);
   const articleJsonLd = {
     "@context": "https://schema.org",
@@ -113,15 +113,11 @@ export default async function ArticlePage({
         inLanguage: "ru-RU",
         articleSection: formatCategoryLabel(item.category),
         keywords: publicTags.join(", "),
-        ...(articleAuthor
-          ? {
-              author: {
-                "@type": "Person",
-                name: articleAuthor,
-                url: absoluteUrl("/")
-              }
-            }
-          : {}),
+        author: {
+          "@type": "Person",
+          name: articleEditor,
+          url: absoluteUrl("/")
+        },
         publisher: {
           "@type": "Organization",
           name: SITE_NAME,
@@ -179,6 +175,30 @@ export default async function ArticlePage({
               <p key={`${item.id}-${index}`}>{paragraph}</p>
             ))}
           </div>
+
+          {relatedNews.length ? (
+            <section className="sidebar-block article-related" aria-labelledby="related-news-title">
+              <h2 id="related-news-title" className="sidebar-block-title">Еще по теме</h2>
+              <ol className="article-related-list" role="list">
+                {relatedNews.map((newsItem, index) => (
+                  <li className="article-related-item" key={newsItem.id}>
+                    <span className="article-related-number" aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    {newsItem.articleSlug ? (
+                      <Link className="article-related-link" href={`/news/${newsItem.articleSlug}`}>
+                        {newsItem.title}
+                      </Link>
+                    ) : (
+                      <a className="article-related-link" href={newsItem.link ?? "/news"}>
+                        {newsItem.title}
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
         </article>
 
         <aside className="article-aside">
@@ -193,12 +213,14 @@ export default async function ArticlePage({
                 <dt>Опубликовано</dt>
                 <dd>{displayDate}</dd>
               </div>
-              {articleAuthor ? (
-                <div>
-                  <dt>Автор</dt>
-                  <dd>{articleAuthor}</dd>
-                </div>
-              ) : null}
+              <div>
+                <dt>Редактор</dt>
+                <dd>{articleEditor}</dd>
+              </div>
+              <div>
+                <dt>Источник</dt>
+                <dd>{item.sourceTitle}</dd>
+              </div>
             </dl>
           </div>
 
@@ -212,22 +234,6 @@ export default async function ArticlePage({
                   </Link>
                 ))}
               </div>
-            </div>
-          ) : null}
-
-          {relatedNews.length ? (
-            <div className="sidebar-block">
-              <h3 className="sidebar-block-title">Еще по теме</h3>
-              <ol className="popular-list" role="list">
-                {relatedNews.map((newsItem, index) => (
-                  <li className="popular-item" key={newsItem.id}>
-                    <span className="popular-num">{index + 1}</span>
-                    <a className="popular-link" href={newsItem.articleSlug ? `/news/${newsItem.articleSlug}` : newsItem.link ?? "/news"}>
-                      {newsItem.title}
-                    </a>
-                  </li>
-                ))}
-              </ol>
             </div>
           ) : null}
         </aside>

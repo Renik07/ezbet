@@ -3,6 +3,7 @@ import type { Route } from "next";
 
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDateTime } from "@/lib/dates";
+import { getArticleAuthor } from "@/lib/authors";
 import type { NewsItem } from "@/lib/news";
 
 type NewsCardProps = {
@@ -24,6 +25,7 @@ export function NewsCard({ item }: NewsCardProps) {
   const label = formatCategoryLabel(item.category);
   const href = item.articleSlug ? (`/news/${item.articleSlug}` as Route) : item.link;
   const publishedAt = formatMoscowDateTime(item.publishedAt);
+  const editor = getArticleAuthor(item.category);
 
   const content = (
     <article className="news-item">
@@ -35,7 +37,11 @@ export function NewsCard({ item }: NewsCardProps) {
       </div>
       <h3 className="ni-title">{href ? <span>{item.title}</span> : item.title}</h3>
       <p className="ni-desc">{item.description}</p>
-      <span className="ni-source">{item.source}</span>
+      <div className="ni-attribution">
+        <span className="ni-editor">Редактор: {editor}</span>
+        <span className="ni-attribution-separator" aria-hidden="true">·</span>
+        <span className="ni-source">Источник: {item.source}</span>
+      </div>
     </article>
   );
 

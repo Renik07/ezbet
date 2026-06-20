@@ -119,7 +119,7 @@ export default async function NewsPage({
   };
 
   return (
-    <main>
+    <main className="news-page">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{

@@ -124,7 +124,9 @@ export default async function HomePage() {
             <h1 className="hero-title">{heroItem.title}</h1>
             <p className="hero-desc">{heroItem.description}</p>
             <div className="hero-meta">
-              <span className="meta-author">{heroItem.source}</span>
+              <span className="meta-author">
+                {getArticleAuthor(heroItem.category)} · {heroItem.source}
+              </span>
               <Link className="hero-read-btn" href={newsHref(heroItem.articleSlug)}>
                 Читать полностью
               </Link>
@@ -246,7 +248,7 @@ export default async function HomePage() {
       <section className="guides-section container-wide" aria-labelledby="guides-heading">
         <div className="section-header">
           <h2 className="section-title" id="guides-heading">
-            Полезные статьи
+            Аналитика и гайды
           </h2>
           <Link href="/news?type=guides" className="section-link">
             Все материалы
@@ -279,7 +281,7 @@ export default async function HomePage() {
           </div>
         ) : (
           <div className="guides-empty">
-            <h3>Полезные статьи появятся после первого ежедневного запуска</h3>
+            <h3>Аналитика и гайды появятся после первого ежедневного запуска</h3>
             <p>Раздел уже готов принимать материалы из расписания: тема выбирается из годового плана, статья пишется writer-агентом и публикуется на сайте.</p>
           </div>
         )}

@@ -5,8 +5,11 @@ import { absoluteUrl } from "@/lib/site";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
-  const { items } = await getNews(undefined, { aiOnly: true });
-  const articleUrls = items
+  const [{ items: newsItems }, { items: guideItems }] = await Promise.all([
+    getNews(undefined, { aiOnly: true }),
+    getNews(undefined, { guideOnly: true })
+  ]);
+  const articleUrls = [...newsItems, ...guideItems]
     .filter((item) => item.articleSlug)
     .map((item) => ({
       url: absoluteUrl(`/news/${item.articleSlug}`),
