@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
+import unicodedata
 import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +36,45 @@ from .models import (
     SchedulerSettings,
     SourceItem,
     SourceSyncState,
+)
+
+
+_CYRILLIC_TO_LATIN = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "y",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "h",
+        "ц": "ts",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "shch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
 )
 
 
@@ -718,6 +759,16 @@ class NewsRepository:
                 cursor.execute(
                     "ALTER TABLE articles ADD COLUMN IF NOT EXISTS ai_reviewed BOOLEAN NOT NULL DEFAULT TRUE"
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS article_slug_redirects (
+                        old_slug TEXT PRIMARY KEY,
+                        article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                self._normalize_article_slugs(cursor)
                 cursor.execute(
                     """
                     INSERT INTO scheduler_settings (
@@ -1722,7 +1773,8 @@ class NewsRepository:
                 a.updated_at
             FROM articles a
             JOIN news_items n ON n.id = a.news_item_id
-            WHERE a.slug = %s
+            LEFT JOIN article_slug_redirects r ON r.old_slug = %s
+            WHERE (a.slug = %s OR a.id = r.article_id)
         """
 
         if not include_hidden:
@@ -1730,13 +1782,38 @@ class NewsRepository:
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(statement, (slug,))
+                cursor.execute(statement, (slug, slug))
                 row = cursor.fetchone()
 
         if row is None:
             return None
 
         return self._map_article_row(row)
+
+    @staticmethod
+    def _normalize_article_slugs(cursor: psycopg.Cursor) -> None:
+        cursor.execute("SELECT id, slug, title, news_item_id FROM articles")
+        for article_id, old_slug, title, news_item_id in cursor.fetchall():
+            new_slug = _build_article_slug(str(title), str(news_item_id))
+            if old_slug == new_slug:
+                continue
+
+            cursor.execute(
+                """
+                INSERT INTO article_slug_redirects (old_slug, article_id)
+                VALUES (%s, %s)
+                ON CONFLICT (old_slug) DO UPDATE SET article_id = EXCLUDED.article_id
+                """,
+                (old_slug, article_id),
+            )
+            cursor.execute(
+                "UPDATE articles SET slug = %s, updated_at = NOW() WHERE id = %s",
+                (new_slug, article_id),
+            )
+            cursor.execute(
+                "UPDATE guide_topics SET article_slug = %s WHERE article_id = %s",
+                (new_slug, article_id),
+            )
 
     def get_news_item(self, news_item_id: str, *, include_hidden: bool = False) -> NewsItem | None:
         statement = """
@@ -5170,17 +5247,13 @@ class NewsRepository:
 
 
 def _build_article_slug(title: str, external_id: str) -> str:
-    normalized = "".join(char.lower() if char.isalnum() else "-" for char in title)
+    normalized = unicodedata.normalize("NFKD", title.lower()).translate(_CYRILLIC_TO_LATIN)
+    normalized = "".join(char if char.isascii() and char.isalnum() else "-" for char in normalized)
     slug = "-".join(part for part in normalized.split("-") if part).strip("-")
     if not slug:
         slug = "article"
 
-    suffix_source = external_id
-    parsed = urlsplit(external_id)
-    if parsed.path:
-        suffix_source = parsed.path.rstrip("/").split("/")[-1] or external_id
-
-    suffix = "".join(char.lower() for char in suffix_source if char.isalnum())[-10:] or "item"
+    suffix = hashlib.blake2s(external_id.encode("utf-8"), digest_size=4).hexdigest()
     return f"{slug[:70].rstrip('-')}-{suffix}"
 
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 
 import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
@@ -92,6 +92,10 @@ export default async function ArticlePage({
 
   if (!item) {
     notFound();
+  }
+
+  if (item.slug !== slug) {
+    permanentRedirect(`/news/${item.slug}`);
   }
 
   const relatedNews = (await getNews(formatCategoryLabel(item.category), { aiOnly: true })).items
