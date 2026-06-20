@@ -3,6 +3,8 @@ import type { MetadataRoute } from "next";
 import { getNews } from "@/lib/news";
 import { absoluteUrl } from "@/lib/site";
 
+export const dynamic = "force-dynamic";
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   const [{ items: newsItems }, { items: guideItems }] = await Promise.all([

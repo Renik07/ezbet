@@ -16,6 +16,11 @@ function formatArticleDate(date: string, guideArticle: boolean) {
   return guideArticle ? formatMoscowDate(date, "long") : formatMoscowDateTime(date);
 }
 
+function truncateText(value: string, maxLength = 60) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength).trimEnd()}…` : normalized;
+}
+
 export async function generateMetadata({
   params
 }: {
@@ -229,8 +234,14 @@ export default async function ArticlePage({
               <h3 className="sidebar-block-title">Темы</h3>
               <div className="topic-cloud">
                 {publicTags.map((tag) => (
-                  <Link key={`${item.id}-${tag}`} href={`/news?query=${encodeURIComponent(tag)}`} className="topic-chip">
-                    {tag}
+                  <Link
+                    key={`${item.id}-${tag}`}
+                    href={`/news?query=${encodeURIComponent(tag)}`}
+                    className="topic-chip"
+                    title={tag}
+                    aria-label={tag}
+                  >
+                    {truncateText(tag)}
                   </Link>
                 ))}
               </div>

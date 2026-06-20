@@ -890,6 +890,7 @@ Production env checklist перед первым controlled prod-run:
 - [ ] оптимизацию стоимости AI
 - [ ] антидубль и антиспам-логику
 - [ ] улучшение SEO и внутренней перелинковки
+- [ ] при росте числа публикаций перейти на sitemap-index: отдельные sitemap-файлы с новостями по месяцам и отдельный sitemap для гайдов, при этом индекс должен охватывать всю историю публичных материалов
 - [ ] генерацию хотя бы одной AI-иллюстрации для каждой статьи
 - [ ] поддержку `market` / `default_locale` на уровне конфигурации инстанса
 - [ ] frontend i18n для market-specific деплоев
@@ -1185,6 +1186,7 @@ nano .env
 # PROD
 cd /opt/ezbet
 git pull
+docker compose -f docker-compose.prod.yml up -d --build web
 docker compose -f docker-compose.prod.yml up -d --build
 
 # LOGS

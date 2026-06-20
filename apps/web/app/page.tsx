@@ -71,6 +71,11 @@ function newsHref(articleSlug?: string) {
   return articleSlug ? (`/news/${articleSlug}` as Route) : ("/news" as Route);
 }
 
+function truncateText(value: string, maxLength = 60) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength).trimEnd()}…` : normalized;
+}
+
 export default async function HomePage() {
   const [{ items: news, isLive }, { items: guideItems }] = await Promise.all([
     getNews(),
@@ -79,7 +84,7 @@ export default async function HomePage() {
   const guideNews = guideItems.slice(0, 4);
   const editorialNews = news.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
   const heroItem = editorialNews[0];
-  const tickerNews = editorialNews.slice(1, 7);
+  const tickerNews = editorialNews.slice(1, 6);
   const featuredNews = editorialNews.slice(1, 9);
   const popularNews = editorialNews.slice(0, 5);
   const homeJsonLd = {
@@ -167,12 +172,12 @@ export default async function HomePage() {
                   <span className="ti-time">{formatRelativeTime(item.publishedAt)}</span>
                   <span className={`ti-cat cat--${categoryTone(item.category)}`} />
                   {item.articleSlug ? (
-                    <Link className="ti-title" href={newsHref(item.articleSlug)}>
-                      {item.title}
+                    <Link className="ti-title" href={newsHref(item.articleSlug)} title={item.title} aria-label={item.title}>
+                      {truncateText(item.title)}
                     </Link>
                   ) : (
-                    <a className="ti-title" href={item.link ?? "/news"}>
-                      {item.title}
+                    <a className="ti-title" href={item.link ?? "/news"} title={item.title} aria-label={item.title}>
+                      {truncateText(item.title)}
                     </a>
                   )}
                 </li>
