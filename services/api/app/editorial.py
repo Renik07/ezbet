@@ -13,10 +13,10 @@ from .repository import NewsRepository
 def default_prompt_configs() -> list[PromptConfig]:
     return [
         PromptConfig(
-            id="prompt:writer:v8",
+            id="prompt:writer:v9",
             agent_key="writer",
-            name="Writer Author v8",
-            version=8,
+            name="Writer Author v9",
+            version=9,
             status="draft",
             system_prompt=(
                 "Ты — спортивный журналист редакции ezbet.ru. Пиши оригинальный, живой материал "
@@ -32,7 +32,8 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "Требования к title:\n"
                 "- 60-80 символов, главная мысль, не копируй заголовок оригинала;\n"
                 "- не начинай с имени/фамилии как первого слова, если можно выбрать более сильный угол;\n"
-                "- не используй кликбейт и факты, которых нет в источнике.\n\n"
+                "- не используй кликбейт и факты, которых нет в источнике;\n"
+                "- во всех полях title, dek и body используй только букву «е»: буква «ё» запрещена.\n\n"
                 "Требования к dek:\n"
                 "- 1-2 предложения, максимум 40 слов;\n"
                 "- крючок, контекст или сильное объяснение, почему новость важна;\n"
@@ -98,10 +99,10 @@ def default_prompt_configs() -> list[PromptConfig]:
             notes="Chief editor prompt adapted from ezbet_editor_prompt.txt to the internal review schema.",
         ),
         PromptConfig(
-            id="prompt:editor:v10",
+            id="prompt:editor:v11",
             agent_key="editor",
-            name="Editor Approve-First v10",
-            version=10,
+            name="Editor Approve-First v11",
+            version=11,
             status="draft",
             system_prompt=(
                 "Ты — выпускающий редактор ezbet.ru. Твоя задача — проверить материал Writer Agent перед публикацией. "
@@ -128,6 +129,7 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "Выбирай rewrite только если текст нельзя выпускать без заметной переработки: фактическая ошибка, "
                 "существенный домысел, опасная двусмысленность, сильный плагиат, verification-тон вместо новости. "
                 "В этом случае верни полный revised_title, revised_dek, revised_body.\n\n"
+                "Во всех текстовых полях используй только букву «е»: буква «ё» запрещена.\n\n"
                 "summary — максимум одно короткое предложение. notes — максимум одно короткое предложение. "
                 "Если decision=approve, revised_title/revised_dek/revised_body должны быть null."
             ),
@@ -161,10 +163,10 @@ def default_prompt_configs() -> list[PromptConfig]:
             notes="Default prompt for AI search source discovery.",
         ),
         PromptConfig(
-            id="prompt:guide-writer:v1",
+            id="prompt:guide-writer:v2",
             agent_key="guide_writer",
-            name="Guide Writer v1",
-            version=1,
+            name="Guide Writer v2",
+            version=2,
             status="active",
             system_prompt=(
                 "Ты автор больших evergreen-материалов для ezbet.ru. Пиши как спортивное медиа: "
@@ -186,6 +188,7 @@ def default_prompt_configs() -> list[PromptConfig]:
                 "- не выдумывай точные актуальные цифры, даты, зарплаты, рейтинги и рекорды, если не уверен;\n"
                 "- если тема зависит от текущего года, формулируй аккуратно: 'по открытым данным', 'обычно', 'среди главных факторов';\n"
                 "- не используй канцелярит, рекламный тон и фразы вроде 'в данной статье мы рассмотрим';\n"
+                "- во всех полях title, dek и body используй только букву «е»: буква «ё» запрещена;\n"
                 "- не добавляй отдельные поля кроме title, dek, body."
             ),
             model="editorial-default-v2",

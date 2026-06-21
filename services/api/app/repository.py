@@ -3258,6 +3258,7 @@ class NewsRepository:
                         "prompt:writer:v5",
                         "prompt:writer:v6",
                         "prompt:writer:v7",
+                        "prompt:writer:v8",
                     },
                     "editor": {
                         "prompt:editor:v1",
@@ -3269,7 +3270,9 @@ class NewsRepository:
                         "prompt:editor:v7",
                         "prompt:editor:v8",
                         "prompt:editor:v9",
+                        "prompt:editor:v10",
                     },
+                    "guide_writer": {"prompt:guide-writer:v1"},
                 }
                 legacy_default_names = {
                     "writer": {"Writer Editorial v1", "Writer Editorial v2", "Writer Editorial v3"},

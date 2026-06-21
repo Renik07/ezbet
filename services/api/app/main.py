@@ -94,12 +94,12 @@ async def lifespan(_: FastAPI):
     repository.ensure_schema()
     _recover_runtime_state(trigger="startup")
     repository.ensure_prompt_defaults(default_prompt_configs())
-    repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v8")
-    repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v10")
+    repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v9")
+    repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v11")
     repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
     try:
         repository.ensure_guide_topic_defaults(load_guide_topic_seed())
-        repository.maybe_activate_recommended_prompt("guide_writer", "prompt:guide-writer:v1")
+        repository.maybe_activate_recommended_prompt("guide_writer", "prompt:guide-writer:v2")
     except Exception:
         logger.exception("Guide article startup initialization failed; continuing without guide scheduler setup.")
     repository.sync_news_ai_review_flags()

@@ -1187,6 +1187,7 @@ nano .env
 cd /opt/ezbet
 git pull
 docker compose -f docker-compose.prod.yml up -d --build web
+docker compose -f docker-compose.prod.yml up -d --build api web
 docker compose -f docker-compose.prod.yml up -d --build
 
 # LOGS

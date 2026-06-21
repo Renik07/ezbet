@@ -120,9 +120,9 @@ class OpenAIEditorialClient:
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
-        title = _clean_text(data.get("title")) or raw_item.title
-        dek = _clean_text(data.get("dek")) or raw_item.summary
-        body = _clean_text(data.get("body"))
+        title = _replace_yo(_clean_text(data.get("title")) or raw_item.title)
+        dek = _replace_yo(_clean_text(data.get("dek")) or raw_item.summary)
+        body = _replace_yo(_clean_text(data.get("body")))
         if not body:
             return None
 
@@ -161,9 +161,9 @@ class OpenAIEditorialClient:
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
-        title = _clean_text(data.get("title")) or topic.title
-        dek = _clean_text(data.get("dek"))
-        body = _clean_text(data.get("body"))
+        title = _replace_yo(_clean_text(data.get("title")) or topic.title)
+        dek = _replace_yo(_clean_text(data.get("dek")))
+        body = _replace_yo(_clean_text(data.get("body")))
         if not dek or not body:
             return None
 
@@ -237,9 +237,9 @@ class OpenAIEditorialClient:
         decision = _clean_text(data.get("decision"))
         summary = _clean_text(data.get("summary"))
         notes = _clean_text(data.get("notes"))
-        revised_title = _clean_text(data.get("revised_title")) or None
-        revised_dek = _clean_text(data.get("revised_dek")) or None
-        revised_body = _clean_text(data.get("revised_body")) or None
+        revised_title = _replace_yo(_clean_text(data.get("revised_title"))) or None
+        revised_dek = _replace_yo(_clean_text(data.get("revised_dek"))) or None
+        revised_body = _replace_yo(_clean_text(data.get("revised_body"))) or None
         normalized_decision = _normalize_editor_decision(decision, revised_title, revised_dek, revised_body)
         if not summary or not notes:
             return None
@@ -302,9 +302,9 @@ class OpenAIEditorialClient:
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
-        title = _clean_text(data.get("title")) or draft.title
-        dek = _clean_text(data.get("dek")) or draft.dek
-        body = _clean_text(data.get("body"))
+        title = _replace_yo(_clean_text(data.get("title")) or draft.title)
+        dek = _replace_yo(_clean_text(data.get("dek")) or draft.dek)
+        body = _replace_yo(_clean_text(data.get("body")))
         if not body:
             return None
 
@@ -1039,6 +1039,10 @@ def _clean_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _replace_yo(value: str) -> str:
+    return value.replace("ё", "е").replace("Ё", "Е")
 
 
 def _normalize_editor_decision(
