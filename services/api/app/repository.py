@@ -813,7 +813,7 @@ class NewsRepository:
                             notes
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (id) DO NOTHING
+                        ON CONFLICT DO NOTHING
                         """,
                         (
                             prompt.id,
@@ -3227,6 +3227,10 @@ class NewsRepository:
     def maybe_activate_recommended_prompt(self, agent_key: str, recommended_prompt_id: str) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM prompt_configs WHERE id = %s", (recommended_prompt_id,))
+                if cursor.fetchone() is None:
+                    return
+
                 cursor.execute(
                     """
                     SELECT id, name, notes
@@ -3272,7 +3276,7 @@ class NewsRepository:
                         "prompt:editor:v9",
                         "prompt:editor:v10",
                     },
-                    "guide_writer": {"prompt:guide-writer:v1"},
+                    "guide_writer": {"prompt:guide-writer:v1", "prompt:guide-writer:v2"},
                 }
                 legacy_default_names = {
                     "writer": {"Writer Editorial v1", "Writer Editorial v2", "Writer Editorial v3"},

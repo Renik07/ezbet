@@ -163,10 +163,10 @@ def default_prompt_configs() -> list[PromptConfig]:
             notes="Default prompt for AI search source discovery.",
         ),
         PromptConfig(
-            id="prompt:guide-writer:v2",
+            id="prompt:guide-writer:v3",
             agent_key="guide_writer",
-            name="Guide Writer v2",
-            version=2,
+            name="Guide Writer v3",
+            version=3,
             status="active",
             system_prompt=(
                 "Ты автор больших evergreen-материалов для ezbet.ru. Пиши как спортивное медиа: "
