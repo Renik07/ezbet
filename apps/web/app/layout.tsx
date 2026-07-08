@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Script from "next/script";
 import { Suspense } from "react";
+import { GoogleAnalyticsPageViews } from "@/components/google-analytics";
 import { SiteFooter } from "@/components/site-footer";
 import { YandexMetrikaPageViews } from "@/components/yandex-metrika";
 import { METRIKA_ID } from "@/lib/metrika";
@@ -59,9 +60,27 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const googleAnalyticsId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID?.trim();
+
   return (
     <html lang="ru">
       <body>
+        {googleAnalyticsId ? (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${googleAnalyticsId}`}
+              strategy="afterInteractive"
+            />
+            <Script id="google-analytics" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${googleAnalyticsId}', { send_page_view: false });
+              `}
+            </Script>
+          </>
+        ) : null}
         <Script id="yandex-metrika" strategy="afterInteractive">
           {`
             (function(m,e,t,r,i,k,a){
@@ -81,6 +100,7 @@ export default function RootLayout({
         />
         <Suspense fallback={null}>
           <YandexMetrikaPageViews />
+          {googleAnalyticsId ? <GoogleAnalyticsPageViews measurementId={googleAnalyticsId} /> : null}
         </Suspense>
         <header className="site-header">
           <div className="site-header-inner container-wide">
