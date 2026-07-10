@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
+    restart: unless-stopped
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -26,6 +27,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
     environment:
       EZBET_API_BASE_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: http://api:8000
@@ -40,6 +42,7 @@ services:
 
   caddy:
     image: caddy:2.10-alpine
+    restart: unless-stopped
     depends_on:
       - web
     ports:
