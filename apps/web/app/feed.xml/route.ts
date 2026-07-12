@@ -9,7 +9,6 @@ type FeedItem = {
   description: string;
   category: string;
   publishedAt: string;
-  source: string;
   articleSlug?: string;
 };
 
@@ -20,10 +19,6 @@ function escapeXml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
-}
-
-function cdata(value: string) {
-  return `<![CDATA[${value.replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
 }
 
 async function fetchFeedItems() {
@@ -58,16 +53,13 @@ export async function GET() {
     .map((item) => {
       const itemUrl = absoluteUrl(`/news/${item.articleSlug}`);
       const pubDate = new Date(item.publishedAt).toUTCString();
-      const guid = item.id || itemUrl;
 
       return `
     <item>
-      <title>${cdata(item.title)}</title>
+      <title>${escapeXml(item.title)}</title>
       <link>${escapeXml(itemUrl)}</link>
-      <guid isPermaLink="false">${escapeXml(guid)}</guid>
-      <description>${cdata(item.description)}</description>
-      <category>${cdata(item.category)}</category>
-      <source url="${escapeXml(absoluteUrl("/"))}">${cdata(item.source || SITE_NAME)}</source>
+      <description>${escapeXml(item.description)}</description>
+      <category>${escapeXml(item.category)}</category>
       <pubDate>${pubDate}</pubDate>
     </item>`;
     })
