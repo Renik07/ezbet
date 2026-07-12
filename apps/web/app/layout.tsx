@@ -6,7 +6,7 @@ import { GoogleAnalyticsPageViews } from "@/components/google-analytics";
 import { SiteFooter } from "@/components/site-footer";
 import { YandexMetrikaPageViews } from "@/components/yandex-metrika";
 import { METRIKA_ID } from "@/lib/metrika";
-import { getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
+import { absoluteUrl, getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,7 +18,10 @@ export const metadata: Metadata = {
   },
   description: SITE_DESCRIPTION,
   alternates: {
-    canonical: "/"
+    canonical: "/",
+    types: {
+      "application/rss+xml": absoluteUrl("/feed.xml")
+    }
   },
   openGraph: {
     type: "website",
