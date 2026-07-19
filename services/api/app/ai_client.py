@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from socket import timeout as SocketTimeout
+from time import sleep
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.parse import urlunsplit
@@ -20,6 +21,13 @@ class DraftGenerationResult:
     title: str
     dek: str
     body: str
+    model: str
+    generation_mode: str
+
+
+@dataclass
+class GuideResearchResult:
+    brief: str
     model: str
     generation_mode: str
 
@@ -75,6 +83,7 @@ class ArticleExtractionResult:
 
 
 LLM_REQUEST_EXCEPTIONS = (ValueError, HTTPError, URLError, TimeoutError, SocketTimeout, OSError)
+LLM_TRANSIENT_EXCEPTIONS = (URLError, TimeoutError, SocketTimeout, OSError)
 
 
 class OpenAIEditorialClient:
@@ -116,7 +125,7 @@ class OpenAIEditorialClient:
                 operation="news_writer",
                 related_id=raw_item.id,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -134,19 +143,110 @@ class OpenAIEditorialClient:
             generation_mode=f"llm_{self.settings.api_style}",
         )
 
-    def generate_guide_article(self, topic: GuideTopic, prompt: PromptConfig) -> DraftGenerationResult | None:
+    def generate_guide_article(
+        self,
+        topic: GuideTopic,
+        prompt: PromptConfig,
+        editor_prompt: PromptConfig | None = None,
+    ) -> DraftGenerationResult | None:
         if not self.enabled:
             return None
 
+        use_web_search = topic.requires_web_search and self._should_enable_web_search_for_request()
+        research = self.research_guide_topic(topic) if use_web_search else None
+        if use_web_search and research is None:
+            sleep(1)
+            research = self.research_guide_topic(topic)
+        if use_web_search and research is None:
+            return None
+
+        generated = self._write_guide_article(topic, prompt, research=research)
+        if generated is None:
+            return None
+
+        if use_web_search and editor_prompt is not None:
+            edited = self.edit_guide_article(topic, editor_prompt, generated, research=research)
+            if edited is not None:
+                return edited
+
+        return generated
+
+    def research_guide_topic(self, topic: GuideTopic) -> GuideResearchResult | None:
+        if not self.enabled or not self._should_enable_web_search_for_request():
+            return None
+
+        input_text = (
+            "Return only valid JSON with key research_brief.\n"
+            f"topic: {topic.title}\n"
+            f"section: {topic.section}\n"
+            f"category: {topic.category}\n"
+            "Task: collect concrete factual material for a Russian longform sports article.\n"
+            "The research_brief must be in Russian and contain 6-10 compact bullet lines.\n"
+            "Each bullet must include at least one concrete number, amount, date, country, organization, person, event, or named program.\n"
+            "Prefer official sources, federations, Olympic committees, major sports media, financial reports, and reputable business media.\n"
+            "Do not write generic advice. Do not include markdown links, source URLs, citation markers, or bibliography in research_brief.\n"
+            "If sources disagree, mention the range or uncertainty in the bullet itself."
+        )
+
+        try:
+            payload = self._create_response(
+                instructions=(
+                    "Ты research-редактор ezbet.ru. Твоя задача — найти конкретные проверяемые факты, цифры, "
+                    "суммы, имена, страны и даты для будущей статьи. Не пиши статью. Не добавляй ссылки в текст."
+                ),
+                input_text=input_text,
+                model=self.settings.editorial_model,
+                tools=self._build_guide_web_search_tools(topic.search_context_size),
+                operation="guide_research_web_search",
+                related_id=f"guide-topic:{topic.topic_number}",
+            )
+            data = _loads_llm_json(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        research_value: Any = data
+        if isinstance(data, dict):
+            research_value = data.get("research_brief") or data.get("facts") or data.get("items") or data
+        brief = _strip_markdown_links(_replace_yo(_coerce_research_brief(research_value)))
+        if len(brief) < 200:
+            return None
+
+        return GuideResearchResult(
+            brief=brief,
+            model=self.settings.editorial_model,
+            generation_mode=f"llm_{self.settings.api_style}_guide_research_web_search",
+        )
+
+    def _write_guide_article(
+        self,
+        topic: GuideTopic,
+        prompt: PromptConfig,
+        *,
+        research: GuideResearchResult | None = None,
+    ) -> DraftGenerationResult | None:
+        fact_mode_block = (
+            "Research brief is provided below. Use it as the factual backbone of the article.\n"
+            "Requirements for this fact-based article:\n"
+            "- use at least 7 concrete facts from research_brief;\n"
+            "- include numbers, amounts, dates, countries, organizations, names or named programs where relevant;\n"
+            "- explain what the numbers mean for the reader;\n"
+            "- do not include markdown links, URLs, citation markers, source lists, or bibliography in title, dek or body;\n"
+            "- do not write generic filler if a concrete figure is available.\n"
+            f"research_brief:\n{research.brief}\n"
+            if research is not None
+            else "Fresh facts mode: web search is disabled for this topic; avoid precise current facts unless they are stable and widely known.\n"
+        )
         input_text = (
             "Return only valid JSON with keys title, dek, body.\n"
             f"topic: {topic.title}\n"
             f"section: {topic.section}\n"
             f"category: {topic.category}\n"
+            f"{fact_mode_block}"
             "Audience: Russian sports media readers. The article should be evergreen, useful for search traffic, "
             "and readable as a standalone longform piece on ezbet.ru.\n"
             "Constraints: write in Russian, do not invent precise current facts, avoid betting calls to action, "
-            "and separate body paragraphs with two newline characters."
+            "proofread grammar carefully, do not duplicate dek in the first paragraph, do not write standalone section headings, "
+            "make every paragraph complete prose, and separate body paragraphs with two newline characters."
         )
         instructions = f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}"
 
@@ -154,16 +254,16 @@ class OpenAIEditorialClient:
             payload = self._create_response(
                 instructions=instructions,
                 input_text=input_text,
-                operation="guide_writer",
+                operation="guide_writer_from_research" if research is not None else "guide_writer",
                 related_id=f"guide-topic:{topic.topic_number}",
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
         title = _replace_yo(_clean_text(data.get("title")) or topic.title)
         dek = _replace_yo(_clean_text(data.get("dek")))
-        body = _replace_yo(_clean_text(data.get("body")))
+        body = _normalize_guide_body(_replace_yo(_clean_text(data.get("body"))))
         if not dek or not body:
             return None
 
@@ -172,7 +272,65 @@ class OpenAIEditorialClient:
             dek=dek,
             body=body,
             model=self.settings.editorial_model,
-            generation_mode=f"llm_{self.settings.api_style}_guide",
+            generation_mode=(
+                f"llm_{self.settings.api_style}_guide_from_research"
+                if research is not None
+                else f"llm_{self.settings.api_style}_guide"
+            ),
+        )
+
+    def edit_guide_article(
+        self,
+        topic: GuideTopic,
+        prompt: PromptConfig,
+        draft: DraftGenerationResult,
+        *,
+        research: GuideResearchResult | None = None,
+    ) -> DraftGenerationResult | None:
+        if not self.enabled:
+            return None
+
+        research_block = f"research_brief:\n{research.brief}\n" if research is not None else ""
+        input_text = (
+            "Return only valid JSON with keys title, dek, body.\n"
+            f"topic: {topic.title}\n"
+            f"section: {topic.section}\n"
+            f"category: {topic.category}\n"
+            f"{research_block}"
+            "draft_title:\n"
+            f"{draft.title}\n"
+            "draft_dek:\n"
+            f"{draft.dek}\n"
+            "draft_body:\n"
+            f"{draft.body}\n"
+            "Edit the draft for publication. Preserve concrete facts, numbers, amounts, dates and named entities from the research. "
+            "Remove generic filler, grammar mistakes, markdown links, URLs, citation markers and source lists. "
+            "Make the prose lively but calm, with complete paragraphs separated by two newline characters."
+        )
+
+        try:
+            payload = self._create_response(
+                instructions=f"{prompt.system_prompt}\n\n{prompt.user_prompt_template}",
+                input_text=input_text,
+                operation="guide_editor",
+                related_id=f"guide-topic:{topic.topic_number}",
+            )
+            data = _loads_llm_json(payload)
+        except LLM_REQUEST_EXCEPTIONS:
+            return None
+
+        title = _replace_yo(_clean_text(data.get("title")) or draft.title)
+        dek = _replace_yo(_clean_text(data.get("dek")) or draft.dek)
+        body = _normalize_guide_body(_replace_yo(_clean_text(data.get("body")) or draft.body))
+        if not dek or not body:
+            return None
+
+        return DraftGenerationResult(
+            title=_strip_markdown_links(title),
+            dek=_strip_markdown_links(dek),
+            body=_strip_markdown_links(body),
+            model=self.settings.editorial_model,
+            generation_mode=f"{draft.generation_mode}_edited",
         )
 
     def review_draft(
@@ -230,7 +388,7 @@ class OpenAIEditorialClient:
                 operation="news_editor",
                 related_id=draft.raw_item_id,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -298,7 +456,7 @@ class OpenAIEditorialClient:
                 operation="news_rewrite",
                 related_id=draft.raw_item_id,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -365,7 +523,7 @@ class OpenAIEditorialClient:
                 input_text=input_text,
                 operation="content_plan_rerank",
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -451,7 +609,7 @@ class OpenAIEditorialClient:
                 operation="source_discovery",
                 related_id=source.key,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -539,7 +697,7 @@ class OpenAIEditorialClient:
                 operation="source_resolve_url",
                 related_id=source.key,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -614,7 +772,7 @@ class OpenAIEditorialClient:
                 operation="enrichment_web_extract" if allow_web_search else "enrichment_html_extract",
                 related_id=url,
             )
-            data = json.loads(payload)
+            data = _loads_llm_json(payload)
         except LLM_REQUEST_EXCEPTIONS:
             return None
 
@@ -719,7 +877,7 @@ class OpenAIEditorialClient:
                     operation="enrichment_search_extract",
                     related_id=url,
                 )
-                data = json.loads(payload)
+                data = _loads_llm_json(payload)
             except LLM_REQUEST_EXCEPTIONS:
                 continue
 
@@ -827,8 +985,15 @@ class OpenAIEditorialClient:
             method="POST",
         )
 
-        with urlopen(request, timeout=self.settings.timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        for attempt in range(2):
+            try:
+                with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except LLM_TRANSIENT_EXCEPTIONS:
+                if attempt >= 1:
+                    raise
+                sleep(1)
 
         record_ai_usage_event(
             operation=operation,
@@ -864,6 +1029,19 @@ class OpenAIEditorialClient:
                 "allowed_domains": [host],
             }
         return [tool]
+
+    def _build_guide_web_search_tools(self, context_size: str = "low") -> list[dict[str, Any]] | None:
+        if not self._should_enable_web_search_for_request():
+            return None
+
+        safe_context_size = context_size if context_size in {"low", "medium", "high"} else "low"
+        return [
+            {
+                "type": "web_search",
+                "external_web_access": self.settings.web_search_live,
+                "search_context_size": safe_context_size,
+            }
+        ]
 
     def _create_chat_completion(
         self,
@@ -924,6 +1102,22 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
                 chunks.append(text.strip())
 
     return "\n".join(chunks).strip()
+
+
+def _loads_llm_json(payload: str) -> Any:
+    cleaned = payload.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start : end + 1], strict=False)
+        raise
 
 
 def _count_web_search_calls(payload: dict[str, Any]) -> int:
@@ -1039,6 +1233,53 @@ def _clean_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _normalize_guide_body(value: str) -> str:
+    replacements = {
+        "групповго": "группового",
+        "чемпионом победа": "чемпиона победа",
+        "выгодu": "выгоду",
+        "тп.": "т. п.",
+        " тп": " т. п.",
+        "из за": "из-за",
+    }
+    normalized = value
+    for raw, replacement in replacements.items():
+        normalized = re.sub(re.escape(raw), replacement, normalized, flags=re.IGNORECASE)
+    return _strip_markdown_links(normalized).strip()
+
+
+def _strip_markdown_links(value: str) -> str:
+    cleaned = re.sub(r"\s*\(\[[^\]]+\]\([^)]+\)\)", "", value)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _coerce_research_brief(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, list):
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                lines.append(item.strip())
+            elif isinstance(item, dict):
+                parts = [_clean_text(part) for part in item.values()]
+                lines.append("; ".join(part for part in parts if part))
+        return "\n".join(line for line in lines if line)
+
+    if isinstance(value, dict):
+        for key in ("research_brief", "facts", "items", "bullets"):
+            if key in value:
+                return _coerce_research_brief(value[key])
+        parts = [_clean_text(part) for part in value.values()]
+        return "\n".join(part for part in parts if part)
+
+    return ""
 
 
 def _replace_yo(value: str) -> str:

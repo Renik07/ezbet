@@ -100,6 +100,7 @@ async def lifespan(_: FastAPI):
     try:
         repository.ensure_guide_topic_defaults(load_guide_topic_seed())
         repository.maybe_activate_recommended_prompt("guide_writer", "prompt:guide-writer:v3")
+        repository.maybe_activate_recommended_prompt("guide_editor", "prompt:guide-editor:v2")
     except Exception:
         logger.exception("Guide article startup initialization failed; continuing without guide scheduler setup.")
     repository.sync_news_ai_review_flags()
@@ -2346,7 +2347,8 @@ def _run_guide_scheduler() -> GuideSchedulerRunResponse:
                 return GuideSchedulerRunResponse(ran=False, reason="no_planned_topics")
 
             prompt = repository.get_active_prompt("guide_writer")
-            generated = OpenAIEditorialClient().generate_guide_article(topic, prompt)
+            guide_editor_prompt = repository.get_active_prompt("guide_editor")
+            generated = OpenAIEditorialClient().generate_guide_article(topic, prompt, guide_editor_prompt)
             if generated is None:
                 raise RuntimeError("Guide writer did not return a valid article.")
 

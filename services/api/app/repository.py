@@ -300,6 +300,8 @@ class NewsRepository:
                         title TEXT NOT NULL,
                         section TEXT NOT NULL,
                         category TEXT NOT NULL,
+                        requires_web_search BOOLEAN NOT NULL DEFAULT FALSE,
+                        search_context_size TEXT NOT NULL DEFAULT 'low',
                         status TEXT NOT NULL DEFAULT 'planned',
                         article_id TEXT,
                         article_slug TEXT,
@@ -311,6 +313,12 @@ class NewsRepository:
                 )
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_guide_topics_status_number ON guide_topics (status, topic_number)"
+                )
+                cursor.execute(
+                    "ALTER TABLE guide_topics ADD COLUMN IF NOT EXISTS requires_web_search BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE guide_topics ADD COLUMN IF NOT EXISTS search_context_size TEXT NOT NULL DEFAULT 'low'"
                 )
                 cursor.execute(
                     """
@@ -843,9 +851,11 @@ class NewsRepository:
                             topic_number,
                             title,
                             section,
-                            category
+                            category,
+                            requires_web_search,
+                            search_context_size
                         )
-                        VALUES (%s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (topic_number) DO UPDATE SET
                             title = CASE
                                 WHEN guide_topics.status = 'planned' THEN EXCLUDED.title
@@ -859,6 +869,14 @@ class NewsRepository:
                                 WHEN guide_topics.status = 'planned' THEN EXCLUDED.category
                                 ELSE guide_topics.category
                             END,
+                            requires_web_search = CASE
+                                WHEN guide_topics.status = 'planned' THEN EXCLUDED.requires_web_search
+                                ELSE guide_topics.requires_web_search
+                            END,
+                            search_context_size = CASE
+                                WHEN guide_topics.status = 'planned' THEN EXCLUDED.search_context_size
+                                ELSE guide_topics.search_context_size
+                            END,
                             updated_at = CASE
                                 WHEN guide_topics.status = 'planned' THEN NOW()
                                 ELSE guide_topics.updated_at
@@ -869,6 +887,8 @@ class NewsRepository:
                             topic["title"],
                             topic["section"],
                             topic["category"],
+                            bool(topic.get("requires_web_search", False)),
+                            str(topic.get("search_context_size") or "low"),
                         ),
                     )
             connection.commit()
@@ -1845,6 +1865,8 @@ class NewsRepository:
                 title,
                 section,
                 category,
+                requires_web_search,
+                search_context_size,
                 status,
                 article_id,
                 article_slug,
@@ -1961,6 +1983,8 @@ class NewsRepository:
                 title,
                 section,
                 category,
+                requires_web_search,
+                search_context_size,
                 status,
                 article_id,
                 article_slug,
@@ -3277,6 +3301,7 @@ class NewsRepository:
                         "prompt:editor:v10",
                     },
                     "guide_writer": {"prompt:guide-writer:v1", "prompt:guide-writer:v2"},
+                    "guide_editor": {"prompt:guide-editor:v1"},
                 }
                 legacy_default_names = {
                     "writer": {"Writer Editorial v1", "Writer Editorial v2", "Writer Editorial v3"},
@@ -5011,12 +5036,14 @@ class NewsRepository:
             title=str(row[2]),
             section=str(row[3]),
             category=str(row[4]),
-            status=str(row[5]),
-            article_id=row[6],
-            article_slug=row[7],
-            last_error=row[8],
-            created_at=row[9],
-            updated_at=row[10],
+            requires_web_search=bool(row[5]),
+            search_context_size=str(row[6] or "low"),
+            status=str(row[7]),
+            article_id=row[8],
+            article_slug=row[9],
+            last_error=row[10],
+            created_at=row[11],
+            updated_at=row[12],
         )
 
     @staticmethod

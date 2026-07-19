@@ -1275,6 +1275,7 @@ export default async function AdminPage({
                 <th>Input</th>
                 <th>Output</th>
                 <th>Cached</th>
+                <th>Web search</th>
               </tr>
             </thead>
             <tbody>
@@ -1289,11 +1290,12 @@ export default async function AdminPage({
                   <td>{formatCompactNumber(row.inputTokens)}</td>
                   <td>{formatCompactNumber(row.outputTokens)}</td>
                   <td>{formatCompactNumber(row.cachedInputTokens)}</td>
+                  <td>{formatNumber(row.webSearchCalls)}</td>
                 </tr>
               ))}
               {!aiUsageSummary.items.length ? (
                 <tr>
-                  <td colSpan={9}>После первого нового AI-запроса здесь появится разбивка.</td>
+                  <td colSpan={10}>После первого нового AI-запроса здесь появится разбивка.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1552,6 +1554,14 @@ function formatAiOperation(operation: string) {
       return "Новости: rewrite";
     case "guide_writer":
       return "Статьи: writer";
+    case "guide_writer_web_search":
+      return "Статьи: writer + web search";
+    case "guide_research_web_search":
+      return "Статьи: research + web search";
+    case "guide_writer_from_research":
+      return "Статьи: writer по research";
+    case "guide_editor":
+      return "Статьи: editor";
     case "content_plan_rerank":
       return "Content plan rerank";
     case "source_discovery":

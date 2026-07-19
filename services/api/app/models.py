@@ -244,6 +244,8 @@ class GuideTopic(BaseModel):
     title: str
     section: str
     category: str
+    requires_web_search: bool = Field(default=False, serialization_alias="requiresWebSearch")
+    search_context_size: str = Field(default="low", serialization_alias="searchContextSize")
     status: str = "planned"
     article_id: Optional[str] = Field(default=None, serialization_alias="articleId")
     article_slug: Optional[str] = Field(default=None, serialization_alias="articleSlug")

@@ -55,6 +55,8 @@ def load_guide_topic_seed() -> list[dict[str, object]]:
             "title": title,
             "section": "ЧМ-2026",
             "category": "Беттинг",
+            "requires_web_search": _requires_web_search(title, "ЧМ-2026"),
+            "search_context_size": _search_context_size(title, "ЧМ-2026"),
         }
         for index, title in enumerate(WORLD_CUP_2026_TOPICS, start=1)
     ]
@@ -90,6 +92,8 @@ def _load_markdown_topics(markdown_path: Path, *, offset: int) -> list[dict[str,
                 "title": title,
                 "section": current_section,
                 "category": _category_from_section(current_section),
+                "requires_web_search": _requires_web_search(title, current_section),
+                "search_context_size": _search_context_size(title, current_section),
             }
         )
 
@@ -137,3 +141,84 @@ def _category_from_section(section: str) -> str:
     if section.startswith("Истории"):
         return "Спорт"
     return "Спорт"
+
+
+def _requires_web_search(title: str, section: str) -> bool:
+    normalized = f"{title} {section}".lower()
+    if any(
+        marker in normalized
+        for marker in (
+            "самые высокооплачиваемые",
+            "самые богатые",
+            "самые дорогие",
+            "дорогих трансфер",
+            "дорогие контракты",
+            "дорогие спортивные контракты",
+            "дорогие спортивные франшизы",
+            "дорогие футбольные стадионы",
+            "дорогие боксерские поединки",
+            "дорогие олимпиады",
+            "стоимость футбольного клуба",
+            "стоимость контрактов",
+            "зарабатывают",
+            "зарабатывать",
+            "призовые",
+            "фан-баз",
+            "в 2026 году",
+        )
+    ):
+        return True
+
+    if any(
+        marker in normalized
+        for marker in (
+            "перспективные молодые игроки",
+            "перспективные молодые теннисисты",
+            "перспективные молодые хоккеисты",
+            "молодые футболисты, за которыми стоит следить",
+            "популярные киберспортивные дисциплины",
+        )
+    ):
+        return True
+
+    business_markers = (
+        "международных турне",
+        "на мерче",
+        "спонсорские контракты",
+        "клубы зарабатывают",
+        "промоутеры зарабатывают",
+        "города зарабатывают",
+        "клубы зарабатывают вне призовых",
+        "спортивные лиги продают календарь телевидению",
+        "чемпионский титул влияет на стоимость",
+    )
+    if any(marker in normalized for marker in business_markers):
+        return True
+
+    if "netflix" in normalized and "формулы-1" in normalized:
+        return True
+
+    if "новак джокович" in normalized and "рекорд" in normalized:
+        return True
+
+    return False
+
+
+def _search_context_size(title: str, section: str) -> str:
+    normalized = f"{title} {section}".lower()
+    if any(
+        marker in normalized
+        for marker in (
+            "самые",
+            "топ-",
+            "контракты",
+            "стоимость",
+            "зарабатывают",
+            "призовые",
+            "фан-баз",
+            "в 2026 году",
+            "перспективные молодые",
+        )
+    ):
+        return "medium"
+    return "low"

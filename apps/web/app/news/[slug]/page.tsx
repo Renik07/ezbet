@@ -107,6 +107,8 @@ export default async function ArticlePage({
   const guideArticle = isGuideArticle(item.newsItemId);
   const articleEditor = getArticleAuthor(item.category);
   const displayDate = formatArticleDate(item.publishedAt, guideArticle);
+  const articleLead =
+    item.lead && normalizeArticleText(item.lead) !== normalizeArticleText(item.dek) ? item.lead : null;
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -178,7 +180,7 @@ export default async function ArticlePage({
 
       <div className="article-layout container-wide">
         <article className="article-reading">
-          {item.lead ? <p className="article-lead">{item.lead}</p> : null}
+          {articleLead ? <p className="article-lead">{articleLead}</p> : null}
           <div className="article-body">
             {paragraphs.map((paragraph, index) => (
               <p key={`${item.id}-${index}`}>{paragraph}</p>
@@ -255,4 +257,8 @@ export default async function ArticlePage({
       </div>
     </main>
   );
+}
+
+function normalizeArticleText(value?: string | null) {
+  return (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 }
