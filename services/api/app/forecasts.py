@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 LEON_TOP_EVENTS_URL = "https://leon.ru/blog/api/top-events?limit=100&sport_id=1"
 MOSCOW_TZ = timezone(timedelta(hours=3))
-MAX_FORECASTS = 5
+MAX_FORECASTS = 6
 MAX_PER_LEAGUE = 2
 
 HIGH_PRIORITY_LEAGUES = (

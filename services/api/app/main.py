@@ -127,9 +127,9 @@ EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
 PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 GUIDE_SCHEDULER_LOCK_KEY = 4815162346
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
-FORECAST_PUBLISH_LIMIT = 5
+FORECAST_PUBLISH_LIMIT = 6
 FORECAST_MIN_READY = 3
-FORECAST_CANDIDATE_LIMIT = 10
+FORECAST_CANDIDATE_LIMIT = 12
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 PIPELINE_RUN_LOCK = threading.Lock()
@@ -568,6 +568,8 @@ def list_match_forecasts() -> MatchForecastListResponse:
         for forecast in repository.list_match_forecasts()
         if forecast.generation_status == "ready"
     ]
+    if len(ready) < FORECAST_MIN_READY:
+        return MatchForecastListResponse(items=[])
     return MatchForecastListResponse(items=ready[:FORECAST_PUBLISH_LIMIT])
 
 
@@ -625,7 +627,7 @@ def generate_first_match_forecast_test(request: Request) -> MatchForecastRespons
 
 @app.post("/api/v1/forecasts/daily-run", response_model=ForecastGenerationResponse)
 def run_daily_match_forecasts(request: Request) -> ForecastGenerationResponse:
-    """Publish up to five forecasts, using same-day reserves until at least three are ready."""
+    """Publish from three to six forecasts, using same-day reserves when generation fails."""
     _require_admin_api_token(request)
     events = fetch_leon_football_events()
     selected = select_top_forecasts(events, limit=FORECAST_CANDIDATE_LIMIT)

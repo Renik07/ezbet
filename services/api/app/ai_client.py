@@ -160,10 +160,11 @@ class OpenAIEditorialClient:
             f"match: {forecast.home_team} vs {forecast.away_team}\nleague: {forecast.league}\n"
             f"kickoff: {forecast.kickoff.isoformat()}\nodds: 1={forecast.odds_home}, X={forecast.odds_draw}, 2={forecast.odds_away}\n"
             f"Cutoff date: {cutoff_date}. Do not use events or news after this date.\n"
-            "Find at least two different recent completed matches for EACH team (four result facts total). "
+            "Find at least one recent completed match for EACH team (two result facts total). "
             "Optionally add one head-to-head result and one squad/injury fact only when confidently identified. "
             "Do not return the upcoming fixture itself as a fact. "
-            "Every fact must contain one direct public source URL and the date of the event or publication in YYYY-MM-DD. "
+            "Every fact must contain one direct public source URL. Include the event or publication date in YYYY-MM-DD "
+            "when it is available; otherwise return an empty event_date. "
             "Prefer official league/club pages and established sports media. Search snippets, prediction/odds sites, "
             "aggregators and unsourced statistics are not sufficient evidence. Preserve team names exactly as provided. "
             "Write every statement and source title in Russian. "
@@ -213,7 +214,7 @@ class OpenAIEditorialClient:
                                     ],
                                     "additionalProperties": False,
                                 },
-                                "minItems": 4,
+                                "minItems": 2,
                                 "maxItems": 8,
                             },
                         },
@@ -247,7 +248,7 @@ class OpenAIEditorialClient:
         )
         home_result_dates = {fact["event_date"] for fact in facts if fact["kind"] == "home_result"}
         away_result_dates = {fact["event_date"] for fact in facts if fact["kind"] == "away_result"}
-        if len(facts) < 3 or not home_result_dates or not away_result_dates:
+        if len(facts) < 2 or not home_result_dates or not away_result_dates:
             logger.error("Match research validation failed: payload_preview=%s", research_payload[:1000])
             return None
 
@@ -275,8 +276,8 @@ class OpenAIEditorialClient:
             f"Команды: {forecast.home_team} — {forecast.away_team}\nЛига: {forecast.league}\n"
             f"Коэффициенты: П1 {forecast.odds_home}, X {forecast.odds_draw}, П2 {forecast.odds_away}\n"
             f"Проверенные факты:\n{research_brief}\n"
-            "Напиши короткий прогноз для страницы матча. Используй названия команд ровно как указано выше. "
-            "Не изменяй, не переводи и не склоняй названия команд: копируй их посимвольно. "
+            "Напиши короткий прогноз для страницы матча. Используй исходные русские названия команд и не переводи их "
+            "на другой язык. Допустимы естественные сокращения и склонение названий в русском тексте. "
             "Только грамотный русский язык, без ссылок, названий источников, канцелярита и сведений сверх списка фактов. "
             "Используй естественные футбольные формулировки, без буквальных переводов, смешения языков и несуществующих слов. "
             "Если подтвержденные матчи состоялись давно, называй их доступными результатами, а не последними турами. "
@@ -326,14 +327,6 @@ class OpenAIEditorialClient:
         required = ("lead", "home_form", "away_form", "pick")
         if not isinstance(data, dict) or not all(_clean_text(data.get(key)) for key in required) or not isinstance(factors, list):
             logger.error("Match writer validation failed: payload_preview=%s", writing_payload[:1000])
-            return None
-        if (
-            forecast.home_team not in _clean_text(data["home_form"])
-            or forecast.away_team not in _clean_text(data["away_form"])
-            or forecast.home_team not in _clean_text(data["lead"])
-            or forecast.away_team not in _clean_text(data["lead"])
-        ):
-            logger.error("Match writer changed team names: payload_preview=%s", writing_payload[:1000])
             return None
         return {
             "research_brief": _replace_yo(research_brief),
@@ -1357,25 +1350,26 @@ def _validate_match_research_facts(
     seen: set[tuple[str, str]] = set()
     allowed_kinds = {"home_result", "away_result", "head_to_head", "squad_news"}
     for item in value:
-        if not isinstance(item, dict) or item.get("confidence") != "high":
+        if not isinstance(item, dict) or item.get("confidence") not in {"high", "medium"}:
             continue
         statement = _clean_text(item.get("statement"))
         source_url = _clean_text(item.get("source_url"))
         source_title = _clean_text(item.get("source_title"))
         event_date_text = _clean_text(item.get("event_date"))
         kind = _clean_text(item.get("kind"))
-        if not all((statement, source_url, source_title, event_date_text)) or kind not in allowed_kinds:
+        if not all((statement, source_url, source_title)) or kind not in allowed_kinds:
             continue
         if len(statement) < 30 or _is_internal_citation_text(statement):
             continue
         if not _is_public_http_url(source_url):
             continue
-        try:
-            event_date = date.fromisoformat(event_date_text)
-        except ValueError:
-            continue
-        if event_date > cutoff_date:
-            continue
+        if event_date_text:
+            try:
+                event_date = date.fromisoformat(event_date_text)
+            except ValueError:
+                continue
+            if event_date > cutoff_date:
+                continue
         key = (statement.casefold(), source_url)
         if key in seen:
             continue
@@ -1385,7 +1379,7 @@ def _validate_match_research_facts(
                 "statement": statement,
                 "source_url": source_url,
                 "source_title": source_title,
-                "event_date": event_date_text,
+                "event_date": event_date_text or "дата не указана",
                 "kind": kind,
             }
         )
