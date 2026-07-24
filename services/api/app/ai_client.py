@@ -146,7 +146,12 @@ class OpenAIEditorialClient:
             generation_mode=f"llm_{self.settings.api_style}",
         )
 
-    def generate_match_forecast(self, forecast: Any) -> dict[str, object] | None:
+    def generate_match_forecast(
+        self,
+        forecast: Any,
+        *,
+        search_context_size: str = "medium",
+    ) -> dict[str, object] | None:
         """One-match test flow: factual web research first, polished Russian copy second."""
         if not self.enabled or not self._should_enable_web_search_for_request():
             return None
@@ -171,7 +176,7 @@ class OpenAIEditorialClient:
                 instructions="Ты фактчекер спортивной редакции. Найди свежие проверяемые факты, не пиши прогноз и не добавляй домыслы.",
                 input_text=research_input,
                 model=self.settings.search_model,
-                tools=[{"type": "web_search", "search_context_size": "medium"}],
+                tools=[{"type": "web_search", "search_context_size": search_context_size}],
                 include=["web_search_call.action.sources"],
                 max_output_tokens=4000,
                 reasoning_effort="low",

@@ -51,7 +51,11 @@ def fetch_leon_football_events(timeout_seconds: int = 20) -> list[dict[str, Any]
     return [item for item in payload if isinstance(item, dict)]
 
 
-def select_top_forecasts(events: list[dict[str, Any]], now: datetime | None = None) -> list[SelectedForecast]:
+def select_top_forecasts(
+    events: list[dict[str, Any]],
+    now: datetime | None = None,
+    limit: int = MAX_FORECASTS,
+) -> list[SelectedForecast]:
     current_time = (now or datetime.now(MOSCOW_TZ)).astimezone(MOSCOW_TZ)
     day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
@@ -103,13 +107,15 @@ def select_top_forecasts(events: list[dict[str, Any]], now: datetime | None = No
             continue
         selected.append(candidate)
         league_counts[league_key] = league_counts.get(league_key, 0) + 1
-        if len(selected) == MAX_FORECASTS:
+        if len(selected) == limit:
             break
     return selected
 
 
 def _league_priority(league: str) -> int:
     normalized = league.casefold()
+    if "женщ" in normalized:
+        return 0
     if any(name in normalized for name in HIGH_PRIORITY_LEAGUES):
         return 3
     return 1

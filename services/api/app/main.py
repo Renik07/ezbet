@@ -127,6 +127,9 @@ EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
 PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 GUIDE_SCHEDULER_LOCK_KEY = 4815162346
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
+FORECAST_PUBLISH_LIMIT = 5
+FORECAST_MIN_READY = 3
+FORECAST_CANDIDATE_LIMIT = 10
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 PIPELINE_RUN_LOCK = threading.Lock()
@@ -560,13 +563,18 @@ def get_article(slug: str) -> ArticleResponse:
 
 @app.get("/api/v1/forecasts", response_model=MatchForecastListResponse)
 def list_match_forecasts() -> MatchForecastListResponse:
-    return MatchForecastListResponse(items=repository.list_match_forecasts())
+    ready = [
+        forecast
+        for forecast in repository.list_match_forecasts()
+        if forecast.generation_status == "ready"
+    ]
+    return MatchForecastListResponse(items=ready[:FORECAST_PUBLISH_LIMIT])
 
 
 @app.get("/api/v1/forecasts/{slug}", response_model=MatchForecastResponse)
 def get_match_forecast(slug: str) -> MatchForecastResponse:
     forecast = repository.get_match_forecast(slug)
-    if forecast is None:
+    if forecast is None or forecast.generation_status != "ready":
         raise HTTPException(status_code=404, detail="Match forecast not found")
     return MatchForecastResponse(item=forecast)
 
@@ -617,10 +625,10 @@ def generate_first_match_forecast_test(request: Request) -> MatchForecastRespons
 
 @app.post("/api/v1/forecasts/daily-run", response_model=ForecastGenerationResponse)
 def run_daily_match_forecasts(request: Request) -> ForecastGenerationResponse:
-    """Select today's Moscow-date matches and generate every selected forecast."""
+    """Publish up to five forecasts, using same-day reserves until at least three are ready."""
     _require_admin_api_token(request)
     events = fetch_leon_football_events()
-    selected = select_top_forecasts(events)
+    selected = select_top_forecasts(events, limit=FORECAST_CANDIDATE_LIMIT)
     now = datetime.now(timezone.utc)
     forecasts = [
         MatchForecast(
@@ -641,18 +649,27 @@ def run_daily_match_forecasts(request: Request) -> ForecastGenerationResponse:
     ]
     current = repository.replace_current_match_forecasts(forecasts)
     failed_slugs: list[str] = []
+    attempted_count = 0
 
     def generate(forecast: MatchForecast) -> str | None:
         repository.set_match_forecast_generation_status(forecast.slug, "generating")
-        generated = OpenAIEditorialClient().generate_match_forecast(forecast)
-        if generated is None or repository.save_match_forecast_content(forecast.slug, generated) is None:
-            repository.set_match_forecast_generation_status(forecast.slug, "failed")
-            return forecast.slug
-        return None
+        client = OpenAIEditorialClient()
+        for search_context_size in ("medium", "high"):
+            generated = client.generate_match_forecast(
+                forecast,
+                search_context_size=search_context_size,
+            )
+            if generated is not None and repository.save_match_forecast_content(forecast.slug, generated) is not None:
+                return None
+        repository.set_match_forecast_generation_status(forecast.slug, "failed")
+        return forecast.slug
 
-    if current:
-        with ThreadPoolExecutor(max_workers=min(2, len(current))) as executor:
-            futures = {executor.submit(generate, forecast): forecast.slug for forecast in current}
+    primary = current[:FORECAST_PUBLISH_LIMIT]
+    primary_pending = [forecast for forecast in primary if forecast.generation_status != "ready"]
+    attempted_count += len(primary_pending)
+    if primary_pending:
+        with ThreadPoolExecutor(max_workers=min(2, len(primary_pending))) as executor:
+            futures = {executor.submit(generate, forecast): forecast.slug for forecast in primary_pending}
             for future in as_completed(futures):
                 slug = futures[future]
                 try:
@@ -664,12 +681,35 @@ def run_daily_match_forecasts(request: Request) -> ForecastGenerationResponse:
                 if failed_slug:
                     failed_slugs.append(failed_slug)
 
+    ready_count = sum(
+        forecast.generation_status == "ready"
+        for forecast in repository.list_match_forecasts()
+    )
+    for reserve in current[FORECAST_PUBLISH_LIMIT:]:
+        if ready_count >= FORECAST_MIN_READY:
+            break
+        if reserve.generation_status == "ready":
+            ready_count += 1
+            continue
+        attempted_count += 1
+        try:
+            failed_slug = generate(reserve)
+        except Exception:
+            logger.exception("Reserve match forecast generation failed: slug=%s", reserve.slug)
+            repository.set_match_forecast_generation_status(reserve.slug, "failed")
+            failed_slug = reserve.slug
+        if failed_slug:
+            failed_slugs.append(failed_slug)
+        else:
+            ready_count += 1
+
     items = repository.list_match_forecasts()
+    ready_items = [item for item in items if item.generation_status == "ready"]
     return ForecastGenerationResponse(
         fetched_count=len(events),
         selected_count=len(current),
-        attempted_count=len(current),
-        generated_count=len(current) - len(failed_slugs),
+        attempted_count=attempted_count,
+        generated_count=len(ready_items),
         failed_slugs=failed_slugs,
         items=items,
     )

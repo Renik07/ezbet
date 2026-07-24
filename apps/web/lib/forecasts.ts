@@ -118,19 +118,23 @@ type ForecastApiItem = {
   awayForm?: string;
   factors?: string[];
   pick?: string;
+  generationStatus?: string;
 };
 
 export async function getTodayForecasts(): Promise<MatchForecast[]> {
   const baseUrl = process.env.EZBET_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "development" ? "http://localhost:8000" : undefined);
-  if (!baseUrl) return fallbackForecasts;
+  const fallback = process.env.NODE_ENV === "development" ? fallbackForecasts : [];
+  if (!baseUrl) return fallback;
 
   try {
     const response = await fetch(new URL("/api/v1/forecasts", baseUrl).toString(), { cache: "no-store" });
-    if (!response.ok) return fallbackForecasts;
+    if (!response.ok) return fallback;
     const payload = (await response.json()) as { items: ForecastApiItem[] };
-    return payload.items.length ? payload.items.map(toDisplayForecast) : fallbackForecasts;
+    return payload.items
+      .filter((item) => !item.generationStatus || item.generationStatus === "ready")
+      .map(toDisplayForecast);
   } catch {
-    return fallbackForecasts;
+    return fallback;
   }
 }
 

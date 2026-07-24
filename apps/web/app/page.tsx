@@ -135,8 +135,9 @@ export default async function HomePage() {
           <div className="forecast-section-head">
             <h2 id="forecasts-heading">Прогнозы на спортивные исходы</h2>
           </div>
-          <ForecastCarousel>
-            {todayForecasts.map((forecast) => (
+          {todayForecasts.length ? (
+            <ForecastCarousel>
+              {todayForecasts.map((forecast) => (
               <article className="hero-article" key={forecast.slug}>
                 <div className="hero-forecast-copy">
                   <div className="hero-title-row">
@@ -157,8 +158,11 @@ export default async function HomePage() {
                   </div>
                 </div>
               </article>
-            ))}
-          </ForecastCarousel>
+              ))}
+            </ForecastCarousel>
+          ) : (
+            <p className="forecast-empty">На сегодня прогнозы пока не подготовлены.</p>
+          )}
         </div>
       </section>
 

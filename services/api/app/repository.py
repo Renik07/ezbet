@@ -910,6 +910,15 @@ class NewsRepository:
         return self._map_match_forecast_row(row) if row else None
 
     def save_match_forecast_content(self, slug: str, content: dict[str, object]) -> MatchForecast | None:
+        def clean_text(key: str) -> str:
+            return str(content[key]).replace("\x00", "")
+
+        def clean_text_list(key: str) -> list[str]:
+            value = content[key]
+            if not isinstance(value, list):
+                return []
+            return [str(item).replace("\x00", "") for item in value]
+
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -921,8 +930,14 @@ class NewsRepository:
                     WHERE slug = %s AND is_current = TRUE
                     """,
                     (
-                        content["research_brief"], content["lead"], content["home_form"], content["away_form"],
-                        content["factors"], content["pick"], content["source_urls"], slug,
+                        clean_text("research_brief"),
+                        clean_text("lead"),
+                        clean_text("home_form"),
+                        clean_text("away_form"),
+                        clean_text_list("factors"),
+                        clean_text("pick"),
+                        clean_text_list("source_urls"),
+                        slug,
                     ),
                 )
             connection.commit()

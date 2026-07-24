@@ -239,6 +239,7 @@ body {
 }
 
 .hero-pick-btn:hover { border-color: var(--color-primary-hover); background: var(--color-primary-hover); color: #fff; }
+.forecast-empty { padding: 24px 4px; color: var(--color-text-muted); font-size: 14px; }
 
 .match-detail-page {
   display: grid;
