@@ -8,7 +8,7 @@ if [ -f ./.env ]; then
   set +a
 fi
 
-BASE_URL="${EZBET_API_BASE_URL:-http://localhost:8000}"
+BASE_URL="${EZBET_FORECAST_API_BASE_URL:-http://localhost:8000}"
 ADMIN_TOKEN="${EZBET_ADMIN_API_TOKEN:-}"
 TARGET_URL="${BASE_URL%/}/api/v1/forecasts/daily-run"
 
