@@ -19,6 +19,7 @@ from .editorial import (
     run_editorial_cycle,
 )
 from .guide_topics import load_guide_topic_seed
+from .forecasts import fetch_leon_football_events, select_top_forecasts
 from .ingestion import (
     _capability_supports_adapter,
     build_importance_score_breakdown,
@@ -50,12 +51,17 @@ from .models import (
     EditorialSchedulerSettingsUpdateRequest,
     EditorialStatusResponse,
     EditorialRunResponse,
+    ForecastRefreshResponse,
+    ForecastGenerationResponse,
     EditorReviewListResponse,
     GuideSchedulerRunResponse,
     GuideTopicListResponse,
     IngestResponse,
     NewsListResponse,
     NewsItemResponse,
+    MatchForecast,
+    MatchForecastListResponse,
+    MatchForecastResponse,
     PublishRunResponse,
     PublishSchedulerRunResponse,
     PublishSchedulerSettings,
@@ -550,6 +556,123 @@ def get_article(slug: str) -> ArticleResponse:
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     return ArticleResponse(item=article)
+
+
+@app.get("/api/v1/forecasts", response_model=MatchForecastListResponse)
+def list_match_forecasts() -> MatchForecastListResponse:
+    return MatchForecastListResponse(items=repository.list_match_forecasts())
+
+
+@app.get("/api/v1/forecasts/{slug}", response_model=MatchForecastResponse)
+def get_match_forecast(slug: str) -> MatchForecastResponse:
+    forecast = repository.get_match_forecast(slug)
+    if forecast is None:
+        raise HTTPException(status_code=404, detail="Match forecast not found")
+    return MatchForecastResponse(item=forecast)
+
+
+@app.post("/api/v1/forecasts/run", response_model=ForecastRefreshResponse)
+def refresh_match_forecasts(request: Request) -> ForecastRefreshResponse:
+    _require_admin_api_token(request)
+    events = fetch_leon_football_events()
+    selected = select_top_forecasts(events)
+    now = datetime.now(timezone.utc)
+    forecasts = [
+        MatchForecast(
+            slug=item.slug,
+            home_team=item.home_team,
+            away_team=item.away_team,
+            home_logo=item.home_logo,
+            away_logo=item.away_logo,
+            league=item.league,
+            kickoff=item.kickoff,
+            odds_home=item.odds_home,
+            odds_draw=item.odds_draw,
+            odds_away=item.odds_away,
+            selection_score=item.selection_score,
+            updated_at=now,
+        )
+        for item in selected
+    ]
+    items = repository.replace_current_match_forecasts(forecasts)
+    return ForecastRefreshResponse(fetched_count=len(events), selected_count=len(items), items=items)
+
+
+@app.post("/api/v1/forecasts/test-generate", response_model=MatchForecastResponse)
+def generate_first_match_forecast_test(request: Request) -> MatchForecastResponse:
+    """Temporary cost guard: research and write exactly one, highest-ranked current match."""
+    _require_admin_api_token(request)
+    forecasts = repository.list_match_forecasts()
+    if not forecasts:
+        raise HTTPException(status_code=409, detail="Run forecast selection before the test generation.")
+    forecast = forecasts[0]
+    generated = OpenAIEditorialClient().generate_match_forecast(forecast)
+    if generated is None:
+        raise HTTPException(status_code=503, detail="Match research or AI generation is unavailable.")
+    saved = repository.save_match_forecast_content(forecast.slug, generated)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Selected match forecast disappeared during generation.")
+    return MatchForecastResponse(item=saved)
+
+
+@app.post("/api/v1/forecasts/daily-run", response_model=ForecastGenerationResponse)
+def run_daily_match_forecasts(request: Request) -> ForecastGenerationResponse:
+    """Select today's Moscow-date matches and generate every selected forecast."""
+    _require_admin_api_token(request)
+    events = fetch_leon_football_events()
+    selected = select_top_forecasts(events)
+    now = datetime.now(timezone.utc)
+    forecasts = [
+        MatchForecast(
+            slug=item.slug,
+            home_team=item.home_team,
+            away_team=item.away_team,
+            home_logo=item.home_logo,
+            away_logo=item.away_logo,
+            league=item.league,
+            kickoff=item.kickoff,
+            odds_home=item.odds_home,
+            odds_draw=item.odds_draw,
+            odds_away=item.odds_away,
+            selection_score=item.selection_score,
+            updated_at=now,
+        )
+        for item in selected
+    ]
+    current = repository.replace_current_match_forecasts(forecasts)
+    failed_slugs: list[str] = []
+
+    def generate(forecast: MatchForecast) -> str | None:
+        repository.set_match_forecast_generation_status(forecast.slug, "generating")
+        generated = OpenAIEditorialClient().generate_match_forecast(forecast)
+        if generated is None or repository.save_match_forecast_content(forecast.slug, generated) is None:
+            repository.set_match_forecast_generation_status(forecast.slug, "failed")
+            return forecast.slug
+        return None
+
+    if current:
+        with ThreadPoolExecutor(max_workers=min(2, len(current))) as executor:
+            futures = {executor.submit(generate, forecast): forecast.slug for forecast in current}
+            for future in as_completed(futures):
+                slug = futures[future]
+                try:
+                    failed_slug = future.result()
+                except Exception:
+                    logger.exception("Daily match forecast generation failed: slug=%s", slug)
+                    repository.set_match_forecast_generation_status(slug, "failed")
+                    failed_slug = slug
+                if failed_slug:
+                    failed_slugs.append(failed_slug)
+
+    items = repository.list_match_forecasts()
+    return ForecastGenerationResponse(
+        fetched_count=len(events),
+        selected_count=len(current),
+        attempted_count=len(current),
+        generated_count=len(current) - len(failed_slugs),
+        failed_slugs=failed_slugs,
+        items=items,
+    )
 
 
 @app.post("/api/v1/articles/reflow-publication-times")

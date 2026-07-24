@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "sh ./scripts/dev.sh",
     "dev:infra": "docker compose -f docker-compose.local.yml up -d postgres redis",
-    "dev:api": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} python3 -m uvicorn services.api.app.main:app --reload --host 0.0.0.0 --port 8000",
+    "setup:api": "python3 -m venv .venv && .venv/bin/python -m pip install services/api",
+    "dev:api": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} .venv/bin/python -m uvicorn services.api.app.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:web": "npm run dev --workspace web",
     "scheduler:tick": "sh ./scripts/scheduler-tick.sh",
     "scheduler:loop": "sh ./scripts/scheduler-loop.sh",
@@ -17,6 +18,7 @@
     "pipeline:serial-tick": "PIPELINE_MODE=run sh ./scripts/pipeline-tick.sh",
     "pipeline:serial-loop": "PIPELINE_MODE=run sh ./scripts/pipeline-loop.sh",
     "pipeline:cron": "sh ./scripts/pipeline-cron.sh",
+    "forecasts:run": "sh ./scripts/forecast-cron.sh",
     "build:web": "npm run build --workspace web",
     "lint:web": "npm run lint --workspace web"
   }

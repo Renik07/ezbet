@@ -1,0 +1,2 @@
+CRON_TZ=Europe/Moscow
+0 1 * * * cd "/path/to/ezbet" && npm run forecasts:run >> "/path/to/ezbet/forecast-cron.log" 2>&1

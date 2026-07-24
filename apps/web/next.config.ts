@@ -15,6 +15,9 @@ function getServerActionAllowedOrigins() {
 
 const nextConfig: NextConfig = {
   typedRoutes: true,
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "leon.ru", pathname: "/blog/uploads/logotypes/**" }]
+  },
   experimental: {
     serverActions: {
       allowedOrigins: getServerActionAllowedOrigins()

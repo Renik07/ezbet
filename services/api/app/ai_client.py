@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
+from datetime import date
 from socket import timeout as SocketTimeout
 from time import sleep
 from typing import Any
@@ -84,6 +86,7 @@ class ArticleExtractionResult:
 
 LLM_REQUEST_EXCEPTIONS = (ValueError, HTTPError, URLError, TimeoutError, SocketTimeout, OSError)
 LLM_TRANSIENT_EXCEPTIONS = (URLError, TimeoutError, SocketTimeout, OSError)
+logger = logging.getLogger("uvicorn.error")
 
 
 class OpenAIEditorialClient:
@@ -142,6 +145,200 @@ class OpenAIEditorialClient:
             model=self.settings.editorial_model,
             generation_mode=f"llm_{self.settings.api_style}",
         )
+
+    def generate_match_forecast(self, forecast: Any) -> dict[str, object] | None:
+        """One-match test flow: factual web research first, polished Russian copy second."""
+        if not self.enabled or not self._should_enable_web_search_for_request():
+            return None
+        cutoff_date = forecast.kickoff.date().isoformat()
+        research_input = (
+            f"match: {forecast.home_team} vs {forecast.away_team}\nleague: {forecast.league}\n"
+            f"kickoff: {forecast.kickoff.isoformat()}\nodds: 1={forecast.odds_home}, X={forecast.odds_draw}, 2={forecast.odds_away}\n"
+            f"Cutoff date: {cutoff_date}. Do not use events or news after this date.\n"
+            "Find at least two different recent completed matches for EACH team (four result facts total). "
+            "Optionally add one head-to-head result and one squad/injury fact only when confidently identified. "
+            "Do not return the upcoming fixture itself as a fact. "
+            "Every fact must contain one direct public source URL and the date of the event or publication in YYYY-MM-DD. "
+            "Prefer official league/club pages and established sports media. Search snippets, prediction/odds sites, "
+            "aggregators and unsourced statistics are not sufficient evidence. Preserve team names exactly as provided. "
+            "Write every statement and source title in Russian. "
+            "Do not infer form, trends, injuries, transfers or lineup changes beyond what the cited source explicitly says. "
+            "If a fact cannot be verified, omit it."
+        )
+        cited_urls: list[str] = []
+        try:
+            research_payload = self._create_response(
+                instructions="Ты фактчекер спортивной редакции. Найди свежие проверяемые факты, не пиши прогноз и не добавляй домыслы.",
+                input_text=research_input,
+                model=self.settings.search_model,
+                tools=[{"type": "web_search", "search_context_size": "medium"}],
+                include=["web_search_call.action.sources"],
+                max_output_tokens=4000,
+                reasoning_effort="low",
+                citation_urls=cited_urls,
+                text_format={
+                    "type": "json_schema",
+                    "name": "match_research",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "facts": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "statement": {"type": "string"},
+                                        "source_url": {"type": "string"},
+                                        "source_title": {"type": "string"},
+                                        "event_date": {"type": "string"},
+                                        "kind": {
+                                            "type": "string",
+                                            "enum": ["home_result", "away_result", "head_to_head", "squad_news"],
+                                        },
+                                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                                    },
+                                    "required": [
+                                        "statement",
+                                        "source_url",
+                                        "source_title",
+                                        "event_date",
+                                        "kind",
+                                        "confidence",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                                "minItems": 4,
+                                "maxItems": 8,
+                            },
+                        },
+                        "required": ["facts"],
+                        "additionalProperties": False,
+                    },
+                },
+                operation="match_forecast_test_research",
+                related_id=f"match:{forecast.slug}",
+            )
+            research_data = _loads_llm_json(research_payload)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Match research returned invalid JSON: %s payload_preview=%s",
+                exc,
+                research_payload[:1200],
+            )
+            return None
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")[:2000]
+            logger.error("Match research OpenAI HTTP error: status=%s body=%s", exc.code, error_body)
+            return None
+        except LLM_REQUEST_EXCEPTIONS as exc:
+            logger.error("Match research OpenAI request failed: %s: %s", type(exc).__name__, exc)
+            return None
+        raw_facts = research_data.get("facts") if isinstance(research_data, dict) else None
+        facts = _validate_match_research_facts(
+            raw_facts,
+            cutoff_date=forecast.kickoff.date(),
+            cited_urls=cited_urls,
+        )
+        home_result_dates = {fact["event_date"] for fact in facts if fact["kind"] == "home_result"}
+        away_result_dates = {fact["event_date"] for fact in facts if fact["kind"] == "away_result"}
+        if len(facts) < 3 or not home_result_dates or not away_result_dates:
+            logger.error("Match research validation failed: payload_preview=%s", research_payload[:1000])
+            return None
+
+        research_brief = "\n".join(
+            f"- {fact['statement']} ({fact['event_date']}; {fact['source_title']})"
+            for fact in facts
+        )
+        cited_publishers = {
+            publisher
+            for url in cited_urls
+            if _is_public_http_url(url)
+            for publisher in _source_publisher_tokens(url)
+        }
+        source_urls = list(
+            dict.fromkeys(
+                fact["source_url"]
+                for fact in facts
+                if _source_publisher_tokens(fact["source_url"]) & cited_publishers
+            )
+        )[:8]
+        if not source_urls:
+            logger.error("Match research source matching failed: cited_publishers=%s", sorted(cited_publishers))
+            return None
+        writing_input = (
+            f"Команды: {forecast.home_team} — {forecast.away_team}\nЛига: {forecast.league}\n"
+            f"Коэффициенты: П1 {forecast.odds_home}, X {forecast.odds_draw}, П2 {forecast.odds_away}\n"
+            f"Проверенные факты:\n{research_brief}\n"
+            "Напиши короткий прогноз для страницы матча. Используй названия команд ровно как указано выше. "
+            "Не изменяй, не переводи и не склоняй названия команд: копируй их посимвольно. "
+            "Только грамотный русский язык, без ссылок, названий источников, канцелярита и сведений сверх списка фактов. "
+            "Используй естественные футбольные формулировки, без буквальных переводов, смешения языков и несуществующих слов. "
+            "Если подтвержденные матчи состоялись давно, называй их доступными результатами, а не последними турами. "
+            "Не обсуждай отсутствие данных. lead — 1-2 предложения. home_form и away_form — по 2 предложения. "
+            "factors — три коротких тезиса. pick — один исход из П1, 1X, X, X2, П2, обе забьют, тотал больше/меньше "
+            "и одно короткое объяснение. Каждый элемент factors и значение pick возвращай без точки, точки с запятой "
+            "или другого завершающего знака. Не предлагай альтернатив и не гарантируй результат."
+        )
+        output_schema = {
+            "type": "json_schema",
+            "name": "match_forecast",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "lead": {"type": "string"},
+                    "home_form": {"type": "string"},
+                    "away_form": {"type": "string"},
+                    "factors": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
+                    "pick": {"type": "string"},
+                },
+                "required": ["lead", "home_form", "away_form", "factors", "pick"],
+                "additionalProperties": False,
+            },
+        }
+        try:
+            writing_payload = self._create_response(
+                instructions="Ты выпускающий редактор ezbet.ru. Преврати проверенные факты в ясный и аккуратный прогноз на русском языке.",
+                input_text=writing_input,
+                model=self.settings.editorial_model,
+                max_output_tokens=2400,
+                reasoning_effort="low",
+                text_format=output_schema,
+                operation="match_forecast_test_writer",
+                related_id=f"match:{forecast.slug}",
+            )
+            data = _loads_llm_json(writing_payload)
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")[:2000]
+            logger.error("Match writer OpenAI HTTP error: status=%s body=%s", exc.code, error_body)
+            return None
+        except LLM_REQUEST_EXCEPTIONS as exc:
+            logger.error("Match writer OpenAI request failed: %s: %s", type(exc).__name__, exc)
+            return None
+
+        factors = data.get("factors") if isinstance(data, dict) else None
+        required = ("lead", "home_form", "away_form", "pick")
+        if not isinstance(data, dict) or not all(_clean_text(data.get(key)) for key in required) or not isinstance(factors, list):
+            logger.error("Match writer validation failed: payload_preview=%s", writing_payload[:1000])
+            return None
+        if (
+            forecast.home_team not in _clean_text(data["home_form"])
+            or forecast.away_team not in _clean_text(data["away_form"])
+            or forecast.home_team not in _clean_text(data["lead"])
+            or forecast.away_team not in _clean_text(data["lead"])
+        ):
+            logger.error("Match writer changed team names: payload_preview=%s", writing_payload[:1000])
+            return None
+        return {
+            "research_brief": _replace_yo(research_brief),
+            "source_urls": source_urls,
+            "lead": _replace_yo(_clean_text(data["lead"])),
+            "home_form": _replace_yo(_clean_text(data["home_form"])),
+            "away_form": _replace_yo(_clean_text(data["away_form"])),
+            "factors": [_replace_yo(_clean_text(value)) for value in factors if _clean_text(value)][:3],
+            "pick": _replace_yo(_clean_text(data["pick"])),
+        }
 
     def generate_guide_article(
         self,
@@ -931,6 +1128,10 @@ class OpenAIEditorialClient:
         model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
+        max_output_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        text_format: dict[str, Any] | None = None,
+        citation_urls: list[str] | None = None,
         operation: str = "unknown",
         related_id: str | None = None,
     ) -> str:
@@ -948,6 +1149,10 @@ class OpenAIEditorialClient:
             model=model or self.settings.editorial_model,
             tools=tools,
             include=include,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            text_format=text_format,
+            citation_urls=citation_urls,
             operation=operation,
             related_id=related_id,
         )
@@ -960,6 +1165,10 @@ class OpenAIEditorialClient:
         model: str,
         tools: list[dict[str, Any]] | None = None,
         include: list[str] | None = None,
+        max_output_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        text_format: dict[str, Any] | None = None,
+        citation_urls: list[str] | None = None,
         operation: str,
         related_id: str | None = None,
     ) -> str:
@@ -973,6 +1182,12 @@ class OpenAIEditorialClient:
             payload_body["tool_choice"] = "auto"
         if include:
             payload_body["include"] = include
+        if max_output_tokens is not None:
+            payload_body["max_output_tokens"] = max_output_tokens
+        if reasoning_effort is not None:
+            payload_body["reasoning"] = {"effort": reasoning_effort}
+        if text_format is not None:
+            payload_body["text"] = {"format": text_format}
 
         request_body = json.dumps(payload_body).encode("utf-8")
         request = Request(
@@ -1002,6 +1217,8 @@ class OpenAIEditorialClient:
             related_id=related_id,
             web_search_calls=_count_web_search_calls(payload),
         )
+        if citation_urls is not None:
+            citation_urls.extend(_extract_response_citation_urls(payload))
         return _extract_output_text(payload)
 
     def _should_enable_web_search_for_request(self) -> bool:
@@ -1118,6 +1335,115 @@ def _loads_llm_json(payload: str) -> Any:
         if start >= 0 and end > start:
             return json.loads(cleaned[start : end + 1], strict=False)
         raise
+
+
+def _validate_match_research_facts(
+    value: Any,
+    *,
+    cutoff_date: date,
+    cited_urls: list[str],
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    if not any(_is_public_http_url(url) for url in cited_urls):
+        return []
+    accepted: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    allowed_kinds = {"home_result", "away_result", "head_to_head", "squad_news"}
+    for item in value:
+        if not isinstance(item, dict) or item.get("confidence") != "high":
+            continue
+        statement = _clean_text(item.get("statement"))
+        source_url = _clean_text(item.get("source_url"))
+        source_title = _clean_text(item.get("source_title"))
+        event_date_text = _clean_text(item.get("event_date"))
+        kind = _clean_text(item.get("kind"))
+        if not all((statement, source_url, source_title, event_date_text)) or kind not in allowed_kinds:
+            continue
+        if len(statement) < 30 or _is_internal_citation_text(statement):
+            continue
+        if not _is_public_http_url(source_url):
+            continue
+        try:
+            event_date = date.fromisoformat(event_date_text)
+        except ValueError:
+            continue
+        if event_date > cutoff_date:
+            continue
+        key = (statement.casefold(), source_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        accepted.append(
+            {
+                "statement": statement,
+                "source_url": source_url,
+                "source_title": source_title,
+                "event_date": event_date_text,
+                "kind": kind,
+            }
+        )
+    return accepted
+
+
+def _is_public_http_url(value: str) -> bool:
+    if _is_internal_citation_text(value):
+        return False
+    parts = urlsplit(value)
+    host = parts.netloc.casefold().removeprefix("www.")
+    denied_hosts = {
+        "flashscore.com",
+        "flashscore.com.ar",
+        "predictz.com",
+        "sofascore.com",
+        "bet365.com",
+        "oddsportal.com",
+    }
+    return (
+        parts.scheme in {"http", "https"}
+        and bool(host)
+        and "." in host
+        and host not in denied_hosts
+        and not any(host.endswith(f".{denied}") for denied in denied_hosts)
+        and len(parts.path.strip("/")) >= 4
+        and not parts.path.rstrip("/").endswith("/gameId")
+    )
+
+
+def _is_internal_citation_text(value: str) -> bool:
+    return bool(re.search(r"\bturn\d+(?:search|fetch|view)\d+\b", value.casefold()))
+
+
+def _source_publisher_tokens(value: str) -> set[str]:
+    generic_labels = {"www", "com", "org", "net", "gob", "gov", "ar", "mx", "cl", "co", "uk"}
+    host = urlsplit(value).netloc.casefold()
+    return {label for label in host.split(".") if len(label) >= 4 and label not in generic_labels}
+
+
+def _extract_response_citation_urls(payload: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for item in payload.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        action = item.get("action")
+        if isinstance(action, dict):
+            for source in action.get("sources", []):
+                if not isinstance(source, dict):
+                    continue
+                url = source.get("url")
+                if isinstance(url, str) and _is_public_http_url(url):
+                    urls.append(url)
+        for content in item.get("content", []):
+            if not isinstance(content, dict):
+                continue
+            for annotation in content.get("annotations", []):
+                if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+                    continue
+                url = annotation.get("url")
+                if isinstance(url, str) and _is_public_http_url(url):
+                    urls.append(url)
+    return list(dict.fromkeys(urls))
 
 
 def _count_web_search_calls(payload: dict[str, Any]) -> int:

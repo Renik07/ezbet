@@ -1,12 +1,15 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { Route } from "next";
 import type { Metadata } from "next";
 import { NewsCard } from "@/components/news-card";
+import { ForecastCarousel } from "@/components/forecast-carousel";
 import { getArticleAuthor } from "@/lib/authors";
 import { formatCategoryLabel } from "@/lib/category";
 import { formatMoscowDate } from "@/lib/dates";
 import { getNews } from "@/lib/news";
 import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
+import { getTodayForecasts } from "@/lib/forecasts";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -77,9 +80,10 @@ function truncateText(value: string, maxLength = 60) {
 }
 
 export default async function HomePage() {
-  const [{ items: news, isLive }, { items: guideItems }] = await Promise.all([
+  const [{ items: news, isLive }, { items: guideItems }, todayForecasts] = await Promise.all([
     getNews(),
-    getNews(undefined, { guideOnly: true })
+    getNews(undefined, { guideOnly: true }),
+    getTodayForecasts()
   ]);
   const guideNews = guideItems.slice(0, 4);
   const editorialNews = news.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
@@ -118,6 +122,46 @@ export default async function HomePage() {
           __html: JSON.stringify(homeJsonLd)
         }}
       />
+      <section className="intro-section container-wide" aria-label="О проекте ezbet.ru">
+        <p className="intro-kicker">Спортивная аналитика и прогнозы</p>
+        <h1 className="intro-title">ezbet.ru помогает быстро разобраться в главных матчах дня</h1>
+        <p className="intro-text">
+          Собираем прогнозы, новости, форму команд и букмекерские линии в понятный формат: коротко, по делу и без лишнего шума.
+        </p>
+      </section>
+
+      <section className="hero-section container-wide" aria-labelledby="forecasts-heading">
+        <div className="forecast-panel">
+          <div className="forecast-section-head">
+            <h2 id="forecasts-heading">Прогнозы на спортивные исходы</h2>
+          </div>
+          <ForecastCarousel>
+            {todayForecasts.map((forecast) => (
+              <article className="hero-article" key={forecast.slug}>
+                <div className="hero-forecast-copy">
+                  <div className="hero-title-row">
+                    <div className="hero-logo-pair" aria-hidden="true">
+                      <span className="hero-team-logo"><Image src={forecast.homeLogo} alt="" width={60} height={60} /></span>
+                      <span className="hero-team-logo hero-team-logo--blue"><Image src={forecast.awayLogo} alt="" width={60} height={60} /></span>
+                    </div>
+                    <div className="hero-title-meta">{forecast.league} · {forecast.kickoff}</div>
+                    <h3 className="hero-title">{forecast.homeTeam} — {forecast.awayTeam}: прогноз на матч</h3>
+                    <p className="hero-desc">{forecast.lead}</p>
+                  </div>
+                  <div className="hero-pick">
+                    <div className="hero-pick-bottom">
+                      <Link href={`/match/${forecast.slug}` as Route} className="hero-pick-btn">
+                        Читать прогноз
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </ForecastCarousel>
+        </div>
+      </section>
+
       <section className="home-hero container-wide">
         {heroItem ? (
           <article className="hero-article">
@@ -126,7 +170,7 @@ export default async function HomePage() {
               <span className="category-label">{formatCategoryLabel(heroItem.category)}</span>
               <span className="hero-time">{formatRelativeTime(heroItem.publishedAt)}</span>
             </div>
-            <h1 className="hero-title">{heroItem.title}</h1>
+            <h2 className="hero-title">{heroItem.title}</h2>
             <p className="hero-desc">{heroItem.description}</p>
             <div className="hero-meta">
               <span className="meta-author">
@@ -144,7 +188,7 @@ export default async function HomePage() {
               <span className="category-label">ezbet.ru</span>
               <span className="hero-time">лента обновляется</span>
             </div>
-            <h1 className="hero-title">Спортивные новости и беттинг-сигналы в одной ленте</h1>
+            <h2 className="hero-title">Спортивные новости и беттинг-сигналы в одной ленте</h2>
             <p className="hero-desc">
               Когда API снова отдаст публикации, главная автоматически покажет ведущую новость, live-ленту и свежий выпуск.
             </p>

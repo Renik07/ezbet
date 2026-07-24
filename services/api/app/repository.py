@@ -23,6 +23,7 @@ from .models import (
     EditorialSchedulerSettings,
     EditorReview,
     GuideTopic,
+    MatchForecast,
     AiUsageSummaryRow,
     AiUsageSummaryTotals,
     NewsItem,
@@ -769,6 +770,47 @@ class NewsRepository:
                 )
                 cursor.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS match_forecasts (
+                        slug TEXT PRIMARY KEY,
+                        home_team TEXT NOT NULL,
+                        away_team TEXT NOT NULL,
+                        home_logo TEXT,
+                        away_logo TEXT,
+                        league TEXT NOT NULL,
+                        kickoff TIMESTAMPTZ NOT NULL,
+                        odds_home DOUBLE PRECISION NOT NULL,
+                        odds_draw DOUBLE PRECISION NOT NULL,
+                        odds_away DOUBLE PRECISION NOT NULL,
+                        selection_score INTEGER NOT NULL,
+                        source_order INTEGER NOT NULL,
+                        research_brief TEXT,
+                        source_urls TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+                        lead TEXT,
+                        home_form TEXT,
+                        away_form TEXT,
+                        factors TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+                        pick TEXT,
+                        generation_status TEXT NOT NULL DEFAULT 'pending',
+                        is_current BOOLEAN NOT NULL DEFAULT TRUE,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS research_brief TEXT")
+                cursor.execute(
+                    "ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS source_urls TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]"
+                )
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS lead TEXT")
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS home_form TEXT")
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS away_form TEXT")
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS factors TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]")
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS pick TEXT")
+                cursor.execute("ALTER TABLE match_forecasts ADD COLUMN IF NOT EXISTS generation_status TEXT NOT NULL DEFAULT 'pending'")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_match_forecasts_current_kickoff ON match_forecasts (is_current, kickoff)"
+                )
+                cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS article_slug_redirects (
                         old_slug TEXT PRIMARY KEY,
                         article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
@@ -799,6 +841,105 @@ class NewsRepository:
                     VALUES ('default', FALSE, 60, 100, FALSE, FALSE, 60, 20, FALSE, 60, 10, FALSE, 60, 10, 'idle')
                     ON CONFLICT (id) DO NOTHING
                     """
+                )
+            connection.commit()
+
+    def replace_current_match_forecasts(self, forecasts: list[MatchForecast]) -> list[MatchForecast]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE match_forecasts SET is_current = FALSE WHERE is_current = TRUE")
+                for forecast in forecasts:
+                    cursor.execute(
+                        """
+                        INSERT INTO match_forecasts (
+                            slug, home_team, away_team, home_logo, away_logo, league, kickoff,
+                            odds_home, odds_draw, odds_away, selection_score, source_order, is_current, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
+                        ON CONFLICT (slug) DO UPDATE SET
+                            home_team = EXCLUDED.home_team,
+                            away_team = EXCLUDED.away_team,
+                            home_logo = EXCLUDED.home_logo,
+                            away_logo = EXCLUDED.away_logo,
+                            league = EXCLUDED.league,
+                            kickoff = EXCLUDED.kickoff,
+                            odds_home = EXCLUDED.odds_home,
+                            odds_draw = EXCLUDED.odds_draw,
+                            odds_away = EXCLUDED.odds_away,
+                            selection_score = EXCLUDED.selection_score,
+                            source_order = EXCLUDED.source_order,
+                            is_current = TRUE,
+                            updated_at = NOW()
+                        """,
+                        (
+                            forecast.slug, forecast.home_team, forecast.away_team, forecast.home_logo, forecast.away_logo,
+                            forecast.league, forecast.kickoff, forecast.odds_home, forecast.odds_draw, forecast.odds_away,
+                            forecast.selection_score, 0,
+                        ),
+                    )
+            connection.commit()
+        return self.list_match_forecasts()
+
+    def list_match_forecasts(self) -> list[MatchForecast]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT slug, home_team, away_team, home_logo, away_logo, league, kickoff,
+                           odds_home, odds_draw, odds_away, selection_score, research_brief, lead,
+                           home_form, away_form, factors, pick, generation_status, updated_at, source_urls
+                    FROM match_forecasts
+                    WHERE is_current = TRUE
+                    ORDER BY selection_score DESC, kickoff ASC
+                    """
+                )
+                return [self._map_match_forecast_row(row) for row in cursor.fetchall()]
+
+    def get_match_forecast(self, slug: str) -> MatchForecast | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT slug, home_team, away_team, home_logo, away_logo, league, kickoff,
+                           odds_home, odds_draw, odds_away, selection_score, research_brief, lead,
+                           home_form, away_form, factors, pick, generation_status, updated_at, source_urls
+                    FROM match_forecasts WHERE slug = %s AND is_current = TRUE
+                    """,
+                    (slug,),
+                )
+                row = cursor.fetchone()
+        return self._map_match_forecast_row(row) if row else None
+
+    def save_match_forecast_content(self, slug: str, content: dict[str, object]) -> MatchForecast | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE match_forecasts
+                    SET research_brief = %s, lead = %s, home_form = %s, away_form = %s,
+                        factors = %s, pick = %s, source_urls = %s,
+                        generation_status = 'ready', updated_at = NOW()
+                    WHERE slug = %s AND is_current = TRUE
+                    """,
+                    (
+                        content["research_brief"], content["lead"], content["home_form"], content["away_form"],
+                        content["factors"], content["pick"], content["source_urls"], slug,
+                    ),
+                )
+            connection.commit()
+        return self.get_match_forecast(slug)
+
+    def set_match_forecast_generation_status(self, slug: str, status: str) -> None:
+        if status not in {"pending", "generating", "ready", "failed"}:
+            raise ValueError(f"Unsupported match forecast generation status: {status}")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE match_forecasts
+                    SET generation_status = %s, updated_at = NOW()
+                    WHERE slug = %s AND is_current = TRUE
+                    """,
+                    (status, slug),
                 )
             connection.commit()
 
@@ -5010,6 +5151,31 @@ class NewsRepository:
             content_plan_reason=row[25],
             content_plan_priority_label=row[26],
             tags=list(row[27] or []),
+        )
+
+    @staticmethod
+    def _map_match_forecast_row(row: tuple[object, ...]) -> MatchForecast:
+        return MatchForecast(
+            slug=str(row[0]),
+            home_team=str(row[1]),
+            away_team=str(row[2]),
+            home_logo=row[3],
+            away_logo=row[4],
+            league=str(row[5]),
+            kickoff=row[6],
+            odds_home=float(row[7]),
+            odds_draw=float(row[8]),
+            odds_away=float(row[9]),
+            selection_score=int(row[10]),
+            research_brief=row[11],
+            lead=row[12],
+            home_form=row[13],
+            away_form=row[14],
+            factors=list(row[15] or []),
+            pick=row[16],
+            generation_status=str(row[17] or "pending"),
+            updated_at=row[18],
+            source_urls=list(row[19] or []),
         )
 
     @staticmethod

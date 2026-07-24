@@ -16,6 +16,8 @@ services:
       dockerfile: services/api/Dockerfile
     environment:
       DATABASE_URL: postgresql://ezbet:ezbet@postgres:5432/ezbet
+    env_file:
+      - .env
     ports:
       - "8000:8000"
     depends_on:
