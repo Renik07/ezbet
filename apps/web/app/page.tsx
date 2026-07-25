@@ -85,7 +85,7 @@ export default async function HomePage() {
     getNews(undefined, { guideOnly: true }),
     getTodayForecasts()
   ]);
-  const guideNews = guideItems.slice(0, 4);
+  const guideNews = guideItems.slice(0, 11);
   const editorialNews = news.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
   const heroItem = editorialNews[0];
   const tickerNews = editorialNews.slice(1, 6);
@@ -115,7 +115,7 @@ export default async function HomePage() {
   };
 
   return (
-    <main>
+    <main className="home-page">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
@@ -298,23 +298,24 @@ export default async function HomePage() {
         </aside>
       </div>
 
-      <section className="guides-section container-wide" aria-labelledby="guides-heading">
-        <div className="section-header">
-          <h2 className="section-title" id="guides-heading">
-            Аналитика и гайды
-          </h2>
-          <Link href="/news?type=guides" className="section-link">
-            Все материалы
-          </Link>
-        </div>
+      <section className="guides-section" aria-labelledby="guides-heading">
+        <div className="container-wide">
+          <div className="section-header">
+            <h2 className="section-title" id="guides-heading">
+              Аналитика и гайды
+            </h2>
+            <Link href="/news?type=guides" className="section-link">
+              Все материалы →
+            </Link>
+          </div>
 
-        {guideNews.length ? (
-          <div className="guides-grid">
-            {guideNews.map((item, index) => (
+          {guideNews.length ? (
+            <div className="guides-grid">
+              {guideNews.map((item, index) => (
                 <Link
                   key={item.id}
                   href={newsHref(item.articleSlug)}
-                  className={`guide-card${index === 0 ? " guide-card--featured" : ""}`}
+                  className={`guide-card${index === 0 ? " guide-card--featured" : ""}${index >= 8 ? " guide-card--desktop-only" : ""}`}
                 >
                   <div className={`guide-cat cat-pill cat-pill--${categoryTone(item.category)}`}>
                     {formatCategoryLabel(item.category)}
@@ -326,18 +327,35 @@ export default async function HomePage() {
                       {formatMoscowDate(item.publishedAt, "long")} · {getArticleAuthor(item.category)}
                     </span>
                     <span className="guide-read" aria-hidden="true">
-                      Читать
+                      Читать →
                     </span>
                   </div>
                 </Link>
               ))}
+            </div>
+          ) : (
+            <div className="guides-empty">
+              <h3>Аналитика и гайды появятся после первого ежедневного запуска</h3>
+              <p>Раздел уже готов принимать материалы из расписания: тема выбирается из годового плана, статья пишется writer-агентом и публикуется на сайте.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="seo-section" aria-labelledby="seo-heading">
+        <div className="container-wide">
+          <div className="seo-text">
+            <h2 id="seo-heading">Спортивные прогнозы, аналитика матчей и рейтинг букмекеров</h2>
+            <p>ezbet.ru помогает быстро разобраться в главных матчах дня: мы собираем спортивные новости, прогнозы на футбол, хоккей, баскетбол, теннис и киберспорт, разбираем форму команд, коэффициенты букмекеров и ключевые факторы перед ставкой.</p>
+            <p>На странице доступны прогнозы на спортивные исходы, ближайшие матчи с аналитикой, рейтинг букмекеров и материалы для тех, кто хочет лучше понимать линию, тоталы, форы, value bet и движение коэффициентов.</p>
+            <details className="seo-more">
+              <summary>Читать полностью</summary>
+              <p>Редакционные материалы ezbet.ru ориентированы на пользователей, которые ищут прогнозы на матчи сегодня, обзоры букмекеров, новости спорта и понятную аналитику без лишнего шума. Мы не обещаем гарантированный результат, а объясняем логику выбора, статистические аргументы и риски.</p>
+              <p>В разделе прогнозов можно сравнить команды, время матча, турнир, букмекерскую линию и контекст встречи. В рейтинге букмекеров собраны ключевые параметры: удобство продукта, бонусы, коэффициенты, поддержка, выплаты и прозрачность условий.</p>
+              <p>Сайт развивается как спортивная медиаплатформа для поиска информации перед матчем: от коротких новостей и расписания до подробных гайдов по ставкам, аналитике футбола, хоккея, баскетбола, тенниса и киберспорта.</p>
+            </details>
           </div>
-        ) : (
-          <div className="guides-empty">
-            <h3>Аналитика и гайды появятся после первого ежедневного запуска</h3>
-            <p>Раздел уже готов принимать материалы из расписания: тема выбирается из годового плана, статья пишется writer-агентом и публикуется на сайте.</p>
-          </div>
-        )}
+        </div>
       </section>
     </main>
   );

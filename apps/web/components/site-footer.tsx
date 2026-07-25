@@ -39,6 +39,18 @@ export function SiteFooter() {
               Спортивные новости, аналитика
               <br />и обзоры букмекеров
             </p>
+            <a
+              href="https://t.me/ezbetsru"
+              className="site-footer-telegram"
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label="Telegram-канал ezbet.ru"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20.7 4.2 17.9 18c-.2 1-.8 1.3-1.6.8l-4.3-3.2-2.1 2c-.2.2-.4.4-.9.4l.3-4.4 8-7.2c.4-.3-.1-.5-.5-.2L7 12.4l-4.2-1.3c-.9-.3-.9-.9.2-1.3l16.4-6.3c.8-.3 1.5.2 1.3.7Z" />
+              </svg>
+              <span>@ezbetsru</span>
+            </a>
             <div className="age-warning" aria-label="Материалы для лиц старше 18 лет">
               18+
             </div>

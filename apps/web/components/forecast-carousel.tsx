@@ -38,8 +38,12 @@ export function ForecastCarousel({ children }: { children: ReactNode }) {
       <div ref={stripRef} className="forecast-strip" aria-label="Прогнозы на ближайшие футбольные матчи">
         {children}
       </div>
-      <button className="forecast-arrow forecast-arrow--back" type="button" aria-label="Предыдущие прогнозы" onClick={() => scroll("back")} disabled={!canScrollBack}>‹</button>
-      <button className="forecast-arrow forecast-arrow--forward" type="button" aria-label="Следующие прогнозы" onClick={() => scroll("forward")} disabled={!canScrollForward}>›</button>
+      <button className="forecast-arrow forecast-arrow--back" type="button" aria-label="Предыдущие прогнозы" onClick={() => scroll("back")} disabled={!canScrollBack}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" /></svg>
+      </button>
+      <button className="forecast-arrow forecast-arrow--forward" type="button" aria-label="Следующие прогнозы" onClick={() => scroll("forward")} disabled={!canScrollForward}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 4.5 13 10l-5.5 5.5" /></svg>
+      </button>
     </div>
   );
 }
