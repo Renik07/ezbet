@@ -42,6 +42,11 @@ class SelectedForecast:
     source_order: int
 
 
+def is_current_moscow_date(kickoff: datetime, now: datetime | None = None) -> bool:
+    current_date = (now or datetime.now(MOSCOW_TZ)).astimezone(MOSCOW_TZ).date()
+    return kickoff.astimezone(MOSCOW_TZ).date() == current_date
+
+
 def fetch_leon_football_events(timeout_seconds: int = 20) -> list[dict[str, Any]]:
     request = Request(LEON_TOP_EVENTS_URL, headers={"User-Agent": "ezbet forecast bot/1.0"})
     with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310: fixed public endpoint
@@ -122,7 +127,15 @@ def _league_priority(league: str) -> int:
 
 
 def _extract_odds(event: dict[str, Any]) -> tuple[float, float, float] | None:
-    runner = event.get("rates", {}).get("isxod-1x2-osnovnoe-vremia", {}).get("runner", {})
+    rates = event.get("rates")
+    if not isinstance(rates, dict):
+        return None
+    market = rates.get("isxod-1x2-osnovnoe-vremia")
+    if not isinstance(market, dict):
+        return None
+    runner = market.get("runner")
+    if not isinstance(runner, dict):
+        return None
     try:
         values = (float(runner["1"]), float(runner["X"]), float(runner["2"]))
     except (KeyError, TypeError, ValueError):

@@ -19,7 +19,7 @@ from .editorial import (
     run_editorial_cycle,
 )
 from .guide_topics import load_guide_topic_seed
-from .forecasts import fetch_leon_football_events, select_top_forecasts
+from .forecasts import fetch_leon_football_events, is_current_moscow_date, select_top_forecasts
 from .ingestion import (
     _capability_supports_adapter,
     build_importance_score_breakdown,
@@ -566,7 +566,7 @@ def list_match_forecasts() -> MatchForecastListResponse:
     ready = [
         forecast
         for forecast in repository.list_match_forecasts()
-        if forecast.generation_status == "ready"
+        if forecast.generation_status == "ready" and is_current_moscow_date(forecast.kickoff)
     ]
     if len(ready) < FORECAST_MIN_READY:
         return MatchForecastListResponse(items=[])
@@ -576,7 +576,11 @@ def list_match_forecasts() -> MatchForecastListResponse:
 @app.get("/api/v1/forecasts/{slug}", response_model=MatchForecastResponse)
 def get_match_forecast(slug: str) -> MatchForecastResponse:
     forecast = repository.get_match_forecast(slug)
-    if forecast is None or forecast.generation_status != "ready":
+    if (
+        forecast is None
+        or forecast.generation_status != "ready"
+        or not is_current_moscow_date(forecast.kickoff)
+    ):
         raise HTTPException(status_code=404, detail="Match forecast not found")
     return MatchForecastResponse(item=forecast)
 
