@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
@@ -818,7 +817,6 @@ class NewsRepository:
                     )
                     """
                 )
-                self._normalize_article_slugs(cursor)
                 cursor.execute(
                     """
                     INSERT INTO scheduler_settings (
@@ -1966,31 +1964,6 @@ class NewsRepository:
 
         return self._map_article_row(row)
 
-    @staticmethod
-    def _normalize_article_slugs(cursor: psycopg.Cursor) -> None:
-        cursor.execute("SELECT id, slug, title, news_item_id FROM articles")
-        for article_id, old_slug, title, news_item_id in cursor.fetchall():
-            new_slug = _build_article_slug(str(title), str(news_item_id))
-            if old_slug == new_slug:
-                continue
-
-            cursor.execute(
-                """
-                INSERT INTO article_slug_redirects (old_slug, article_id)
-                VALUES (%s, %s)
-                ON CONFLICT (old_slug) DO UPDATE SET article_id = EXCLUDED.article_id
-                """,
-                (old_slug, article_id),
-            )
-            cursor.execute(
-                "UPDATE articles SET slug = %s, updated_at = NOW() WHERE id = %s",
-                (new_slug, article_id),
-            )
-            cursor.execute(
-                "UPDATE guide_topics SET article_slug = %s WHERE article_id = %s",
-                (new_slug, article_id),
-            )
-
     def get_news_item(self, news_item_id: str, *, include_hidden: bool = False) -> NewsItem | None:
         statement = """
             SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
@@ -2193,7 +2166,7 @@ class NewsRepository:
         tags = [topic.category, topic.section, "Аналитика", "Гайд"]
         article = Article(
             id=article_id,
-            slug=_build_article_slug(title, news_item_id),
+            slug=_build_article_slug(title),
             news_item_id=news_item_id,
             raw_item_id=raw_item_id,
             title=title,
@@ -2212,6 +2185,9 @@ class NewsRepository:
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                article = article.model_copy(
+                    update={"slug": _available_article_slug(cursor, article.slug, article.id)}
+                )
                 cursor.execute(
                     """
                     INSERT INTO articles (
@@ -4746,7 +4722,7 @@ class NewsRepository:
         display_published_at = public_published_at or _build_public_published_at(raw_item)
         article = Article(
             id=f"article:{raw_item.external_id}",
-            slug=_build_article_slug(draft.title, raw_item.external_id),
+            slug=_build_article_slug(draft.title),
             news_item_id=raw_item.external_id,
             raw_item_id=raw_item.id,
             title=draft.title,
@@ -4765,6 +4741,9 @@ class NewsRepository:
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                article = article.model_copy(
+                    update={"slug": _available_article_slug(cursor, article.slug, article.id)}
+                )
                 cursor.execute(
                     """
                     INSERT INTO articles (
@@ -5461,15 +5440,43 @@ class NewsRepository:
         )
 
 
-def _build_article_slug(title: str, external_id: str) -> str:
+def _build_article_slug(title: str) -> str:
     normalized = unicodedata.normalize("NFKD", title.lower()).translate(_CYRILLIC_TO_LATIN)
     normalized = "".join(char if char.isascii() and char.isalnum() else "-" for char in normalized)
     slug = "-".join(part for part in normalized.split("-") if part).strip("-")
     if not slug:
         slug = "article"
 
-    suffix = hashlib.blake2s(external_id.encode("utf-8"), digest_size=4).hexdigest()
-    return f"{slug[:70].rstrip('-')}-{suffix}"
+    return slug[:80].rstrip("-")
+
+
+def _deduplicate_article_slug(base_slug: str, used_slugs: set[str]) -> str:
+    if base_slug not in used_slugs:
+        return base_slug
+
+    number = 2
+    while True:
+        suffix = f"-{number}"
+        candidate = f"{base_slug[:80 - len(suffix)].rstrip('-')}{suffix}"
+        if candidate not in used_slugs:
+            return candidate
+        number += 1
+
+
+def _available_article_slug(cursor: psycopg.Cursor, base_slug: str, article_id: str) -> str:
+    cursor.execute("SELECT slug FROM articles WHERE id = %s", (article_id,))
+    existing = cursor.fetchone()
+    if existing is not None:
+        # Published URLs are immutable: title edits and repeated upserts must
+        # never replace a URL that may already be indexed or shared.
+        return str(existing[0])
+
+    cursor.execute(
+        "SELECT slug FROM articles WHERE slug = %s OR slug LIKE %s",
+        (base_slug, f"{base_slug}-%"),
+    )
+    used_slugs = {str(row[0]) for row in cursor.fetchall()}
+    return _deduplicate_article_slug(base_slug, used_slugs)
 
 
 def _build_public_published_at(raw_item: RawItem) -> datetime:

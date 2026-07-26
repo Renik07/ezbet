@@ -225,7 +225,7 @@ body {
   margin: 0;
   overflow: hidden;
   color: var(--color-text-secondary);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.42;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1491,7 +1491,7 @@ h6 {
   max-width: 62ch;
   margin: 0 0 var(--space-6);
   color: var(--color-text-secondary);
-  font-size: var(--text-md);
+  /* font-size: var(--text-md); */
   line-height: 1.65;
 }
 
