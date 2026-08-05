@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import Link from "next/link";
 import Script from "next/script";
 import { Suspense } from "react";
@@ -8,6 +9,15 @@ import { YandexMetrikaPageViews } from "@/components/yandex-metrika";
 import { METRIKA_ID } from "@/lib/metrika";
 import { absoluteUrl, getSiteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, SITE_TITLE } from "@/lib/site";
 import "./globals.css";
+
+const manrope = localFont({
+  src: "./fonts/Manrope-VariableFont_wght.woff2",
+  variable: "--font-manrope",
+  display: "swap",
+  style: "normal",
+  weight: "200 800",
+  fallback: ["Arial", "sans-serif"]
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(getSiteUrl()),
@@ -69,7 +79,7 @@ export default function RootLayout({
   const googleAnalyticsId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID?.trim();
 
   return (
-    <html lang="ru">
+    <html lang="ru" className={manrope.variable}>
       <body>
         {googleAnalyticsId ? (
           <>
@@ -126,6 +136,9 @@ export default function RootLayout({
               </Link>
               <Link href="/news?query=Теннис" className="nav-link nav-link--tennis">
                 Теннис
+              </Link>
+              <Link href="/news?query=MMA" className="nav-link nav-link--mma">
+                MMA
               </Link>
               <Link href="/news?query=Киберспорт" className="nav-link nav-link--cyber">
                 Киберспорт

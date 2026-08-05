@@ -16,6 +16,7 @@ from urllib.request import urlopen
 from xml.etree import ElementTree
 
 from .ai_client import OpenAIEditorialClient
+from .content_filters import detect_promotional_giveaway
 from .models import NewsItem, PromptConfig, RawItem, SourceItem, SourceSyncState
 
 if TYPE_CHECKING:
@@ -2617,6 +2618,14 @@ def _looks_like_live_match_tracker(title: str, summary: str) -> bool:
 
 def _should_drop_raw_item_as_service_page(raw_item: RawItem) -> bool:
     if _looks_like_live_match_tracker(raw_item.title, raw_item.summary or ""):
+        return True
+
+    if detect_promotional_giveaway(
+        raw_item.title,
+        raw_item.summary,
+        raw_item.lead,
+        raw_item.full_text,
+    ) is not None:
         return True
 
     lead = (raw_item.lead or "").strip()

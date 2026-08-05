@@ -288,7 +288,7 @@ export default async function HomePage() {
           <div className="sidebar-block">
             <h3 className="sidebar-block-title">Рубрики</h3>
             <div className="topic-cloud">
-              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "Беттинг", "Киберспорт"].map((topic) => (
+              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "MMA", "Беттинг", "Киберспорт"].map((topic) => (
                 <Link key={topic} href={`/news?query=${encodeURIComponent(topic)}`} className="topic-chip">
                   {topic}
                 </Link>

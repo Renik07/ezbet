@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import re
 
 from .ai_client import OpenAIEditorialClient, PlannerRerankItem
+from .content_filters import detect_promotional_giveaway
 from .models import ContentPlanItem, RawItem
 from .repository import NewsRepository
 
@@ -78,6 +79,7 @@ def build_editorial_shortlist(
         for item in candidates
         if item.triage_label in {"high", "medium"}
         and not is_live_match_tracker_candidate(item)
+        and not is_promotional_giveaway_candidate(item)
         and not is_incomplete_or_inaccessible_source_candidate(item)
     ]
     shortlisted: list[RawItem] = preferred_candidates[:shortlist_limit]
@@ -89,6 +91,7 @@ def build_editorial_shortlist(
         for item in candidates
         if item.triage_label == "low"
         and not is_live_match_tracker_candidate(item)
+        and not is_promotional_giveaway_candidate(item)
         and not is_incomplete_or_inaccessible_source_candidate(item)
         and is_viable_low_priority_candidate(item)
     ]
@@ -143,6 +146,15 @@ def is_live_match_tracker_candidate(raw_item: RawItem) -> bool:
     if re.search(r"^\s*.+\s+[–-]\s+\d+\s*:\s*\d+\s+.+\s*$", raw_item.title.strip().lower()):
         return True
     return False
+
+
+def is_promotional_giveaway_candidate(raw_item: RawItem) -> bool:
+    return detect_promotional_giveaway(
+        raw_item.title,
+        raw_item.summary,
+        raw_item.lead,
+        raw_item.full_text,
+    ) is not None
 
 
 def is_incomplete_or_inaccessible_source_candidate(raw_item: RawItem) -> bool:
@@ -238,7 +250,13 @@ def build_non_selected_plan_item(raw_item: RawItem, shortlisted_candidates: list
     shortlisted_ids = {item.id for item in shortlisted_candidates}
     now = datetime.now(timezone.utc)
 
-    if is_live_match_tracker_candidate(raw_item):
+    if is_promotional_giveaway_candidate(raw_item):
+        status = "skip_promotional_giveaway"
+        reason = (
+            "Planner не отправил материал в writer/editor: обнаружен розыгрыш, конкурс, "
+            "призыв подписаться или другое промо с обещанием приза."
+        )
+    elif is_live_match_tracker_candidate(raw_item):
         status = "skip_live_tracker"
         reason = (
             "Planner не отправил материал в writer/editor: новость похожа на live/match tracker, "

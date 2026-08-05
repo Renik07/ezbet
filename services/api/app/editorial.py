@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import re
 
 from .ai_client import OpenAIEditorialClient
+from .content_filters import detect_promotional_giveaway
 from .ingestion import enrich_raw_item_content
 from .models import Article, DraftArticle, EditorReview, PromptConfig, RawItem
 from .repository import NewsRepository
@@ -583,6 +584,21 @@ def evaluate_quality_gate(
     )
     if any(marker in body for marker in blocked_markers):
         return QualityGateResult("hold", "Quality gate: обнаружен служебный или шаблонный текст MVP.")
+
+    promotional_marker = detect_promotional_giveaway(
+        raw_item.title,
+        raw_item.summary,
+        raw_item.lead,
+        raw_item.full_text,
+        title,
+        dek,
+        body,
+    )
+    if promotional_marker is not None:
+        return QualityGateResult(
+            "skip",
+            f"Quality gate: промо-розыгрыши и конкурсы запрещены к публикации ({promotional_marker}).",
+        )
 
     verification_marker = detect_verification_style_marker(title=title, dek=dek, body=body)
     if verification_marker is not None:

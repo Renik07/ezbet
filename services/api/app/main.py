@@ -14,6 +14,7 @@ import psycopg
 
 from .ai_client import OpenAIEditorialClient
 from .config import get_openai_settings
+from .content_filters import detect_promotional_giveaway
 from .editorial import (
     default_prompt_configs,
     run_editorial_cycle,
@@ -2599,6 +2600,27 @@ def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int
     for draft in drafts:
         raw_item = repository.get_raw_item(draft.raw_item_id)
         if raw_item is None:
+            continue
+        promotional_marker = detect_promotional_giveaway(
+            raw_item.title,
+            raw_item.summary,
+            raw_item.lead,
+            raw_item.full_text,
+            draft.title,
+            draft.dek,
+            draft.body,
+        )
+        if promotional_marker is not None:
+            reason = f"Publish guard: промо-розыгрыш запрещен ({promotional_marker})."
+            repository.set_draft_review_status(
+                draft.id,
+                review_status="quality_hold",
+                status="hold",
+                review_summary=reason,
+                publish_decision="publish_skip",
+                publish_reason=reason,
+            )
+            repository.set_content_plan_status(raw_item.id, "hold")
             continue
         repository.publish_draft_to_news(draft, raw_item)
         repository.set_draft_review_status(

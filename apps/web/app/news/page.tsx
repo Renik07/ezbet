@@ -195,7 +195,7 @@ export default async function NewsPage({
           <div className="sidebar-block">
             <h3 className="sidebar-block-title">Быстрый поиск</h3>
             <div className="topic-cloud">
-              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "Беттинг", "Киберспорт"].map((topic) => (
+              {["Футбол", "Хоккей", "Баскетбол", "Теннис", "MMA", "Беттинг", "Киберспорт"].map((topic) => (
                 <Link key={topic} href={buildNewsPageHref(1, topic, type) as Route} className="topic-chip">
                   {topic}
                 </Link>
