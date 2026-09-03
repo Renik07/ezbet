@@ -984,6 +984,23 @@ def _collect_source_items_with_retry(
             )
 
         last_error = "Источник не вернул элементов."
+        if not ai_fallback_attempted:
+            ai_fallback_attempted = True
+            fallback_items = _collect_source_items_via_ai_fallback(
+                source,
+                timeout=timeout,
+                ai_search_prompt=ai_search_prompt,
+            )
+            if fallback_items:
+                return SourceIngestionResult(
+                    source=source,
+                    items=fallback_items,
+                    fetch_status="ok",
+                    parse_status="ok",
+                    error=None,
+                    retry_count=attempts - 1,
+                    filter_reasons={"source_empty_ai_fallback": len(fallback_items)},
+                )
 
     return SourceIngestionResult(
         source=source,
