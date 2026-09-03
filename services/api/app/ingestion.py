@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 from .ai_client import OpenAIEditorialClient
@@ -3585,10 +3585,24 @@ def _serialize_sitemap_payload(source: SourceItem, source_type: str, item_count:
 
 def _fetch_remote_document(url: str, timeout: int) -> str:
     last_error: Exception | None = None
+    request: str | Request = url
+    host = urlsplit(url).netloc.lower()
+    if host == "championat.com" or host.endswith(".championat.com"):
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/xml,text/xml,text/html;q=0.9,*/*;q=0.8",
+                "Cookie": "unity_pause_sso=1",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+                ),
+            },
+        )
 
     for attempt in range(1, 4):
         try:
-            with urlopen(url, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout) as response:
                 if getattr(response, "status", 200) >= 400:
                     raise SourceFetchError(f"Fetch failed for {url}: HTTP {response.status}")
                 payload = response.read()
