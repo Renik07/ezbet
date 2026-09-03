@@ -381,7 +381,12 @@ def ingest_sources_with_results(
                 known_external_ids=known_external_ids_map.get(source.key, set()),
                 known_dedupe_keys=known_dedupe_keys_map.get(source.key, set()),
             )
-            source_result.filter_reasons = filter_reasons
+            collection_reasons = source_result.filter_reasons or {}
+            source_result.filter_reasons = dict(collection_reasons)
+            for reason, count in filter_reasons.items():
+                source_result.filter_reasons[reason] = (
+                    source_result.filter_reasons.get(reason, 0) + count
+                )
         except Exception as exc:
             source_result = SourceIngestionResult(
                 source=runtime_source,
@@ -920,6 +925,7 @@ def _collect_source_items_with_retry(
 ) -> SourceIngestionResult:
     attempts = 0
     last_error: str | None = None
+    ai_fallback_attempted = False
 
     while attempts <= max_retries:
         attempts += 1
@@ -927,8 +933,27 @@ def _collect_source_items_with_retry(
             items = _collect_source_items(source, timeout=timeout, ai_search_prompt=ai_search_prompt)
         except SourceFetchError as exc:
             last_error = str(exc)
+            if not ai_fallback_attempted:
+                ai_fallback_attempted = True
+                fallback_items = _collect_source_items_via_ai_fallback(
+                    source,
+                    timeout=timeout,
+                    ai_search_prompt=ai_search_prompt,
+                )
+                if fallback_items:
+                    return SourceIngestionResult(
+                        source=source,
+                        items=fallback_items,
+                        fetch_status="ok",
+                        parse_status="ok",
+                        error=None,
+                        retry_count=attempts - 1,
+                        filter_reasons={"source_fetch_ai_fallback": len(fallback_items)},
+                    )
+
             if attempts <= max_retries:
                 continue
+
             return SourceIngestionResult(
                 source=source,
                 items=[],
@@ -968,6 +993,49 @@ def _collect_source_items_with_retry(
         error=last_error,
         retry_count=max_retries,
     )
+
+
+def _collect_source_items_via_ai_fallback(
+    source: SourceItem,
+    *,
+    timeout: int,
+    ai_search_prompt: PromptConfig | None,
+) -> list[RawItem]:
+    if source.source_type == "ai_research" or not _is_championat_source(source):
+        return []
+
+    parts = urlsplit(source.url)
+    if not parts.scheme or not parts.netloc:
+        return []
+
+    fallback_source = source.model_copy(
+        update={
+            "source_type": "ai_research",
+            "url": urlunsplit((parts.scheme, parts.netloc, "/news/", "", "")),
+            "notes": (
+                f"{source.notes.strip()}\n"
+                "Ищи только свежие спортивные новости Championat.com. "
+                "Не включай розыгрыши, рекламу, трансляции и неспортивные разделы."
+            ).strip(),
+        }
+    )
+
+    try:
+        items = _parse_ai_research_source(
+            fallback_source,
+            timeout=timeout,
+            ai_search_prompt=ai_search_prompt,
+            allow_listing_fallback=False,
+        )
+    except (SourceFetchError, ValueError):
+        return []
+
+    return [
+        item
+        for item in items
+        if _is_allowed_championat_news_url(item.url or item.source_url)
+        and not _should_drop_raw_item_as_service_page(item)
+    ]
 
 
 def _collect_source_items(
@@ -1297,13 +1365,14 @@ def _parse_ai_research_source(
     source: SourceItem,
     timeout: int,
     ai_search_prompt: PromptConfig | None = None,
+    allow_listing_fallback: bool = True,
 ) -> list[RawItem]:
     ai_client = OpenAIEditorialClient()
     if not ai_client.enabled:
         raise SourceFetchError("AI search source requires an enabled OpenAI Responses client.")
 
     discovered = ai_client.discover_source_items(source, limit=5, prompt=ai_search_prompt)
-    if not discovered:
+    if not discovered and allow_listing_fallback:
         discovered = _discover_ai_research_candidates_from_listing(source, timeout=timeout)[:5]
     if not discovered:
         return []
@@ -1423,10 +1492,16 @@ def _parse_news_sitemap_document(
 
 
 def _is_allowed_news_sitemap_article_url(source: SourceItem, url: str) -> bool:
-    normalized_source_key = source.key.strip().lower()
-    if normalized_source_key == "championat-news":
+    if _is_championat_source(source):
         return _is_allowed_championat_news_url(url)
     return True
+
+
+def _is_championat_source(source: SourceItem) -> bool:
+    host = urlsplit(source.url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host == "championat.com" or host.endswith(".championat.com")
 
 
 def _is_allowed_championat_news_url(url: str) -> bool:

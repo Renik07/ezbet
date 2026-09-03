@@ -1458,6 +1458,27 @@ def _normalize_source_discovery_url(url: str) -> str:
     if not parts.scheme or not parts.netloc:
         return url.strip()
 
+    path = parts.path or "/"
+
+    # Discovery should search a section/listing, not a single article.
+    article_like = (
+        path.endswith(".html")
+        or path.endswith(".htm")
+        or "/news/" in path
+        or path.rstrip("/").split("/")[-1].isdigit()
+    )
+    if article_like:
+        normalized_path = path
+        if normalized_path.endswith((".html", ".htm")):
+            normalized_path = normalized_path.rsplit("/", 1)[0] + "/"
+        elif not normalized_path.endswith("/"):
+            normalized_path = normalized_path.rsplit("/", 1)[0] + "/"
+        if not normalized_path:
+            normalized_path = "/"
+        return urlunsplit((parts.scheme, parts.netloc, normalized_path, "", ""))
+
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
 
 def _clean_article_text(value: Any) -> str | None:
     cleaned = _clean_text(value) or None
