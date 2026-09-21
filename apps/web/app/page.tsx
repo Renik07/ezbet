@@ -81,8 +81,8 @@ function truncateText(value: string, maxLength = 60) {
 
 export default async function HomePage() {
   const [{ items: news, isLive }, { items: guideItems }, todayForecasts] = await Promise.all([
-    getNews(),
-    getNews(undefined, { guideOnly: true }),
+    getNews(undefined, { limit: 30, page: 1 }),
+    getNews(undefined, { guideOnly: true, limit: 11, page: 1 }),
     getTodayForecasts()
   ]);
   const guideNews = guideItems.slice(0, 11);

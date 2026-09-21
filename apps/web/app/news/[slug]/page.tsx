@@ -98,7 +98,7 @@ export default async function ArticlePage({
     permanentRedirect(`/news/${item.slug}`);
   }
 
-  const relatedNews = (await getNews(formatCategoryLabel(item.category), { aiOnly: true })).items
+  const relatedNews = (await getNews(formatCategoryLabel(item.category), { aiOnly: true, limit: 5, page: 1 })).items
     .filter((newsItem) => newsItem.articleSlug !== item.slug)
     .slice(0, 4);
   const paragraphs = item.body.split("\n\n").filter(Boolean);

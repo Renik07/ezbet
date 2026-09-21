@@ -32,6 +32,8 @@ export type Article = {
 
 export type NewsFeed = {
   items: NewsItem[];
+  total?: number;
+  page?: number;
   isLive: boolean;
   apiBaseUrl?: string;
 };
@@ -97,7 +99,7 @@ const fallbackArticles: Article[] = [
 
 export async function getNews(
   query?: string,
-  options?: { aiOnly?: boolean; fallbackToAll?: boolean; guideOnly?: boolean }
+  options?: { aiOnly?: boolean; fallbackToAll?: boolean; guideOnly?: boolean; limit?: number; page?: number }
 ): Promise<NewsFeed> {
   const baseUrl = resolveApiBaseUrl();
 
@@ -110,6 +112,8 @@ export async function getNews(
 
   try {
     const url = new URL("/api/v1/news", baseUrl);
+    if (options?.limit) url.searchParams.set("limit", String(options.limit));
+    if (options?.page) url.searchParams.set("page", String(options.page));
     if (query) {
       url.searchParams.set("query", query);
     }
@@ -121,7 +125,8 @@ export async function getNews(
     }
 
     const response = await fetch(url.toString(), {
-      cache: "no-store"
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(options?.limit ? 8000 : 60000)
     });
 
     if (!response.ok) {
@@ -131,7 +136,7 @@ export async function getNews(
       };
     }
 
-    const payload = (await response.json()) as { items: NewsItem[] };
+    const payload = (await response.json()) as { items: NewsItem[]; total?: number; page?: number };
     const filteredItems = filterNews(payload.items, query, options);
 
     if (options?.aiOnly && options.fallbackToAll && filteredItems.length === 0) {
@@ -159,6 +164,8 @@ export async function getNews(
 
     return {
       items: filteredItems,
+      total: payload.total,
+      page: payload.page,
       isLive: true,
       apiBaseUrl: baseUrl
     };

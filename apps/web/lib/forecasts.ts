@@ -127,7 +127,7 @@ export async function getTodayForecasts(): Promise<MatchForecast[]> {
   if (!baseUrl) return fallback;
 
   try {
-    const response = await fetch(new URL("/api/v1/forecasts", baseUrl).toString(), { cache: "no-store" });
+    const response = await fetch(new URL("/api/v1/forecasts", baseUrl).toString(), { cache: "no-store", signal: AbortSignal.timeout(5000) });
     if (!response.ok) return fallback;
     const payload = (await response.json()) as { items: ForecastApiItem[] };
     return payload.items

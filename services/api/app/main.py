@@ -539,20 +539,17 @@ def list_news(
     guide_only: bool = Query(default=False, alias="guideOnly"),
     include_hidden: bool = Query(default=False, alias="includeHidden"),
     limit: Optional[int] = Query(default=None, ge=1, le=100),
+    page: Optional[int] = Query(default=None, ge=1),
 ) -> NewsListResponse:
     if include_hidden:
         _require_admin_api_token(request)
 
-    return NewsListResponse(
-        items=repository.list(
-            query,
-            ai_only=ai_only,
-            guide_only=guide_only,
-            include_hidden=include_hidden,
-            limit=limit,
-        )
+    page_meta: dict = {}
+    items = repository.list(
+        query, ai_only=ai_only, guide_only=guide_only,
+        include_hidden=include_hidden, limit=limit, page=page, page_meta=page_meta,
     )
-
+    return NewsListResponse(items=items, **page_meta)
 
 @app.get("/api/v1/articles/{slug}", response_model=ArticleResponse)
 def get_article(slug: str) -> ArticleResponse:

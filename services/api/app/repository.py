@@ -1322,6 +1322,8 @@ class NewsRepository:
         guide_only: bool = False,
         include_hidden: bool = False,
         limit: int | None = None,
+        page: int | None = None,
+        page_meta: dict | None = None,
     ) -> list[NewsItem]:
         statement = """
             SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
@@ -1357,6 +1359,23 @@ class NewsRepository:
 
         if clauses:
             statement += " WHERE " + " AND ".join(clauses)
+
+        if page is not None:
+            statement += " AND a.slug IS NOT NULL" if clauses else " WHERE a.slug IS NOT NULL"
+            if not guide_only:
+                statement += " AND n.id NOT LIKE %s"
+                params.append("guide:%")
+            with self.connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT count(*) FROM (" + statement + ") AS feed", tuple(params))
+                    total = cursor.fetchone()[0]
+                    page_size = limit or 20
+                    current_page = min(page, max(1, (total + page_size - 1) // page_size))
+                    cursor.execute(statement + " ORDER BY n.published_at DESC, n.id DESC LIMIT %s OFFSET %s", (*params, page_size, (current_page - 1) * page_size))
+                    rows = cursor.fetchall()
+            if page_meta is not None:
+                page_meta.update(total=total, page=current_page)
+            return [self._map_news_row(row) for row in rows]
 
         statement += " ORDER BY n.published_at DESC"
         if limit is not None:

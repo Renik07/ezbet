@@ -306,6 +306,8 @@ class GuideTopicListResponse(BaseModel):
 
 class NewsListResponse(BaseModel):
     items: list[NewsItem]
+    total: int | None = None
+    page: int | None = None
 
 
 class NewsItemResponse(BaseModel):

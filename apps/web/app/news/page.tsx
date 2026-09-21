@@ -83,13 +83,13 @@ export default async function NewsPage({
   const isGuides = type === "guides";
   const requestedPage = Number(params.page ?? "1");
   const safeRequestedPage = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
-  const { items, isLive } = await getNews(query, isGuides ? { guideOnly: true } : undefined);
-  const totalPages = Math.max(1, Math.ceil(items.length / NEWS_PER_PAGE));
-  const currentPage = Math.min(safeRequestedPage, totalPages);
+  const { items, isLive, total = items.length, page = 1 } = await getNews(query, { guideOnly: isGuides, limit: NEWS_PER_PAGE, page: safeRequestedPage });
+  const totalPages = Math.max(1, Math.ceil(total / NEWS_PER_PAGE));
+  const currentPage = page;
   const startIndex = (currentPage - 1) * NEWS_PER_PAGE;
-  const pagedItems = items.slice(startIndex, startIndex + NEWS_PER_PAGE);
+  const pagedItems = items;
   const fromItem = items.length ? startIndex + 1 : 0;
-  const toItem = Math.min(startIndex + NEWS_PER_PAGE, items.length);
+  const toItem = Math.min(startIndex + NEWS_PER_PAGE, total);
   const popularItems = items.slice(0, 5);
   const collectionJsonLd = {
     "@context": "https://schema.org",
@@ -146,7 +146,7 @@ export default async function NewsPage({
               {isGuides ? "Все полезные статьи" : query ? `Результаты: ${query}` : "Все новости"}
             </h2>
             <span className="section-count">
-              {items.length ? `${fromItem}-${toItem} из ${items.length}` : "Ничего не найдено"}
+              {items.length ? `${fromItem}-${toItem} из ${total}` : "Ничего не найдено"}
             </span>
           </div>
           <div className="news-list">
