@@ -9,10 +9,15 @@ async function sitemapItems(guideOnly = false): Promise<NewsItem[]> {
   const first = await getNews(undefined, { aiOnly: !guideOnly, guideOnly, limit: 100, page: 1 });
   const items = [...first.items];
   const pages = Math.min(500, Math.ceil((first.total ?? items.length) / 100));
-  for (let page = 2; page <= pages; page++) {
-    const next = await getNews(undefined, { aiOnly: !guideOnly, guideOnly, limit: 100, page });
-    if (next.page !== page) break;
-    items.push(...next.items);
+  // Bound API concurrency while avoiding a network round trip for every page in series.
+  for (let page = 2; page <= pages; page += 4) {
+    const batch = await Promise.all(Array.from({ length: Math.min(4, pages - page + 1) }, (_, offset) =>
+      getNews(undefined, { aiOnly: !guideOnly, guideOnly, limit: 100, page: page + offset })
+    ));
+    for (let offset = 0; offset < batch.length; offset++) {
+      if (batch[offset].page !== page + offset) return items;
+      items.push(...batch[offset].items);
+    }
   }
   return items;
 }
