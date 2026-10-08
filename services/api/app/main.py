@@ -17,6 +17,7 @@ from .config import get_openai_settings
 from .content_filters import detect_promotional_giveaway
 from .editorial import (
     default_prompt_configs,
+    evaluate_published_duplicate_guard,
     run_editorial_cycle,
 )
 from .guide_topics import load_guide_topic_seed
@@ -127,6 +128,7 @@ ENRICHMENT_SCHEDULER_LOCK_KEY = 4815162343
 EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
 PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
 GUIDE_SCHEDULER_LOCK_KEY = 4815162346
+PUBLISH_EXECUTION_LOCK_KEY = 4815162347
 ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
 FORECAST_PUBLISH_LIMIT = 6
 FORECAST_MIN_READY = 3
@@ -995,11 +997,7 @@ def run_enrichment(limit: int = Query(default=10, ge=1, le=50)) -> EnrichmentRun
         counts={"limit": limit},
     )
     current_ingest_started_at = _current_ingest_started_at()
-    raw_items = (
-        _select_pre_enrichment_raw_items(limit=limit, since=current_ingest_started_at)
-        if current_ingest_started_at
-        else []
-    )
+    raw_items = _select_pre_enrichment_raw_items(limit=limit, since=None)
     try:
         processed, enriched = _run_enrichment_for_raw_items(raw_items)
         finished_at = datetime.now(timezone.utc)
@@ -1251,12 +1249,7 @@ def list_content_plan(
 
 @app.post("/api/v1/content-plan/run", response_model=ContentPlanRunResponse)
 def run_planner(limit: int = Query(default=6, ge=1, le=20)) -> ContentPlanRunResponse:
-    current_ingest_started_at = _current_ingest_started_at()
-    items = (
-        run_content_planner(repository, limit=limit, since=current_ingest_started_at)
-        if current_ingest_started_at
-        else []
-    )
+    items = run_content_planner(repository, limit=limit, since=None)
     return ContentPlanRunResponse(planned=len(items), items=items)
 
 
@@ -1320,12 +1313,7 @@ def run_editorial(limit: int = Query(default=2, ge=1, le=10)) -> EditorialRunRes
         counts={"limit": limit},
     )
     try:
-        current_ingest_started_at = _current_ingest_started_at()
-        drafts, reviews = (
-            run_editorial_cycle(repository, limit=limit, since=current_ingest_started_at)
-            if current_ingest_started_at
-            else ([], [])
-        )
+        drafts, reviews = run_editorial_cycle(repository, limit=limit, since=None)
         published_count = len([draft for draft in drafts if draft.status == "published"])
         finished_at = datetime.now(timezone.utc)
         duration_ms = _duration_ms(started_at, finished_at)
@@ -1393,12 +1381,7 @@ def run_publish(limit: int = Query(default=5, ge=1, le=20)) -> PublishRunRespons
         counts={"limit": limit},
     )
     try:
-        current_ingest_started_at = _current_ingest_started_at()
-        published = (
-            _run_publish_for_drafts(limit=limit, since=current_ingest_started_at)
-            if current_ingest_started_at
-            else 0
-        )
+        published = _run_publish_for_drafts(limit=limit, since=None)
         finished_at = datetime.now(timezone.utc)
         duration_ms = _duration_ms(started_at, finished_at)
         repository.record_pipeline_run(
@@ -1903,11 +1886,7 @@ def _run_enrichment_scheduler(*, force: bool) -> EnrichmentSchedulerRunResponse:
             repository.set_enrichment_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
             current_ingest_started_at = _current_ingest_started_at()
-            raw_items = (
-                _select_pre_enrichment_raw_items(limit=batch_size, since=current_ingest_started_at)
-                if current_ingest_started_at
-                else []
-            )
+            raw_items = _select_pre_enrichment_raw_items(limit=batch_size, since=None)
             _log_pipeline_event(
                 "scheduler_run_started",
                 phase="enrichment",
@@ -2075,12 +2054,11 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
         try:
             repository.set_editorial_scheduler_status(status="running", error=None)
             batch_size = max(1, settings.batch_size)
-            current_ingest_started_at = _current_ingest_started_at()
             planned_items = run_content_planner(
                 repository,
                 limit=batch_size,
-                since=current_ingest_started_at,
-            ) if current_ingest_started_at else []
+                since=None,
+            )
             _log_pipeline_event(
                 "scheduler_run_started",
                 phase="editorial",
@@ -2092,8 +2070,8 @@ def _run_editorial_scheduler(*, force: bool) -> EditorialSchedulerRunResponse:
             drafts, reviews = run_editorial_cycle(
                 repository,
                 limit=batch_size,
-                since=current_ingest_started_at,
-            ) if current_ingest_started_at else ([], [])
+                since=None,
+            )
             published_count = len([draft for draft in drafts if draft.status == "published"])
             latest_settings = repository.get_editorial_scheduler_settings()
             next_run_at = (
@@ -2264,12 +2242,7 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
                 status="running",
                 counts={"batch_size": batch_size},
             )
-            current_ingest_started_at = _current_ingest_started_at()
-            published = (
-                _run_publish_for_drafts(limit=batch_size, since=current_ingest_started_at)
-                if current_ingest_started_at
-                else 0
-            )
+            published = _run_publish_for_drafts(limit=batch_size, since=None)
             latest_settings = repository.get_publish_scheduler_settings()
             next_run_at = (
                 now + timedelta(minutes=latest_settings.interval_minutes)
@@ -2591,6 +2564,16 @@ def _run_guide_scheduler() -> GuideSchedulerRunResponse:
 
 
 def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int:
+    # Shared by manual and scheduled callers, across API processes.
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_try_advisory_xact_lock(%s)", (PUBLISH_EXECUTION_LOCK_KEY,))
+            if not cursor.fetchone()[0]:
+                return 0
+        return _publish_ready_drafts(limit=limit, since=since)
+
+
+def _publish_ready_drafts(*, limit: int, since: datetime | None = None) -> int:
     drafts = repository.list_publishable_drafts(limit=limit, since=since)
     published = 0
 
@@ -2619,16 +2602,26 @@ def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int
             )
             repository.set_content_plan_status(raw_item.id, "hold")
             continue
-        repository.publish_draft_to_news(draft, raw_item)
-        repository.set_draft_review_status(
-            draft.id,
-            review_status="reviewed",
-            status="published",
-            review_summary=draft.review_summary or "Материал опубликован publish-этапом.",
-            publish_decision="publish_auto",
-            publish_reason="Материал опубликован отдельным publish-этапом.",
+        candidates = repository.list_article_similarity_candidates(
+            category=None,
+            published_at=datetime.now(timezone.utc),
+            exclude_news_item_id=raw_item.external_id,
+            window_hours=48,
+            limit=None,
         )
-        repository.set_content_plan_status(raw_item.id, "published")
+        duplicate_guard = evaluate_published_duplicate_guard(draft, candidates)
+        if raw_item.is_duplicate or duplicate_guard is not None:
+            reason = raw_item.duplicate_reason or (
+                duplicate_guard.reason if duplicate_guard
+                else "Publish guard: исходная новость отмечена дублем."
+            )
+            repository.set_draft_review_status(
+                draft.id, review_status="quality_hold", status="hold",
+                review_summary=reason, publish_decision="publish_hold", publish_reason=reason,
+            )
+            repository.set_content_plan_status(raw_item.id, "hold")
+            continue
+        repository.publish_draft_to_news(draft, raw_item)
         published += 1
 
     if published:
@@ -2638,9 +2631,6 @@ def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int
 
 
 def _select_pre_enrichment_raw_items(*, limit: int, since: datetime | None) -> list[RawItem]:
-    if since is None:
-        return []
-
     pool_limit = max(limit * 3, limit)
     candidate_pool = repository.list_pending_enrichment_raw_items(limit=pool_limit, since=since)
     return select_pre_enrichment_candidates(candidate_pool, limit=limit)

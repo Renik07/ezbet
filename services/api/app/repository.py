@@ -6,6 +6,7 @@ import time
 import unicodedata
 import zlib
 from dataclasses import dataclass
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 
 from .config import get_database_url
+from .deduplication import fact_tokens
 from .ingestion import SUPPORTED_ACTIVE_SOURCE_TYPES
 from .models import (
     Article,
@@ -2327,11 +2329,11 @@ class NewsRepository:
     def list_article_similarity_candidates(
         self,
         *,
-        category: str,
+        category: str | None,
         published_at: datetime,
         exclude_news_item_id: str | None = None,
         window_hours: int = 24,
-        limit: int = 20,
+        limit: int | None = 20,
     ) -> list[Article]:
         statement = """
             SELECT
@@ -2352,22 +2354,26 @@ class NewsRepository:
                 created_at,
                 updated_at
             FROM articles
-            WHERE category = %s
-              AND published_at >= %s
+            WHERE published_at >= %s
               AND published_at <= %s
         """
         params: list[object] = [
-            category,
             published_at - timedelta(hours=window_hours),
             published_at,
         ]
+
+        if category is not None:
+            statement += " AND category = %s"
+            params.append(category)
 
         if exclude_news_item_id is not None:
             statement += " AND news_item_id <> %s"
             params.append(exclude_news_item_id)
 
-        statement += " ORDER BY published_at DESC LIMIT %s"
-        params.append(limit)
+        statement += " ORDER BY published_at DESC"
+        if limit is not None:
+            statement += " LIMIT %s"
+            params.append(limit)
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -3794,6 +3800,7 @@ class NewsRepository:
             WHERE d.status = 'ready_for_publish'
               AND d.review_status = 'reviewed'
               AND d.publish_decision = 'publish_auto'
+              AND r.is_duplicate = FALSE
         """
         params: list[object] = []
         if since is not None:
@@ -4365,9 +4372,6 @@ class NewsRepository:
                         known_dedupe_map[item.dedupe_key] = (item.id, item.title)
                         if not item.is_duplicate:
                             combined_text = self._build_similarity_text(item)
-                            recent_similarity_candidates.setdefault(item.normalized_category, []).append(
-                                (item.id, item.title, combined_text)
-                            )
                             pending_similarity_candidates.setdefault(item.normalized_category, []).append(
                                 (item.id, item.title, combined_text)
                             )
@@ -4624,7 +4628,6 @@ class NewsRepository:
             raise ValueError("Template fallback drafts must never be published.")
 
         public_published_at = _build_public_published_at(raw_item)
-        article = self.upsert_article(draft, raw_item, public_published_at=public_published_at)
         published_item = NewsItem(
             id=raw_item.external_id,
             title=draft.title,
@@ -4635,11 +4638,15 @@ class NewsRepository:
             link=raw_item.url,
             status="published",
             ai_reviewed=True,
-            article_slug=article.slug,
+            article_slug=None,
             visibility="public",
         )
 
         with self.connect() as connection:
+            article = self.upsert_article(
+                draft, raw_item, public_published_at=public_published_at, connection=connection,
+            )
+            published_item.article_slug = article.slug
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -4677,6 +4684,16 @@ class NewsRepository:
                             published_item.ai_reviewed,
                         ),
                     )
+                cursor.execute(
+                    """UPDATE draft_articles SET status = 'published', review_status = 'reviewed',
+                              publish_decision = 'publish_auto',
+                              publish_reason = 'Материал опубликован отдельным publish-этапом.',
+                              updated_at = NOW() WHERE id = %s""", (draft.id,),
+                )
+                cursor.execute(
+                    "UPDATE content_plan_items SET status = 'published', updated_at = NOW() WHERE raw_item_id = %s",
+                    (raw_item.id,),
+                )
             connection.commit()
 
         return published_item
@@ -4737,6 +4754,7 @@ class NewsRepository:
         raw_item: RawItem,
         *,
         public_published_at: datetime | None = None,
+        connection: psycopg.Connection | None = None,
     ) -> Article:
         display_published_at = public_published_at or _build_public_published_at(raw_item)
         article = Article(
@@ -4758,7 +4776,8 @@ class NewsRepository:
             updated_at=datetime.now(timezone.utc),
         )
 
-        with self.connect() as connection:
+        owns_connection = connection is None
+        with (self.connect() if owns_connection else nullcontext(connection)) as connection:
             with connection.cursor() as cursor:
                 article = article.model_copy(
                     update={"slug": _available_article_slug(cursor, article.slug, article.id)}
@@ -4815,11 +4834,19 @@ class NewsRepository:
                         article.ai_reviewed,
                     ),
                 )
-            connection.commit()
+                cursor.execute(
+                    """SELECT id, slug, news_item_id, raw_item_id, title, lead, dek, body,
+                              category, source_title, source_url, tags, published_at,
+                              ai_reviewed, created_at, updated_at
+                       FROM articles WHERE id = %s""", (article.id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise LookupError(f"Article {article.slug} was not stored.")
+                stored = self._map_article_row(row)
+            if owns_connection:
+                connection.commit()
 
-        stored = self.get_article_by_slug(article.slug)
-        if stored is None:
-            raise LookupError(f"Article {article.slug} was not stored.")
         return stored
 
     def _load_recent_dedup_candidates(
@@ -4830,7 +4857,7 @@ class NewsRepository:
     ) -> dict[str, list[tuple[str, str, str]]]:
         cursor.execute(
             """
-            SELECT id, normalized_category, title, summary
+            SELECT id, normalized_category, title, summary, full_text
             FROM raw_items
             WHERE published_at >= %s
               AND is_duplicate = FALSE
@@ -4845,7 +4872,7 @@ class NewsRepository:
             item_id = str(row[0])
             category = str(row[1])
             title = str(row[2])
-            summary = str(row[3])
+            summary = str(row[4] or row[3] or "")
             grouped.setdefault(category, []).append(
                 (item_id, title, self._normalize_similarity_text(f"{title} {summary}"))
             )
@@ -4900,11 +4927,21 @@ class NewsRepository:
         best_match_id: str | None = None
         best_match_title = ""
         best_score = 0.0
+        target_facts = fact_tokens(" ".join(target_tokens))
+        negatives = {"ne", "net", "bez", "not", "no", "without"}
 
         for candidate_id, candidate_title, candidate_text in candidates:
             if candidate_id == item_id:
                 continue
-            similarity = self._compute_similarity_from_texts(target_tokens, candidate_text)
+            # Normalized ingest text preserves score order below.
+            candidate_tokens = self._tokenize_similarity_text(candidate_text)
+            if (
+                target_facts != fact_tokens(" ".join(candidate_tokens))
+                or (target_tokens & negatives) != (candidate_tokens & negatives)
+            ):
+                continue
+            union = target_tokens | candidate_tokens
+            similarity = len(target_tokens & candidate_tokens) / len(union) if union else 0.0
             if similarity > best_score:
                 best_score = similarity
                 best_match_id = candidate_id
@@ -4962,12 +4999,18 @@ class NewsRepository:
             "я": "ya",
         }
         folded = "".join(replacements.get(char, char) for char in value)
-        return re.sub(r"[^a-z0-9]+", " ", folded)
+        return re.sub(r"[^a-z0-9:.,]+", " ", folded)
 
     @staticmethod
     def _tokenize_similarity_text(value: str) -> set[str]:
         normalized = NewsRepository._normalize_similarity_text(value)
-        return {token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) > 2}
+        tokens = re.findall(r"\d+\s*:\s*\d+|\d+(?:[.,]\d+)?|[a-z]+", normalized)
+        return {
+            re.sub(r"\s+", "", token)
+            for token in tokens
+            if len(token) > 2 or token[0].isdigit()
+            or token in {"ne", "net", "bez", "not", "no", "without"}
+        }
 
     def _compute_similarity_from_texts(self, left_tokens: set[str], right_text: str) -> float:
         right_tokens = self._tokenize_similarity_text(right_text)

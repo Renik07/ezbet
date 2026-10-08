@@ -11,7 +11,7 @@ from html import unescape
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -2739,8 +2739,12 @@ def _normalize_url(url: str) -> str:
     if not parts.scheme or not parts.netloc:
         return url.strip().lower()
 
-    cleaned = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, "", ""))
-    return cleaned.rstrip("/")
+    tracking_keys = {"gclid", "fbclid", "yclid", "msclkid", "_ga", "_gl"}
+    query = urlencode(sorted(
+        (key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in tracking_keys
+    ))
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), query, ""))
 
 
 def _normalize_candidate_url(base_url: str, href: str) -> str | None:

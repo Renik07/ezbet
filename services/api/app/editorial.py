@@ -6,6 +6,7 @@ import re
 
 from .ai_client import OpenAIEditorialClient
 from .content_filters import detect_promotional_giveaway
+from .deduplication import facts_conflict
 from .ingestion import enrich_raw_item_content
 from .models import Article, DraftArticle, EditorReview, PromptConfig, RawItem
 from .repository import NewsRepository
@@ -675,7 +676,10 @@ def evaluate_published_duplicate_guard(
     best_score = 0.0
 
     for candidate in similarity_candidates:
-        similarity = compute_similarity(draft_text, f"{candidate.title} {candidate.dek} {candidate.body}")
+        candidate_text = f"{candidate.title} {candidate.dek} {candidate.body}"
+        if facts_conflict(draft_text, candidate_text):
+            continue
+        similarity = compute_similarity(draft_text, candidate_text)
         if similarity > best_score:
             best_score = similarity
             best_candidate = candidate
