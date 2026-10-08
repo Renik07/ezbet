@@ -8,6 +8,8 @@ import { formatMoscowDate, formatMoscowDateTime } from "@/lib/dates";
 import { getArticle, getNews } from "@/lib/news";
 import { absoluteUrl, SITE_NAME, SITE_OG_IMAGE, truncateMeta } from "@/lib/site";
 
+export const dynamic = "force-dynamic";
+
 function isGuideArticle(newsItemId: string) {
   return newsItemId.startsWith("guide:");
 }
@@ -62,6 +64,7 @@ export async function generateMetadata({
       url: canonical,
       siteName: SITE_NAME,
       publishedTime: item.publishedAt,
+      modifiedTime: item.updatedAt ?? item.publishedAt,
       ...(articleAuthor ? { authors: [articleAuthor] } : {}),
       tags: item.tags.filter((tag) => !tag.toLowerCase().includes("ai")),
       images: [
@@ -118,7 +121,7 @@ export default async function ArticlePage({
         description: truncateMeta(item.dek || item.lead || item.body),
         articleBody: item.body,
         datePublished: item.publishedAt,
-        dateModified: item.publishedAt,
+        dateModified: item.updatedAt ?? item.publishedAt,
         mainEntityOfPage: articleUrl,
         url: articleUrl,
         inLanguage: "ru-RU",

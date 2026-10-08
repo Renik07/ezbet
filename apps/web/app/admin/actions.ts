@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { resolveAdminApiToken, resolveApiBaseUrl } from "@/lib/api";
+import { publicDataCache } from "@/lib/public-data-cache";
 import { requireAdminSession } from "@/lib/auth";
 
 function redirectWithError(notice: string, error: unknown) {
@@ -126,6 +127,7 @@ export async function runEditorialNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/admin?notice=editorial-run");
@@ -171,6 +173,7 @@ export async function resetDatabaseNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/admin?notice=db-reset");
@@ -185,6 +188,7 @@ export async function ingestRssTestBatchNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/admin?notice=sources-ingested");
@@ -243,6 +247,7 @@ export async function runSchedulerNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/admin?notice=scheduler-run");
@@ -260,6 +265,7 @@ export async function runEnrichmentNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=enrichment-run&detail=${encodeURIComponent(detail)}`);
@@ -280,6 +286,7 @@ export async function runEnrichmentSchedulerNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=enrichment-scheduler-run&detail=${encodeURIComponent(detail)}`);
@@ -306,6 +313,7 @@ export async function runEditorialSchedulerNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=editorial-scheduler-run&detail=${encodeURIComponent(detail)}`);
@@ -326,6 +334,7 @@ export async function runManualPipelineNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=manual-pipeline-run&detail=${encodeURIComponent(detail)}`);
@@ -362,6 +371,7 @@ export async function runPublishNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=publish-run&detail=${encodeURIComponent(detail)}`);
@@ -382,6 +392,7 @@ export async function runPublishSchedulerNow() {
 
   revalidatePath("/admin");
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect(`/admin?notice=publish-scheduler-run&detail=${encodeURIComponent(detail)}`);
@@ -587,6 +598,7 @@ export async function hidePublishedNewsNow(formData: FormData) {
   }
 
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/studio?notice=news-hidden");
@@ -601,6 +613,7 @@ export async function unhidePublishedNewsNow(formData: FormData) {
   }
 
   revalidatePath("/studio");
+  await publicDataCache.clear();
   revalidatePath("/news");
   revalidatePath("/");
   redirect("/studio?notice=news-unhidden");

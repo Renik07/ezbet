@@ -37,6 +37,7 @@ class MappingRepository:
             visibility=str(row[8]),
             ai_reviewed=bool(row[9]),
             article_slug=row[10],
+            updated_at=row[11] if len(row) > 11 else None,
         )
 
     @staticmethod

@@ -21,6 +21,7 @@
     "forecasts:run": "sh ./scripts/forecast-cron.sh",
     "build:web": "npm run build --workspace web",
     "lint:web": "npm run lint --workspace web",
+    "test:web": "npm run test --workspace web",
     "dev:worker": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} .venv/bin/python -m services.api.app.worker",
     "db:migrate": "DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} .venv/bin/python -m services.api.app.migrations upgrade"
   }

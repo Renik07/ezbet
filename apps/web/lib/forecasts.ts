@@ -1,3 +1,6 @@
+import { resolveApiBaseUrl } from "./api";
+import { publicDataCache, PublicApiError } from "./public-data-cache";
+
 export type MatchForecast = {
   slug: string;
   homeTeam: string;
@@ -20,89 +23,7 @@ export type MatchForecast = {
 
 // Временный источник для первого визуального релиза. Следующий этап заменит
 // этот список результатом ежедневного сценария Leon API → веб-поиск → AI-текст.
-export const fallbackForecasts: MatchForecast[] = [
-  {
-    slug: "22-07-2026-egnatia-rogozina-cele",
-    homeTeam: "Эгнатиа Рогожина",
-    awayTeam: "Целе",
-    homeLogo: "https://leon.ru/blog/uploads/logotypes/soccer/egnatia-rogozina__thumb_60x60.png",
-    awayLogo: "https://leon.ru/blog/uploads/logotypes/soccer/cele__thumb_60x60.png",
-    league: "Лига чемпионов УЕФА",
-    kickoff: "22 июля, 22:00",
-    odds: { home: "3.51", draw: "3.43", away: "1.98" },
-    pick: "Целе не проиграет",
-    lead: "Гости идут фаворитами по линии, но домашний матч Эгнатии добавляет сценарию осторожности.",
-    homeForm: "Эгнатиа будет делать ставку на организованную игру дома и быстрые атаки после отбора.",
-    awayForm: "Целе выглядит предпочтительнее по котировкам и постарается контролировать ход встречи.",
-    factors: ["статус гостей как фаворита по линии", "домашнее поле Эгнатии", "осторожный характер первого матча"],
-  },
-  {
-    slug: "22-07-2026-vardar-riga",
-    homeTeam: "Вардар",
-    awayTeam: "Рига",
-    homeLogo: "https://leon.ru/blog/uploads/logotypes/soccer/vardar__thumb_60x60.png",
-    awayLogo: "https://leon.ru/blog/uploads/logotypes/soccer/riga__thumb_60x60.png",
-    league: "Лига конференций УЕФА",
-    kickoff: "22 июля, 21:00",
-    odds: { home: "3.30", draw: "3.42", away: "2.07" },
-    pick: "Рига не проиграет",
-    lead: "Рига имеет небольшое преимущество в линии, однако разрыв между командами не выглядит большим.",
-    homeForm: "Вардар на своём поле постарается сыграть компактно и не дать сопернику свободно развивать атаки.",
-    awayForm: "Риге важно подтвердить статус фаворита контролем мяча и аккуратной игрой без лишнего риска.",
-    factors: ["умеренное преимущество гостей в коэффициентах", "фактор домашнего поля", "вероятность равного начала матча"],
-  },
-  {
-    slug: "22-07-2026-levski-sofiia-kraiova",
-    homeTeam: "Левски София",
-    awayTeam: "Крайова",
-    homeLogo: "https://leon.ru/blog/uploads/logotypes/soccer/levski-sofiia__thumb_60x60.png",
-    awayLogo: "https://leon.ru/blog/uploads/logotypes/soccer/kraiova__thumb_60x60.png",
-    league: "Лига чемпионов УЕФА",
-    kickoff: "22 июля, 20:30",
-    odds: { home: "2.11", draw: "3.12", away: "3.49" },
-    pick: "Левски София с форой 0",
-    lead: "Домашняя команда получила небольшое преимущество в линии — матч обещает быть конкурентным.",
-    homeForm: "Левски может использовать поддержку трибун и активнее начать встречу.",
-    awayForm: "Крайова наверняка сделает ставку на дисциплину без мяча и свои шансы в быстрых атаках.",
-    factors: ["близкие коэффициенты на исход", "небольшой перевес хозяев", "важность первого шага в противостоянии"],
-  },
-  {
-    slug: "22-07-2026-omoniia-nikosiia-kairat",
-    homeTeam: "Омония Никосия",
-    awayTeam: "Кайрат",
-    homeLogo: "https://leon.ru/blog/uploads/logotypes/soccer/omoniia-nikosiia__thumb_60x60.png",
-    awayLogo: "https://leon.ru/blog/uploads/logotypes/soccer/kairat__thumb_60x60.png",
-    league: "Лига чемпионов УЕФА",
-    kickoff: "22 июля, 20:00",
-    odds: { home: "1.63", draw: "3.75", away: "5.00" },
-    pick: "Победа Омонии Никосии",
-    lead: "Омония заметно выше в линии и получает преимущество домашнего поля.",
-    homeForm: "Хозяева могут спокойно вести матч первым номером и искать моменты через позиционные атаки.",
-    awayForm: "Кайрату важно сохранять плотность в обороне и использовать редкие быстрые выпады.",
-    factors: ["явное преимущество хозяев в коэффициентах", "матч на своём поле", "разный статус команд перед игрой"],
-  },
-  {
-    slug: "22-07-2026-neftci-dinamo-minsk",
-    homeTeam: "Нефтчи",
-    awayTeam: "Динамо Минск",
-    homeLogo: "https://leon.ru/blog/uploads/logotypes/soccer/neftci__thumb_60x60.png",
-    awayLogo: "https://leon.ru/blog/uploads/logotypes/soccer/dinamo-minsk__thumb_60x60.png",
-    league: "Лига конференций УЕФА",
-    kickoff: "22 июля, 19:00",
-    odds: { home: "1.99", draw: "3.22", away: "3.75" },
-    pick: "Нефтчи не проиграет",
-    lead: "Нефтчи — небольшой фаворит, но коэффициенты оставляют Динамо реальные шансы на борьбу.",
-    homeForm: "Нефтчи постарается использовать преимущество своего поля и не раскрывать игру раньше времени.",
-    awayForm: "Динамо Минск может рассчитывать на организованную оборону и контратаки.",
-    factors: ["небольшой перевес хозяев в линии", "равный по ожиданиям сценарий", "ценность первого результата в паре"],
-  },
-];
-
-export function getForecast(slug: string) {
-  return fallbackForecasts.find((forecast) => forecast.slug === slug);
-}
-
-type ForecastApiItem = {
+export type ForecastApiItem = {
   slug: string;
   homeTeam: string;
   awayTeam: string;
@@ -119,28 +40,41 @@ type ForecastApiItem = {
   factors?: string[];
   pick?: string;
   generationStatus?: string;
+  updatedAt: string;
 };
 
-export async function getTodayForecasts(): Promise<MatchForecast[]> {
-  const baseUrl = process.env.EZBET_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "development" ? "http://localhost:8000" : undefined);
-  const fallback = process.env.NODE_ENV === "development" ? fallbackForecasts : [];
-  if (!baseUrl) return fallback;
-
-  try {
-    const response = await fetch(new URL("/api/v1/forecasts", baseUrl).toString(), { cache: "no-store", signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return fallback;
-    const payload = (await response.json()) as { items: ForecastApiItem[] };
-    return payload.items
-      .filter((item) => !item.generationStatus || item.generationStatus === "ready")
-      .map(toDisplayForecast);
-  } catch {
-    return fallback;
+function forecastPayload(value: unknown): { items: ForecastApiItem[] } {
+  const payload = value as { items?: ForecastApiItem[] };
+  if (!payload || !Array.isArray(payload.items)) throw new PublicApiError("Invalid forecast feed.");
+  for (const item of payload.items) {
+    if (!item || typeof item.slug !== "string" || typeof item.homeTeam !== "string" || typeof item.awayTeam !== "string" ||
+        typeof item.league !== "string" || !Number.isFinite(Date.parse(item.kickoff)) ||
+        ![item.oddsHome, item.oddsDraw, item.oddsAway].every((odd) => typeof odd === "number" && Number.isFinite(odd))) {
+      throw new PublicApiError("Invalid forecast.");
+    }
   }
+  return { items: payload.items };
+}
+
+export async function getForecastApiItems(): Promise<ForecastApiItem[]> {
+  const baseUrl = resolveApiBaseUrl();
+  if (!baseUrl) throw new PublicApiError("Public API is not configured.");
+  const result = await publicDataCache.get(new URL("/api/v1/forecasts", baseUrl).toString(), forecastPayload,
+    { freshMs: 60_000, staleMs: 5 * 60_000, timeoutMs: 5000 });
+  const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" });
+  const today = date.format(new Date());
+  return result.data.items.filter((item) => item.generationStatus === "ready" && date.format(new Date(item.kickoff)) === today);
+}
+
+export async function getTodayForecasts(): Promise<MatchForecast[]> {
+  try { return (await getForecastApiItems()).map(toDisplayForecast); }
+  catch { return []; }
 }
 
 export async function getLiveForecast(slug: string): Promise<MatchForecast | undefined> {
-  const forecasts = await getTodayForecasts();
-  return forecasts.find((forecast) => forecast.slug === slug);
+  // An outage is an error; only an actual missing item becomes a 404 page.
+  const item = (await getForecastApiItems()).find((forecast) => forecast.slug === slug);
+  return item ? toDisplayForecast(item) : undefined;
 }
 
 function toDisplayForecast(item: ForecastApiItem): MatchForecast {

@@ -1,15 +1,8 @@
 from __future__ import annotations
 
 import unicodedata
-import zlib
 from dataclasses import dataclass
-from datetime import (
-    datetime,
-    timedelta,
-    timezone,
-)
 import psycopg
-from .models import RawItem
 
 _CYRILLIC_TO_LATIN = str.maketrans(
     {
@@ -99,29 +92,4 @@ def _available_article_slug(cursor: psycopg.Cursor, base_slug: str, article_id: 
     )
     used_slugs = {str(row[0]) for row in cursor.fetchall()}
     return _deduplicate_article_slug(base_slug, used_slugs)
-
-def _build_public_published_at(raw_item: RawItem) -> datetime:
-    return _build_public_published_at_from_values(
-        source_key=raw_item.source_key,
-        external_id=raw_item.external_id,
-        title=raw_item.title,
-        fetched_at=raw_item.fetched_at,
-    )
-
-def _build_public_published_at_from_values(
-    *,
-    source_key: str,
-    external_id: str,
-    title: str,
-    fetched_at: datetime,
-) -> datetime:
-    if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-    else:
-        fetched_at = fetched_at.astimezone(timezone.utc)
-
-    seed = f"{source_key}:{external_id}:{title}".encode("utf-8", errors="ignore")
-    hash_value = zlib.crc32(seed)
-    offset_seconds = 120 + (hash_value % (54 * 60))
-    return fetched_at - timedelta(hours=1) + timedelta(seconds=offset_seconds)
 

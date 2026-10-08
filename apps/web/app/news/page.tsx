@@ -6,6 +6,8 @@ import { SearchForm } from "@/components/search-form";
 import { getNews } from "@/lib/news";
 import { absoluteUrl, SITE_DESCRIPTION, SITE_NAME, SITE_OG_IMAGE, truncateMeta } from "@/lib/site";
 
+export const dynamic = "force-dynamic";
+
 const NEWS_PER_PAGE = 20;
 
 function buildNewsPageHref(page: number, query: string, type: string) {
@@ -83,7 +85,7 @@ export default async function NewsPage({
   const isGuides = type === "guides";
   const requestedPage = Number(params.page ?? "1");
   const safeRequestedPage = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.floor(requestedPage) : 1;
-  const { items, isLive, total = items.length, page = 1 } = await getNews(query, { guideOnly: isGuides, limit: NEWS_PER_PAGE, page: safeRequestedPage });
+  const { items, isLive, cacheStatus, total = items.length, page = 1 } = await getNews(query, { guideOnly: isGuides, limit: NEWS_PER_PAGE, page: safeRequestedPage });
   const totalPages = Math.max(1, Math.ceil(total / NEWS_PER_PAGE));
   const currentPage = page;
   const startIndex = (currentPage - 1) * NEWS_PER_PAGE;
@@ -127,14 +129,16 @@ export default async function NewsPage({
         }}
       />
       <section className="news-page-hero container-wide">
-        <div className="news-kicker">{isLive ? "Живая лента" : "Резервная лента"}</div>
+        <div className="news-kicker">{isLive ? "Живая лента" : cacheStatus === "stale" ? "Сохранённая лента" : "Лента временно недоступна"}</div>
         <h1>{isGuides ? "Полезные статьи" : "Лента новостей"}</h1>
         <p>
           {isGuides
             ? "Большие материалы о спорте, киберспорте, автоспорте, здоровье, деньгах и технологиях."
             : isLive
             ? "Свежие публикации с поиском по темам, командам, турнирам и источникам."
-            : "API временно недоступен, поэтому здесь показаны резервные публикации."}
+            : cacheStatus === "stale"
+              ? "Обновление временно недоступно. Показываем последние сохранённые публикации."
+              : "Не удалось загрузить публикации. Попробуйте открыть страницу позже."}
         </p>
         <SearchForm initialQuery={query} type={type} />
       </section>

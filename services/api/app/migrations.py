@@ -7,8 +7,10 @@ import json
 
 from .migration_0001 import STATEMENTS as BASELINE
 from .migration_0002 import STATEMENTS as WORKER_QUEUE
+from .migration_0003 import STATEMENTS as PUBLICATION_DATES
 
-MIGRATIONS = ((1, 'baseline', BASELINE), (2, 'worker_queue', WORKER_QUEUE))
+MIGRATIONS = ((1, 'baseline', BASELINE), (2, 'worker_queue', WORKER_QUEUE),
+              (3, 'publication_dates', PUBLICATION_DATES))
 MIGRATION_LOCK_KEY = 4815162351
 
 

@@ -21,8 +21,6 @@ from .models import (
 from .repository_support import (
     _available_article_slug,
     _build_article_slug,
-    _build_public_published_at,
-    _build_public_published_at_from_values,
 )
 
 class PublicationRepository:
@@ -55,7 +53,7 @@ class PublicationRepository:
         page_meta: dict | None = None,
     ) -> list[NewsItem]:
         statement = """
-            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at
             FROM news_items n
             LEFT JOIN articles a ON a.news_item_id = n.id
         """
@@ -158,7 +156,7 @@ class PublicationRepository:
 
     def get_news_item(self, news_item_id: str, *, include_hidden: bool = False) -> NewsItem | None:
         statement = """
-            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at
             FROM news_items n
             LEFT JOIN articles a ON a.news_item_id = n.id
             WHERE n.id = %s
@@ -344,7 +342,7 @@ class PublicationRepository:
         if draft.generation_mode == "template" or draft.status == "fallback_only":
             raise ValueError("Template fallback drafts must never be published.")
 
-        public_published_at = _build_public_published_at(raw_item)
+        public_published_at = datetime.now(timezone.utc)
         published_item = NewsItem(
             id=raw_item.external_id,
             title=draft.title,
@@ -364,6 +362,8 @@ class PublicationRepository:
                 draft, raw_item, public_published_at=public_published_at, connection=connection,
             )
             published_item.article_slug = article.slug
+            published_item.published_at = article.published_at
+            published_item.updated_at = article.updated_at
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -416,53 +416,24 @@ class PublicationRepository:
         return published_item
 
     def reflow_public_published_at_for_articles(self, *, limit: int = 500) -> int:
-        statement = """
-            SELECT
-                a.id,
-                n.id,
-                r.source_key,
-                r.external_id,
-                r.title,
-                r.fetched_at
-            FROM articles a
-            JOIN news_items n ON n.id = a.news_item_id
-            JOIN raw_items r ON r.id = a.raw_item_id
-            WHERE n.ai_reviewed = TRUE
-            ORDER BY r.fetched_at DESC
-            LIMIT %s
-        """
-        rows: list[tuple[object, ...]]
+        """Compatibility repair endpoint: restore stored creation times, never invent dates."""
         with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(statement, (limit,))
-                rows = cursor.fetchall()
-
-                for row in rows:
-                    public_published_at = _build_public_published_at_from_values(
-                        source_key=str(row[2]),
-                        external_id=str(row[3]),
-                        title=str(row[4]),
-                        fetched_at=row[5],
-                    )
-                    cursor.execute(
-                        """
-                        UPDATE articles
-                        SET published_at = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                        """,
-                        (public_published_at, row[0]),
-                    )
-                    cursor.execute(
-                        """
-                        UPDATE news_items
-                        SET published_at = %s
-                        WHERE id = %s
-                        """,
-                        (public_published_at, row[1]),
-                    )
-            connection.commit()
-
+            rows = connection.execute("""
+                WITH candidates AS (
+                    SELECT a.id, a.news_item_id, a.created_at
+                    FROM articles a JOIN news_items n ON n.id = a.news_item_id
+                    WHERE a.raw_item_id NOT LIKE 'guide-topic:%%'
+                      AND (a.published_at IS DISTINCT FROM a.created_at
+                           OR n.published_at IS DISTINCT FROM a.created_at)
+                    ORDER BY a.created_at DESC LIMIT %s
+                ), repaired AS (
+                    UPDATE articles a SET published_at = c.created_at
+                    FROM candidates c WHERE a.id = c.id
+                    RETURNING a.news_item_id, a.published_at
+                )
+                UPDATE news_items n SET published_at = r.published_at
+                FROM repaired r WHERE n.id = r.news_item_id RETURNING n.id
+            """, (limit,)).fetchall()
         return len(rows)
 
     def upsert_article(
@@ -473,7 +444,7 @@ class PublicationRepository:
         public_published_at: datetime | None = None,
         connection: psycopg.Connection | None = None,
     ) -> Article:
-        display_published_at = public_published_at or _build_public_published_at(raw_item)
+        display_published_at = public_published_at or datetime.now(timezone.utc)
         article = Article(
             id=f"article:{raw_item.external_id}",
             slug=_build_article_slug(draft.title),
@@ -489,8 +460,8 @@ class PublicationRepository:
             tags=raw_item.tags,
             published_at=display_published_at,
             ai_reviewed=True,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=display_published_at,
+            updated_at=display_published_at,
         )
 
         owns_connection = connection is None
@@ -515,9 +486,11 @@ class PublicationRepository:
                         source_url,
                         tags,
                         published_at,
-                        ai_reviewed
+                        ai_reviewed,
+                        created_at,
+                        updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         slug = EXCLUDED.slug,
                         news_item_id = EXCLUDED.news_item_id,
@@ -530,9 +503,17 @@ class PublicationRepository:
                         source_title = EXCLUDED.source_title,
                         source_url = EXCLUDED.source_url,
                         tags = EXCLUDED.tags,
-                        published_at = EXCLUDED.published_at,
+                        published_at = articles.published_at,
                         ai_reviewed = EXCLUDED.ai_reviewed,
-                        updated_at = NOW()
+                        updated_at = CASE WHEN
+                            (articles.title, articles.lead, articles.dek, articles.body,
+                             articles.category, articles.source_title, articles.source_url,
+                             articles.tags, articles.ai_reviewed)
+                            IS DISTINCT FROM
+                            (EXCLUDED.title, EXCLUDED.lead, EXCLUDED.dek, EXCLUDED.body,
+                             EXCLUDED.category, EXCLUDED.source_title, EXCLUDED.source_url,
+                             EXCLUDED.tags, EXCLUDED.ai_reviewed)
+                            THEN NOW() ELSE articles.updated_at END
                     """,
                     (
                         article.id,
@@ -549,6 +530,8 @@ class PublicationRepository:
                         article.tags,
                         article.published_at,
                         article.ai_reviewed,
+                        article.created_at,
+                        article.updated_at,
                     ),
                 )
                 cursor.execute(

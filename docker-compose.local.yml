@@ -6,8 +6,11 @@ services:
     ports:
       - "3000:3000"
     environment:
+      EZBET_PUBLIC_CACHE_DIR: /app/apps/web/.next/cache/public-data
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       NEXT_PUBLIC_API_BASE_URL: http://api:8000
+    volumes:
+      - public_data_cache:/app/apps/web/.next/cache/public-data
     depends_on:
       - api
 
@@ -80,4 +83,5 @@ services:
       retries: 10
 
 volumes:
+  public_data_cache:
   postgres_data:

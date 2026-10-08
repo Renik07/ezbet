@@ -1,4 +1,5 @@
-import { resolveApiBaseUrl } from "@/lib/api";
+import { resolveApiBaseUrl } from "./api";
+import { PublicApiError, publicDataCache } from "./public-data-cache";
 
 export type NewsItem = {
   id: string;
@@ -6,6 +7,7 @@ export type NewsItem = {
   description: string;
   category: string;
   publishedAt: string;
+  updatedAt?: string;
   source: string;
   link?: string;
   visibility?: string;
@@ -27,6 +29,7 @@ export type Article = {
   sourceUrl?: string;
   tags: string[];
   publishedAt: string;
+  updatedAt?: string;
   aiReviewed: boolean;
 };
 
@@ -36,204 +39,83 @@ export type NewsFeed = {
   page?: number;
   isLive: boolean;
   apiBaseUrl?: string;
+  cacheStatus: "api" | "cache" | "stale" | "unavailable";
 };
 
-const fallbackNews: NewsItem[] = [
-  {
-    id: "1",
-    title: "Клубы РПЛ меняют подготовку к летнему окну, букмекеры пересчитывают линию",
-    description:
-      "Черновой материал показывает, как MVP будет выглядеть с автоматически собранными новостями и AI-редактурой перед публикацией.",
-    category: "Беттинг",
-    publishedAt: "2026-04-29T09:15:00.000Z",
-    source: "ezbet ingest",
-    visibility: "public",
-    aiReviewed: true,
-    articleSlug: "fallback-rpl-window-1"
-  },
-  {
-    id: "2",
-    title: "Турнирная гонка в НБА сдвинула приоритеты редакции на вечерний слот",
-    description:
-      "Новость попадает в ленту, проходит базовую проверку и затем может быть усилена AI-редактором.",
-    category: "Баскетбол",
-    publishedAt: "2026-04-29T08:20:00.000Z",
-    source: "demo source",
-    visibility: "public",
-    aiReviewed: false,
-    link: "https://example.com/fallback-nba"
-  },
-  {
-    id: "3",
-    title: "Лига чемпионов вернула спрос на краткие объясняющие материалы под поисковый трафик",
-    description:
-      "Главная страница может смешивать свежие новости, служебные KPI и коммерческие точки роста без перегруза интерфейса.",
-    category: "Футбол",
-    publishedAt: "2026-04-29T07:45:00.000Z",
-    source: "demo source",
-    visibility: "public",
-    aiReviewed: false,
-    link: "https://example.com/fallback-ucl"
-  }
-];
+export type NewsOptions = { aiOnly?: boolean; fallbackToAll?: boolean; guideOnly?: boolean; limit?: number; page?: number };
 
-const fallbackArticles: Article[] = [
-  {
-    id: "article:fallback:1",
-    slug: "fallback-rpl-window-1",
-    newsItemId: "1",
-    rawItemId: "raw:fallback:1",
-    title: "Клубы РПЛ меняют подготовку к летнему окну, букмекеры пересчитывают линию",
-    lead: "Тестовая article page для MVP показывает, как enrichment и AI-редактура превращаются в полноценный материал для чтения.",
-    dek: "Тестовая article page для MVP показывает, как AI-редактура превращается в полноценный материал для чтения.",
-    body:
-      "На текущем этапе ezbet уже собирает сигналы из внешних источников и превращает их в публикационный поток.\n\nСледующий слой после ленты — полноценная статья, где у пользователя есть не только короткий dek, но и связный body для чтения.\n\nИменно этот формат станет базой для SEO, внутренних переходов и дальнейшей монетизации через редакционные и коммерческие блоки.",
-    category: "Беттинг",
-    sourceTitle: "ezbet ingest",
-    sourceUrl: "https://example.com/fallback-rpl",
-    tags: ["РПЛ", "Беттинг", "AI news"],
-    publishedAt: "2026-04-29T09:15:00.000Z",
-    aiReviewed: true
-  }
-];
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") throw new PublicApiError("Invalid public API payload.");
+  return value as Record<string, unknown>;
+}
 
-export async function getNews(
-  query?: string,
-  options?: { aiOnly?: boolean; fallbackToAll?: boolean; guideOnly?: boolean; limit?: number; page?: number }
-): Promise<NewsFeed> {
+function validNews(value: unknown): NewsItem {
+  const item = record(value);
+  for (const key of ["id", "title", "description", "category", "source", "publishedAt"]) {
+    if (typeof item[key] !== "string") throw new PublicApiError("Invalid news item.");
+  }
+  if (!Number.isFinite(Date.parse(item.publishedAt as string))) throw new PublicApiError("Invalid publication date.");
+  if (item.visibility === "hidden") throw new PublicApiError("Hidden news cannot enter the public cache.");
+  return item as NewsItem;
+}
+
+function newsPayload(value: unknown): { items: NewsItem[]; total?: number; page?: number } {
+  const payload = record(value);
+  if (!Array.isArray(payload.items)) throw new PublicApiError("Invalid news feed.");
+  return { items: payload.items.map(validNews), total: typeof payload.total === "number" ? payload.total : undefined,
+    page: typeof payload.page === "number" ? payload.page : undefined };
+}
+
+function articlePayload(value: unknown): { item: Article } {
+  const item = record(record(value).item);
+  for (const key of ["id", "slug", "newsItemId", "title", "dek", "body", "category", "sourceTitle", "publishedAt"]) {
+    if (typeof item[key] !== "string") throw new PublicApiError("Invalid article.");
+  }
+  if (!Array.isArray(item.tags) || !item.tags.every((tag) => typeof tag === "string") ||
+      !Number.isFinite(Date.parse(item.publishedAt as string))) throw new PublicApiError("Invalid article metadata.");
+  return { item: item as Article };
+}
+
+export async function getNews(query?: string, options?: NewsOptions): Promise<NewsFeed> {
   const baseUrl = resolveApiBaseUrl();
-
-  if (!baseUrl) {
-    return {
-      items: filterNews(fallbackNews, query, options),
-      isLive: false
-    };
-  }
-
+  if (!baseUrl) return { items: [], isLive: false, cacheStatus: "unavailable" };
+  const url = new URL("/api/v1/news", baseUrl);
+  url.searchParams.set("limit", String(options?.limit ?? 100));
+  url.searchParams.set("page", String(options?.page ?? 1));
+  if (query) url.searchParams.set("query", query);
+  if (options?.aiOnly) url.searchParams.set("aiOnly", "true");
+  if (options?.guideOnly) url.searchParams.set("guideOnly", "true");
   try {
-    const url = new URL("/api/v1/news", baseUrl);
-    if (options?.limit) url.searchParams.set("limit", String(options.limit));
-    if (options?.page) url.searchParams.set("page", String(options.page));
-    if (query) {
-      url.searchParams.set("query", query);
+    const result = await publicDataCache.get(url.toString(), newsPayload, { freshMs: 60_000, staleMs: 15 * 60_000 });
+    const items = filterNews(result.data.items, query, options);
+    if (options?.aiOnly && options.fallbackToAll && !items.length) {
+      return getNews(query, { ...options, aiOnly: false, fallbackToAll: false });
     }
-    if (options?.aiOnly) {
-      url.searchParams.set("aiOnly", "true");
-    }
-    if (options?.guideOnly) {
-      url.searchParams.set("guideOnly", "true");
-    }
-
-    const response = await fetch(url.toString(), {
-      next: { revalidate: 60 },
-      signal: AbortSignal.timeout(options?.limit ? 8000 : 60000)
-    });
-
-    if (!response.ok) {
-      return {
-        items: filterNews(fallbackNews, query, options),
-        isLive: false
-      };
-    }
-
-    const payload = (await response.json()) as { items: NewsItem[]; total?: number; page?: number };
-    const filteredItems = filterNews(payload.items, query, options);
-
-    if (options?.aiOnly && options.fallbackToAll && filteredItems.length === 0) {
-      const fallbackUrl = new URL("/api/v1/news", baseUrl);
-      if (query) {
-        fallbackUrl.searchParams.set("query", query);
-      }
-      if (options.guideOnly) {
-        fallbackUrl.searchParams.set("guideOnly", "true");
-      }
-
-      const fallbackResponse = await fetch(fallbackUrl.toString(), {
-        cache: "no-store"
-      });
-
-      if (fallbackResponse.ok) {
-        const fallbackPayload = (await fallbackResponse.json()) as { items: NewsItem[] };
-        return {
-          items: filterNews(fallbackPayload.items, query, { aiOnly: false }),
-          isLive: true,
-          apiBaseUrl: baseUrl
-        };
-      }
-    }
-
-    return {
-      items: filteredItems,
-      total: payload.total,
-      page: payload.page,
-      isLive: true,
-      apiBaseUrl: baseUrl
-    };
+    return { ...result.data, items, isLive: result.source !== "stale", cacheStatus: result.source, apiBaseUrl: baseUrl };
   } catch {
-    return {
-      items: filterNews(fallbackNews, query, options),
-      isLive: false
-    };
+    return { items: [], isLive: false, cacheStatus: "unavailable" };
   }
 }
 
 export async function getArticle(slug: string): Promise<{ item?: Article; isLive: boolean }> {
   const baseUrl = resolveApiBaseUrl();
-
-  if (!baseUrl) {
-    return {
-      item: fallbackArticles.find((article) => article.slug === slug),
-      isLive: false
-    };
-  }
-
+  if (!baseUrl) throw new PublicApiError("Public API is not configured.");
   try {
-    const response = await fetch(new URL(`/api/v1/articles/${slug}`, baseUrl).toString(), {
-      cache: "no-store"
-    });
-
-    if (!response.ok) {
-      return {
-        item: fallbackArticles.find((article) => article.slug === slug),
-        isLive: false
-      };
-    }
-
-    const payload = (await response.json()) as { item: Article };
-    return {
-      item: payload.item,
-      isLive: true
-    };
-  } catch {
-    return {
-      item: fallbackArticles.find((article) => article.slug === slug),
-      isLive: false
-    };
+    const result = await publicDataCache.get(new URL(`/api/v1/articles/${encodeURIComponent(slug)}`, baseUrl).toString(),
+      articlePayload, { freshMs: 60_000, staleMs: 60 * 60_000 });
+    return { item: result.data.item, isLive: result.source !== "stale" };
+  } catch (error) {
+    if (error instanceof PublicApiError && error.status === 404) return { isLive: true };
+    throw error;
   }
 }
 
-function filterNews(items: NewsItem[], query?: string, options?: { aiOnly?: boolean; guideOnly?: boolean }) {
+function filterNews(items: NewsItem[], query?: string, options?: NewsOptions) {
   let filtered = items;
-
-  if (options?.guideOnly) {
-    filtered = filtered.filter((item) => item.id.startsWith("guide:") && item.articleSlug);
-  } else {
-    filtered = filtered.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
-  }
-
-  if (options?.aiOnly) {
-    filtered = filtered.filter((item) => item.aiReviewed && item.articleSlug);
-  }
-
-  if (!query) {
-    return filtered;
-  }
-
+  if (options?.guideOnly) filtered = filtered.filter((item) => item.id.startsWith("guide:") && item.articleSlug);
+  else filtered = filtered.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
+  if (options?.aiOnly) filtered = filtered.filter((item) => item.aiReviewed && item.articleSlug);
+  if (!query) return filtered;
   const normalized = query.trim().toLowerCase();
-  return filtered.filter((item) => {
-    return [item.title, item.description, item.category, item.source]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalized);
-  });
+  return filtered.filter((item) => [item.title, item.description, item.category, item.source].join(" ").toLowerCase().includes(normalized));
 }

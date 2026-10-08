@@ -18,6 +18,7 @@ class NewsItem(BaseModel):
     visibility: str = "public"
     ai_reviewed: bool = Field(default=False, serialization_alias="aiReviewed")
     article_slug: Optional[str] = Field(default=None, serialization_alias="articleSlug")
+    updated_at: Optional[datetime] = Field(default=None, serialization_alias="updatedAt")
 
 
 class Article(BaseModel):

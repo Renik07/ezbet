@@ -80,7 +80,7 @@ function truncateText(value: string, maxLength = 60) {
 }
 
 export default async function HomePage() {
-  const [{ items: news, isLive }, { items: guideItems }, todayForecasts] = await Promise.all([
+  const [{ items: news, isLive, cacheStatus }, { items: guideItems }, todayForecasts] = await Promise.all([
     getNews(undefined, { limit: 30, page: 1 }),
     getNews(undefined, { guideOnly: true, limit: 11, page: 1 }),
     getTodayForecasts()
@@ -209,7 +209,7 @@ export default async function HomePage() {
           <div className="ticker-header">
             <span className={`live-badge${isLive ? "" : " live-badge--muted"}`}>
               <span className="live-dot" />
-              {isLive ? "LIVE" : "DEMO"}
+              {isLive ? "LIVE" : cacheStatus === "stale" ? "АРХИВ" : "НЕТ СВЯЗИ"}
             </span>
             <span className="ticker-title">Лента событий</span>
           </div>

@@ -4,11 +4,14 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     environment:
+      EZBET_PUBLIC_CACHE_DIR: /app/apps/web/.next/cache/public-data
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       EZBET_API_BASE_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: http://api:8000
     ports:
       - "3000:3000"
+    volumes:
+      - public_data_cache:/app/apps/web/.next/cache/public-data
     depends_on:
       - api
 
@@ -57,3 +60,6 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
+
+volumes:
+  public_data_cache:

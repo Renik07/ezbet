@@ -301,9 +301,15 @@ class GuidesRepository:
                         source_title = EXCLUDED.source_title,
                         source_url = EXCLUDED.source_url,
                         tags = EXCLUDED.tags,
-                        published_at = EXCLUDED.published_at,
+                        published_at = articles.published_at,
                         ai_reviewed = TRUE,
-                        updated_at = NOW()
+                        updated_at = CASE WHEN
+                            (articles.title, articles.lead, articles.dek, articles.body,
+                             articles.category, articles.source_title, articles.source_url, articles.tags)
+                            IS DISTINCT FROM
+                            (EXCLUDED.title, EXCLUDED.lead, EXCLUDED.dek, EXCLUDED.body,
+                             EXCLUDED.category, EXCLUDED.source_title, EXCLUDED.source_url, EXCLUDED.tags)
+                            THEN NOW() ELSE articles.updated_at END
                     """,
                     (
                         article.id,
@@ -340,7 +346,7 @@ class GuidesRepository:
                         title = EXCLUDED.title,
                         description = EXCLUDED.description,
                         category = EXCLUDED.category,
-                        published_at = EXCLUDED.published_at,
+                        published_at = news_items.published_at,
                         source = EXCLUDED.source,
                         link = EXCLUDED.link,
                         status = EXCLUDED.status,

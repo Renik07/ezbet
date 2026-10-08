@@ -329,3 +329,71 @@ class PipelinePostgresTests(unittest.TestCase):
                 self.assertNotEqual(connection.execute('SELECT pg_backend_pid()').fetchone()[0], backend)
         finally:
             other.close_pool()
+
+    def test_publication_time_is_real_and_retries_do_not_change_it(self):
+        before = datetime.now(timezone.utc)
+        raw = self.raw('dates', published_at=before - timedelta(days=2), fetched_at=before - timedelta(hours=3))
+        self.repo.insert_raw_items([raw])
+        draft = self.draft(raw)
+        self.repo.upsert_draft(draft)
+        first = self.repo.publish_draft_to_news(draft, raw)
+        article = self.repo.get_article_by_slug(first.article_slug)
+        self.assertGreaterEqual(first.published_at, before)
+        self.assertLessEqual(first.published_at, datetime.now(timezone.utc))
+        self.assertEqual(first.published_at, article.created_at)
+        self.assertEqual(first.updated_at, article.updated_at)
+        second = self.repo.publish_draft_to_news(draft, raw)
+        self.assertEqual(second.published_at, first.published_at)
+        self.assertEqual(second.updated_at, first.updated_at)
+        self.assertEqual(self.repo.get_raw_item(raw.id).published_at, raw.published_at)
+
+    def test_edit_changes_modified_date_but_preserves_publication_date_and_slug(self):
+        raw = self.raw('edit-dates')
+        self.repo.insert_raw_items([raw])
+        draft = self.draft(raw)
+        self.repo.upsert_draft(draft)
+        first = self.repo.publish_draft_to_news(draft, raw)
+        updated = draft.model_copy(update={'title': 'Исправленный заголовок', 'body': draft.body + ' Уточнённый факт.'})
+        second = self.repo.publish_draft_to_news(updated, raw)
+        self.assertEqual(second.published_at, first.published_at)
+        self.assertEqual(second.article_slug, first.article_slug)
+        self.assertGreater(second.updated_at, first.updated_at)
+        feed = self.repo.list(limit=1)[0]
+        self.assertEqual(feed.updated_at, second.updated_at)
+        article = self.repo.get_article_by_slug(first.article_slug)
+        self.assertEqual(article.body, updated.body)
+        self.assertEqual(article.model_dump(by_alias=True)['updatedAt'], second.updated_at)
+
+    def test_repair_restores_creation_time_and_does_not_fabricate_modification(self):
+        raw = self.raw('repair-dates')
+        self.repo.insert_raw_items([raw])
+        draft = self.draft(raw)
+        self.repo.upsert_draft(draft)
+        item = self.repo.publish_draft_to_news(draft, raw)
+        with self.repo.connect() as connection:
+            connection.execute("UPDATE articles SET published_at=created_at-INTERVAL '1 hour'")
+            connection.execute("UPDATE news_items SET published_at=published_at-INTERVAL '2 hours'")
+        self.assertEqual(self.repo.reflow_public_published_at_for_articles(), 1)
+        repaired = self.repo.get_article_by_slug(item.article_slug)
+        self.assertEqual(repaired.published_at, repaired.created_at)
+        self.assertEqual(repaired.updated_at, item.updated_at)
+        self.assertEqual(self.repo.reflow_public_published_at_for_articles(), 0)
+
+    def test_guide_edits_preserve_first_publication_date(self):
+        from services.api.app.models import PromptConfig
+        self.repo.ensure_guide_topic_defaults([{'topic_number': 990001, 'title': 'Dates guide', 'section': 'Sport', 'category': 'football'}])
+        with self.repo.connect() as connection:
+            topic_id = connection.execute('SELECT id FROM guide_topics WHERE topic_number=990001').fetchone()[0]
+        topic = self.repo.get_guide_topic(topic_id)
+        prompt = PromptConfig(id='test', agent_key='guide_writer', name='Test', version=1,
+            system_prompt='', user_prompt_template='', model='test')
+        arguments = dict(topic=topic, title='Guide title', dek='Guide lead', body='Guide body',
+            model='test', generation_mode='test', prompt=prompt)
+        first = self.repo.publish_guide_article(**arguments)
+        retry = self.repo.publish_guide_article(**arguments)
+        self.assertEqual(retry.published_at, first.published_at)
+        self.assertEqual(retry.updated_at, first.updated_at)
+        second = self.repo.publish_guide_article(**{**arguments, 'body': 'Updated guide body'})
+        self.assertEqual(second.published_at, first.published_at)
+        self.assertEqual(self.repo.get_news_item(second.news_item_id).published_at, first.published_at)
+        self.assertGreater(second.updated_at, first.updated_at)
