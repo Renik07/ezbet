@@ -275,6 +275,16 @@ export type AiUsageSummary = {
   timezone: string;
 };
 
+export type WorkerJob = {
+  id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  attempts: number;
+  maxAttempts: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type EditorialStudioData = {
   prompts: PromptConfig[];
   rawItems: RawItem[];
@@ -289,6 +299,7 @@ export type EditorialStudioData = {
   editorialScheduler: EditorialSchedulerSettings;
   publishScheduler: PublishSchedulerSettings;
   pipelineRuns: PipelineRun[];
+  workerJobs: WorkerJob[];
   publishedNews: NewsItem[];
   aiUsageSummary: AiUsageSummary;
   isLive: boolean;
@@ -622,6 +633,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       editorialScheduler: fallbackEditorialScheduler,
       publishScheduler: fallbackPublishScheduler,
       pipelineRuns: fallbackPipelineRuns,
+      workerJobs: [],
       publishedNews: fallbackPublishedNews,
       aiUsageSummary: fallbackAiUsageSummary,
       isLive: false,
@@ -643,6 +655,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialSchedulerResult,
     publishSchedulerResult,
     pipelineRunsResult,
+    workerJobsResult,
     publishedNewsResult,
     aiUsageResult
   ] = await Promise.all([
@@ -696,6 +709,12 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     ),
     loadStudioResource(
       baseUrl,
+      "/api/v1/worker/jobs?limit=10",
+      (payload) => (payload as { items: WorkerJob[] }).items,
+      []
+    ),
+    loadStudioResource(
+      baseUrl,
       "/api/v1/news?includeHidden=true&aiOnly=true&limit=24",
       (payload) => (payload as { items: NewsItem[] }).items,
       fallbackPublishedNews
@@ -722,11 +741,12 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialSchedulerResult.error,
     publishSchedulerResult.error,
     pipelineRunsResult.error,
+    workerJobsResult.error,
     publishedNewsResult.error,
     aiUsageResult.error
   ].filter((value): value is string => Boolean(value));
 
-  const expectedResourceCount = 15;
+  const expectedResourceCount = 16;
   const isLive = partialErrors.length < expectedResourceCount;
 
   return {
@@ -743,6 +763,7 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
     editorialScheduler: editorialSchedulerResult.data,
     publishScheduler: publishSchedulerResult.data,
     pipelineRuns: pipelineRunsResult.data,
+    workerJobs: workerJobsResult.data,
     publishedNews: publishedNewsResult.data,
     aiUsageSummary: aiUsageResult.data,
     isLive,

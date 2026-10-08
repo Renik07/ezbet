@@ -25,6 +25,21 @@ services:
       postgres:
         condition: service_healthy
 
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://ezbet:ezbet@postgres:5432/ezbet
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+
   redis:
     image: redis:7-alpine
     ports:

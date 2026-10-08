@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 import re
-import time
+import os
+import threading
 import unicodedata
 import zlib
 from dataclasses import dataclass
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from .config import get_database_url
 from .deduplication import fact_tokens
@@ -92,18 +94,10 @@ class PrefilterRawItemsResult:
     skipped_items: list[dict[str, str]]
 
 
-def _is_retryable_db_error(exc: psycopg.OperationalError) -> bool:
-    message = str(exc).lower()
-    transient_markers = (
-        "ssl syscall error: eof detected",
-        "ssl connection has been closed unexpectedly",
-        "server closed the connection unexpectedly",
-        "connection not open",
-        "connection reset by peer",
-        "could not receive data from server",
-        "terminating connection due to administrator command",
-    )
-    return any(marker in message for marker in transient_markers)
+def _reset_pooled_connection(connection: psycopg.Connection) -> None:
+    # Session advisory locks must not leak to the next borrower after an error.
+    connection.execute("SELECT pg_advisory_unlock_all()")
+    connection.commit()
 
 
 class NewsRepository:
@@ -111,24 +105,39 @@ class NewsRepository:
 
     def __init__(self) -> None:
         self.database_url = get_database_url()
+        self._pool: ConnectionPool | None = None
+        self._pool_lock = threading.Lock()
 
-    def connect(self) -> psycopg.Connection:
-        attempts = 0
-        last_error: psycopg.OperationalError | None = None
+    def _get_pool(self) -> ConnectionPool:
+        with self._pool_lock:
+            if self._pool is None:
+                maximum = int(os.getenv("EZBET_DB_POOL_MAX", "12"))
+                if not 8 <= maximum <= 64:
+                    raise ValueError("EZBET_DB_POOL_MAX must be between 8 and 64.")
+                self._pool = ConnectionPool(
+                    self.database_url, min_size=0, max_size=maximum,
+                    open=False, timeout=10, max_waiting=64, max_idle=60,
+                    max_lifetime=1800, reconnect_timeout=30,
+                    kwargs={"connect_timeout": 10},
+                    check=ConnectionPool.check_connection,
+                    reset=_reset_pooled_connection,
+                )
+                self._pool.open()
+            return self._pool
 
-        while attempts < 3:
-            attempts += 1
-            try:
-                return psycopg.connect(self.database_url)
-            except psycopg.OperationalError as exc:
-                last_error = exc
-                if attempts >= 3 or not _is_retryable_db_error(exc):
-                    raise
-                time.sleep(0.25 * attempts)
+    @contextmanager
+    def connect(self):
+        with self._get_pool().connection() as connection:
+            yield connection
 
-        if last_error is not None:
-            raise last_error
-        raise psycopg.OperationalError("Database connection failed without error details.")
+    def close_pool(self) -> None:
+        with self._pool_lock:
+            if self._pool is not None:
+                self._pool.close()
+                self._pool = None
+
+    def pool_stats(self) -> dict[str, int]:
+        return self._get_pool().get_stats()
 
     def ensure_schema(self) -> None:
         with self.connect() as connection:

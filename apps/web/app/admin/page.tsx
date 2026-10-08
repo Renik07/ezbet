@@ -112,6 +112,7 @@ export default async function AdminPage({
     editorialScheduler,
     publishScheduler,
     pipelineRuns,
+    workerJobs,
     aiUsageSummary,
     isLive,
     liveError
@@ -209,6 +210,22 @@ export default async function AdminPage({
 
       {activeTab === "pipeline" ? (
       <section>
+        {workerJobs.length ? (
+          <div className="admin-table-wrap" style={{ marginBottom: 24 }}>
+            <h2>Фоновые задания</h2>
+            <table className="admin-table">
+              <thead><tr><th>Создано</th><th>Статус</th><th>Попытки</th><th>Ошибка</th></tr></thead>
+              <tbody>{workerJobs.map((job) => (
+                <tr key={job.id}>
+                  <td>{formatMoscowDateTime(job.createdAt)}</td>
+                  <td>{{ pending: "Ожидает", running: "Выполняется", succeeded: "Завершено", failed: "Ошибка" }[job.status]}</td>
+                  <td>{job.attempts} / {job.maxAttempts}</td>
+                  <td>{job.error || "—"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : null}
         <div className="section-head">
           <div>
             <h2>Воронка последнего pipeline</h2>

@@ -16,7 +16,8 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
-    environment:
+    environment: &api_environment
+      EZBET_DB_POOL_MAX: ${EZBET_DB_POOL_MAX:-12}
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -32,3 +33,12 @@ services:
       OPENAI_WEB_SEARCH_CONTEXT_SIZE: ${OPENAI_WEB_SEARCH_CONTEXT_SIZE:-medium}
     ports:
       - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.worker"]
+    environment: *api_environment
+    depends_on:
+      - api

@@ -12,6 +12,9 @@ load_env_file() {
 }
 
 cleanup() {
+  if [ -n "${WORKER_PID:-}" ]; then
+    kill "$WORKER_PID" >/dev/null 2>&1 || true
+  fi
   if [ -n "${API_PID:-}" ]; then
     kill "$API_PID" >/dev/null 2>&1 || true
   fi
@@ -46,5 +49,15 @@ fi
 
 npm run dev:api &
 API_PID=$!
+
+until curl --fail -s http://localhost:8000/health >/dev/null; do
+  if ! kill -0 "$API_PID" 2>/dev/null; then
+    echo "API stopped before becoming ready." >&2
+    exit 1
+  fi
+  sleep 1
+done
+.venv/bin/python -m services.api.app.worker &
+WORKER_PID=$!
 
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 npm run dev:web

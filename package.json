@@ -20,6 +20,7 @@
     "pipeline:cron": "sh ./scripts/pipeline-cron.sh",
     "forecasts:run": "sh ./scripts/forecast-cron.sh",
     "build:web": "npm run build --workspace web",
-    "lint:web": "npm run lint --workspace web"
+    "lint:web": "npm run lint --workspace web",
+    "dev:worker": ".venv/bin/python -m services.api.app.worker"
   }
 }

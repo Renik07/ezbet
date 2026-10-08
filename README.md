@@ -1270,3 +1270,36 @@ editor
 Скрипты читают `.env` из корня проекта независимо от текущего каталога и завершаются с ошибкой при отказе API.
 Для прогнозов сохраните `scripts/forecast-crontab.example`.
 Защита не добавляет вызовов AI API.
+
+## Worker и очередь pipeline
+
+`POST /api/v1/pipeline/start` и cron через `scripts/pipeline-cron.sh` теперь сохраняют задание в PostgreSQL.
+Для выполнения нужен отдельный worker. Production compose запускает его автоматически; при обновлении пересоберите **api, worker и web**:
+
+```sh
+docker compose -f docker-compose.prod.yml up -d --build api worker web
+```
+
+Для локального запуска после `npm run setup:api` и запуска инфраструктуры:
+
+```sh
+npm run dev:api
+npm run dev:worker
+npm run dev:web
+```
+
+`npm run dev` запускает worker вместе с API и frontend.
+Синхронные `/api/v1/pipeline/run` и `/api/v1/pipeline/tick` оставлены для совместимости.
+`POST /api/v1/pipeline/queue?force=false` ставит обычный tick в очередь, `force=true` — принудительный запуск.
+Повторная отправка при активном задании возвращает его `jobId`, не создает дополнительный запуск.
+
+Статусы и ошибки доступны в админке на вкладке pipeline и через защищенный `GET /api/v1/worker/jobs`.
+Heartbeat обновляется каждые 30 секунд; после аварии задание с истекшим lease (5 минут) восстанавливается.
+Максимум — две попытки исполнения прерванного задания. Обычные ошибки и partial errors сохраняются как `failed` без автоматического повторного AI-прогона.
+Гарантии exactly-once для внешнего AI API нет: если процесс оборвался после ответа провайдера до сохранения результата, повторная попытка может повторить незавершенный вызов.
+Размеры партий и бюджеты AI не повышены.
+
+`EZBET_DB_POOL_MAX` ограничивает число соединений **на процесс** (по умолчанию 12, диапазон 8–64).
+API и worker имеют отдельные пулы; учитывайте суммарный лимит базы.
+Соединения проверяются перед выдачей, возвращаются после commit/rollback, session advisory locks очищаются перед повторным использованием.
+Пул закрывается при остановке API/worker. [Документация пула Psycopg](https://www.psycopg.org/psycopg3/docs/advanced/pool.html).

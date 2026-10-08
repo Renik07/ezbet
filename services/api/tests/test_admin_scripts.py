@@ -54,5 +54,5 @@ class AdminScriptTests(unittest.TestCase):
         self.assertEqual(self.run_script('pipeline-cron.sh').returncode, 0)
         args = self.args.read_text()
         self.assertIn('x-admin-token: override-token', args)
-        self.assertIn('http://override:8000/api/v1/pipeline/run', args)
+        self.assertIn('http://override:8000/api/v1/pipeline/queue?force=true', args)
         self.assertNotIn('dotenv-token', args)

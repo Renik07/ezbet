@@ -312,7 +312,7 @@ export async function runEditorialSchedulerNow() {
 }
 
 export async function runManualPipelineNow() {
-  let detail = "Pipeline запущен в фоне. Обновите Admin или Studio через несколько секунд.";
+  let detail = "Pipeline добавлен в очередь. Статус появится в списке фоновых заданий.";
   try {
     const response = await apiPost("/api/v1/pipeline/start", {});
     const payload = (await response.json()) as { started?: boolean; reason?: string; message?: string };

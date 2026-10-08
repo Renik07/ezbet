@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
-import threading
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 import psycopg
@@ -100,25 +99,36 @@ from .models import (
 )
 from .planner import run_content_planner, select_pre_enrichment_candidates
 from .repository import NewsRepository
+from .jobs import JobQueue
+
+
+def _initialize_runtime() -> None:
+    validate_admin_configuration()
+    with repository.connect() as startup_connection:
+        startup_connection.execute("SELECT pg_advisory_xact_lock(%s)", (4815162349,))
+        repository.ensure_schema()
+        JobQueue(repository).ensure_schema()
+        _recover_runtime_state(trigger="startup")
+        repository.ensure_prompt_defaults(default_prompt_configs())
+        repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v9")
+        repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v11")
+        repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
+        try:
+            repository.ensure_guide_topic_defaults(load_guide_topic_seed())
+            repository.maybe_activate_recommended_prompt("guide_writer", "prompt:guide-writer:v3")
+            repository.maybe_activate_recommended_prompt("guide_editor", "prompt:guide-editor:v2")
+        except Exception:
+            logger.exception("Guide article startup initialization failed; continuing without guide scheduler setup.")
+        repository.sync_news_ai_review_flags()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    validate_admin_configuration()
-    repository.ensure_schema()
-    _recover_runtime_state(trigger="startup")
-    repository.ensure_prompt_defaults(default_prompt_configs())
-    repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v9")
-    repository.maybe_activate_recommended_prompt("editor", "prompt:editor:v11")
-    repository.maybe_activate_recommended_prompt("ai_search", "prompt:ai-search:v1")
     try:
-        repository.ensure_guide_topic_defaults(load_guide_topic_seed())
-        repository.maybe_activate_recommended_prompt("guide_writer", "prompt:guide-writer:v3")
-        repository.maybe_activate_recommended_prompt("guide_editor", "prompt:guide-editor:v2")
-    except Exception:
-        logger.exception("Guide article startup initialization failed; continuing without guide scheduler setup.")
-    repository.sync_news_ai_review_flags()
-    yield
+        _initialize_runtime()
+        yield
+    finally:
+        repository.close_pool()
 
 
 app = FastAPI(
@@ -142,8 +152,6 @@ FORECAST_MIN_READY = 3
 FORECAST_CANDIDATE_LIMIT = 12
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
-PIPELINE_RUN_LOCK = threading.Lock()
-PIPELINE_RUN_RUNNING = False
 
 
 def _run_id(phase: str) -> str:
@@ -371,27 +379,37 @@ def _recover_runtime_state(*, trigger: str) -> RecoveryStatusResponse:
         ("publish", repository.get_publish_scheduler_settings, repository.recover_publish_scheduler_if_stale),
     ]
 
+    recovery_locks = {
+        "ingest": SCHEDULER_LOCK_KEY, "enrichment": ENRICHMENT_SCHEDULER_LOCK_KEY,
+        "editorial": EDITORIAL_SCHEDULER_LOCK_KEY, "publish": PUBLISH_SCHEDULER_LOCK_KEY,
+    }
     for phase, get_settings, recover_fn in recovery_plan:
-        settings = get_settings()
-        if settings.last_status != "running":
-            continue
-        recovered_settings = recover_fn()
-        action = RecoveryAction(
-            phase=phase,
-            previous_status="running",
-            recovered_status=recovered_settings.last_status,
-            message=recovered_settings.last_error or "Recovered stale running status.",
-            updated_at=recovered_settings.updated_at,
-        )
-        actions.append(action)
-        _log_pipeline_event(
-            "recovery_action",
-            phase=phase,
-            trigger=trigger,
-            status=recovered_settings.last_status,
-            error_reason=recovered_settings.last_error,
-            updated_at=recovered_settings.updated_at.isoformat() if recovered_settings.updated_at else None,
-        )
+        with repository.connect() as connection:
+            locked = connection.execute(
+                "SELECT pg_try_advisory_xact_lock(%s)", (recovery_locks[phase],),
+            ).fetchone()[0]
+            if not locked:
+                continue
+            settings = get_settings()
+            if settings.last_status != "running":
+                continue
+            recovered_settings = recover_fn()
+            action = RecoveryAction(
+                phase=phase,
+                previous_status="running",
+                recovered_status=recovered_settings.last_status,
+                message=recovered_settings.last_error or "Recovered stale running status.",
+                updated_at=recovered_settings.updated_at,
+            )
+            actions.append(action)
+            _log_pipeline_event(
+                "recovery_action",
+                phase=phase,
+                trigger=trigger,
+                status=recovered_settings.last_status,
+                error_reason=recovered_settings.last_error,
+                updated_at=recovered_settings.updated_at.isoformat() if recovered_settings.updated_at else None,
+            )
 
     if not actions:
         _log_pipeline_event(
@@ -1150,42 +1168,29 @@ def run_guide_scheduler_now() -> GuideSchedulerRunResponse:
     return _run_guide_scheduler()
 
 
+def _enqueue_pipeline(*, force: bool) -> dict[str, object]:
+    created, job = JobQueue(repository).enqueue(force=force)
+    return {
+        "started": created,
+        "reason": "queued" if created else "already_running",
+        "message": "Pipeline добавлен в очередь worker." if created else "Pipeline уже ожидает запуска или выполняется worker.",
+        "jobId": job["id"], "status": job["status"], "startedAt": job["createdAt"],
+    }
+
+
 @app.post("/api/v1/pipeline/start")
 def start_pipeline_now() -> dict[str, object]:
-    global PIPELINE_RUN_RUNNING
+    return _enqueue_pipeline(force=True)
 
-    with PIPELINE_RUN_LOCK:
-        if PIPELINE_RUN_RUNNING:
-            return {
-                "started": False,
-                "reason": "already_running",
-                "message": "Pipeline уже выполняется в фоне.",
-            }
-        PIPELINE_RUN_RUNNING = True
 
-    started_at = datetime.now(timezone.utc)
+@app.post("/api/v1/pipeline/queue")
+def queue_pipeline(force: bool = Query(default=False)) -> dict[str, object]:
+    return _enqueue_pipeline(force=force)
 
-    def _worker() -> None:
-        global PIPELINE_RUN_RUNNING
-        try:
-            _run_pipeline_scheduler(force=True)
-        except Exception:
-            logger.exception("Background pipeline run failed")
-        finally:
-            with PIPELINE_RUN_LOCK:
-                PIPELINE_RUN_RUNNING = False
 
-    threading.Thread(
-        target=_worker,
-        daemon=True,
-        name=f"pipeline-run-{started_at.strftime('%Y%m%d%H%M%S%f')}",
-    ).start()
-    return {
-        "started": True,
-        "reason": "background_started",
-        "message": "Pipeline запущен в фоне. Обновите Admin или Studio через несколько секунд.",
-        "startedAt": started_at.isoformat(),
-    }
+@app.get("/api/v1/worker/jobs")
+def list_worker_jobs(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, object]:
+    return {"items": JobQueue(repository).list_jobs(limit), "pool": repository.pool_stats()}
 
 
 @app.get("/api/v1/raw-items", response_model=RawItemListResponse)
@@ -2328,7 +2333,22 @@ def _run_publish_scheduler(*, force: bool) -> PublishSchedulerRunResponse:
             )
 
 
-def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
+def _run_pipeline_scheduler(*, force: bool, should_continue: Callable[[], bool] | None = None) -> PipelineSchedulerRunResponse:
+    with repository.connect() as connection:
+        locked = connection.execute("SELECT pg_try_advisory_xact_lock(%s)", (4815162350,)).fetchone()[0]
+        if not locked:
+            now = datetime.now(timezone.utc)
+            return PipelineSchedulerRunResponse(
+                mode="run" if force else "tick", started_at=now, finished_at=now,
+                ingest=SchedulerRunResponse(ran=False, reason="locked"),
+                enrichment=EnrichmentSchedulerRunResponse(ran=False, reason="locked"),
+                editorial=EditorialSchedulerRunResponse(ran=False, reason="locked"),
+                publish=PublishSchedulerRunResponse(ran=False, reason="locked"),
+            )
+        return _execute_pipeline(force=force, should_continue=should_continue)
+
+
+def _execute_pipeline(*, force: bool, should_continue: Callable[[], bool] | None = None) -> PipelineSchedulerRunResponse:
     started_at = datetime.now(timezone.utc)
     mode = "run" if force else "tick"
     run_id = _run_id("pipeline")
@@ -2339,6 +2359,8 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         trigger=mode,
         status="running",
     )
+    if should_continue is not None and not should_continue():
+        raise RuntimeError("Worker lost ownership before ingest stage.")
     ingest = _run_pipeline_stage(
         "ingest",
         run_id=run_id,
@@ -2346,6 +2368,8 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         run=lambda: _run_scheduler(force=force, allow_inline_enrichment=False),
         fallback=lambda error: SchedulerRunResponse(ran=False, reason=f"error: {error}"),
     )
+    if should_continue is not None and not should_continue():
+        raise RuntimeError("Worker lost ownership before enrichment stage.")
     enrichment = _run_pipeline_stage(
         "enrichment",
         run_id=run_id,
@@ -2353,6 +2377,8 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         run=lambda: _run_enrichment_scheduler(force=force),
         fallback=lambda error: EnrichmentSchedulerRunResponse(ran=False, reason=f"error: {error}"),
     )
+    if should_continue is not None and not should_continue():
+        raise RuntimeError("Worker lost ownership before editorial stage.")
     editorial = _run_pipeline_stage(
         "editorial",
         run_id=run_id,
@@ -2360,6 +2386,8 @@ def _run_pipeline_scheduler(*, force: bool) -> PipelineSchedulerRunResponse:
         run=lambda: _run_editorial_scheduler(force=force),
         fallback=lambda error: EditorialSchedulerRunResponse(ran=False, reason=f"error: {error}"),
     )
+    if should_continue is not None and not should_continue():
+        raise RuntimeError("Worker lost ownership before publish stage.")
     publish = _run_pipeline_stage(
         "publish",
         run_id=run_id,

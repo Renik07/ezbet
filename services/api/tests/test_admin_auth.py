@@ -104,3 +104,14 @@ class AdminAuthTests(unittest.TestCase):
             schema.assert_not_called()
         with patch.dict(os.environ, {'EZBET_ENV': 'production', 'EZBET_ADMIN_API_TOKEN': 'x' * 32}):
             validate_admin_configuration()
+
+    def test_pipeline_start_enqueues_without_running_in_api(self):
+        job = {'id': 'fixture-job', 'status': 'pending', 'createdAt': '2026-10-08T00:00:00+00:00'}
+        with patch.object(main, 'JobQueue') as queue_type, patch.object(main, '_run_pipeline_scheduler') as pipeline:
+            queue_type.return_value.enqueue.return_value = (True, job)
+            status, payload = asyncio.run(request('POST', '/api/v1/pipeline/start', 'test-token'))
+            self.assertEqual(status, 200)
+            self.assertTrue(payload['started'])
+            self.assertEqual(payload['jobId'], 'fixture-job')
+            queue_type.return_value.enqueue.assert_called_once_with(force=True)
+            pipeline.assert_not_called()

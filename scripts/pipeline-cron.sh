@@ -10,10 +10,10 @@ MODE="${PIPELINE_MODE:-run}"
 
 case "$MODE" in
   tick)
-    PATH_SUFFIX="/api/v1/pipeline/tick"
+    PATH_SUFFIX="/api/v1/pipeline/queue?force=false"
     ;;
   run)
-    PATH_SUFFIX="/api/v1/pipeline/run"
+    PATH_SUFFIX="/api/v1/pipeline/queue?force=true"
     ;;
   *)
     echo "Unsupported PIPELINE_MODE: $MODE" >&2

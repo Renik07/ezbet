@@ -7,7 +7,8 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
-    environment:
+    environment: &api_environment
+      EZBET_DB_POOL_MAX: ${EZBET_DB_POOL_MAX:-12}
       EZBET_ENV: production
       DATABASE_URL: ${DATABASE_URL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -24,6 +25,27 @@ services:
       EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN}
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 10
+      start_period: 60s
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    stop_grace_period: 15m
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment: *api_environment
+    depends_on:
+      api:
+        condition: service_healthy
 
   web:
     build:
