@@ -9,7 +9,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from services.api.app import main
+from services.api.app import pipeline, runtime, service_monitoring, service_publication
 from services.api.app.models import DraftArticle, RawItem
 from services.api.app.repository import NewsRepository
 
@@ -83,8 +83,8 @@ class PipelinePostgresTests(unittest.TestCase):
             conn.execute('UPDATE raw_items SET is_duplicate = FALSE')
         for raw in (first, second):
             self.repo.upsert_draft(self.draft(raw))
-        with patch.object(main, 'repository', self.repo):
-            self.assertEqual(main._run_publish_for_drafts(limit=2), 1)
+        with patch.object(runtime, 'repository', self.repo):
+            self.assertEqual(service_publication._run_publish_for_drafts(limit=2), 1)
         with self.repo.connect() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM articles').fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM draft_articles WHERE status = 'hold'").fetchone()[0], 1)
@@ -112,13 +112,13 @@ class PipelinePostgresTests(unittest.TestCase):
         self.repo.insert_raw_items([raw])
         self.repo.upsert_draft(self.draft(raw))
         with self.repo.connect() as lock_connection:
-            lock_connection.execute('SELECT pg_advisory_xact_lock(%s)', (main.PUBLISH_EXECUTION_LOCK_KEY,))
-            with patch.object(main, 'repository', self.repo):
-                self.assertEqual(main._run_publish_for_drafts(limit=2), 0)
+            lock_connection.execute('SELECT pg_advisory_xact_lock(%s)', (runtime.PUBLISH_EXECUTION_LOCK_KEY,))
+            with patch.object(runtime, 'repository', self.repo):
+                self.assertEqual(service_publication._run_publish_for_drafts(limit=2), 0)
             with self.repo.connect() as conn:
                 self.assertEqual(conn.execute('SELECT COUNT(*) FROM articles').fetchone()[0], 0)
-        with patch.object(main, 'repository', self.repo):
-            self.assertEqual(main._run_publish_for_drafts(limit=2), 1)
+        with patch.object(runtime, 'repository', self.repo):
+            self.assertEqual(service_publication._run_publish_for_drafts(limit=2), 1)
 
     def test_previous_batch_remains_in_enrichment_and_plan_queues(self):
         old_time = datetime.now(timezone.utc) - timedelta(hours=2)
@@ -206,12 +206,12 @@ class PipelinePostgresTests(unittest.TestCase):
     def test_recovery_preserves_live_scheduler(self):
         self.repo.set_scheduler_status(status='running', error=None)
         with self.repo.connect() as connection:
-            connection.execute('SELECT pg_advisory_xact_lock(%s)', (main.SCHEDULER_LOCK_KEY,))
-            with patch.object(main, 'repository', self.repo):
-                main._recover_runtime_state(trigger='test')
+            connection.execute('SELECT pg_advisory_xact_lock(%s)', (runtime.SCHEDULER_LOCK_KEY,))
+            with patch.object(runtime, 'repository', self.repo):
+                service_monitoring._recover_runtime_state(trigger='test')
             self.assertEqual(self.repo.get_scheduler_settings().last_status, 'running')
-        with patch.object(main, 'repository', self.repo):
-            main._recover_runtime_state(trigger='test')
+        with patch.object(runtime, 'repository', self.repo):
+            service_monitoring._recover_runtime_state(trigger='test')
         self.assertEqual(self.repo.get_scheduler_settings().last_status, 'idle')
 
     def test_pool_releases_session_locks_after_failure(self):
@@ -308,9 +308,9 @@ class PipelinePostgresTests(unittest.TestCase):
             self.assertEqual(process.returncode, 0, errors)
 
     def test_lost_worker_ownership_stops_before_next_stage(self):
-        with patch.object(main, 'repository', self.repo), patch.object(main, '_run_scheduler') as ingest:
+        with patch.object(runtime, 'repository', self.repo), patch.object(pipeline, '_run_scheduler') as ingest:
             with self.assertRaisesRegex(RuntimeError, 'lost ownership'):
-                main._run_pipeline_scheduler(force=True, should_continue=lambda: False)
+                pipeline._run_pipeline_scheduler(force=True, should_continue=lambda: False)
             ingest.assert_not_called()
 
     def test_pool_replaces_dead_connection(self):

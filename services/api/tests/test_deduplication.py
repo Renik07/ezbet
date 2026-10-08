@@ -6,7 +6,7 @@ from services.api.app.deduplication import facts_conflict
 from services.api.app.ingestion import _normalize_url
 from services.api.app.repository import NewsRepository
 from services.api.app.editorial import evaluate_published_duplicate_guard
-from services.api.app import main
+from services.api.app import pipeline_logging, runtime, service_editorial, service_enrichment, service_publication
 
 
 class DeduplicationTests(unittest.TestCase):
@@ -43,8 +43,8 @@ class DeduplicationTests(unittest.TestCase):
         repo.list_publishable_drafts.return_value = [draft, second]
         repo.get_raw_item.return_value = raw
         repo.list_article_similarity_candidates.side_effect = [[], [draft]]
-        with patch.object(main, 'repository', repo):
-            self.assertEqual(main._run_publish_for_drafts(limit=2), 1)
+        with patch.object(runtime, 'repository', repo):
+            self.assertEqual(service_publication._run_publish_for_drafts(limit=2), 1)
         repo.publish_draft_to_news.assert_called_once()
         self.assertEqual(repo.list_article_similarity_candidates.call_count, 2)
         self.assertIsNone(repo.list_article_similarity_candidates.call_args.kwargs['category'])
@@ -53,12 +53,12 @@ class DeduplicationTests(unittest.TestCase):
     def test_queue_does_not_depend_on_last_ingest(self):
         repo = MagicMock()
         repo.list_pending_enrichment_raw_items.return_value = []
-        with patch.object(main, 'repository', repo):
-            self.assertEqual(main._select_pre_enrichment_raw_items(limit=5, since=None), [])
+        with patch.object(runtime, 'repository', repo):
+            self.assertEqual(service_enrichment._select_pre_enrichment_raw_items(limit=5, since=None), [])
         repo.list_pending_enrichment_raw_items.assert_called_once_with(limit=15, since=None)
-        with patch.object(main, 'run_content_planner', return_value=[]) as planner, patch.object(main, '_current_ingest_started_at', side_effect=AssertionError('must not gate queue')):
-            main.run_planner(limit=5)
-        planner.assert_called_once_with(main.repository, limit=5, since=None)
+        with patch.object(service_editorial, 'run_content_planner', return_value=[]) as planner, patch.object(pipeline_logging, '_current_ingest_started_at', side_effect=AssertionError('must not gate queue')):
+            service_editorial.run_planner(limit=5)
+        planner.assert_called_once_with(runtime.repository, limit=5, since=None)
 
 
 if __name__ == '__main__':

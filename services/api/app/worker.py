@@ -70,24 +70,26 @@ class PipelineWorker:
 
 
 def main():
-    from . import main as api
+    from . import runtime
+    from .bootstrap import _initialize_runtime
+    from .pipeline import _run_pipeline_scheduler
     logging.basicConfig(level=logging.INFO)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
-    worker = PipelineWorker(api.repository)
+    worker = PipelineWorker(runtime.repository)
     try:
-        api._initialize_runtime()
+        _initialize_runtime()
         while not stop.is_set():
             try:
-                worked = worker.run_once(api._run_pipeline_scheduler)
+                worked = worker.run_once(_run_pipeline_scheduler)
             except Exception:
                 logger.exception('Worker polling failed')
                 worked = False
             if not worked:
                 stop.wait(5)
     finally:
-        api.repository.close_pool()
+        runtime.repository.close_pool()
 
 
 if __name__ == '__main__':

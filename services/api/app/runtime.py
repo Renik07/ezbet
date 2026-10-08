@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import logging
+from .repository import NewsRepository
+
+
+repository = NewsRepository()
+
+SCHEDULER_LOCK_KEY = 4815162342
+
+ENRICHMENT_SCHEDULER_LOCK_KEY = 4815162343
+
+EDITORIAL_SCHEDULER_LOCK_KEY = 4815162344
+
+PUBLISH_SCHEDULER_LOCK_KEY = 4815162345
+
+GUIDE_SCHEDULER_LOCK_KEY = 4815162346
+
+PUBLISH_EXECUTION_LOCK_KEY = 4815162347
+
+ENRICHMENT_WEB_SEARCH_CAP_PER_RUN = 3
+
+FORECAST_PUBLISH_LIMIT = 6
+
+FORECAST_MIN_READY = 3
+
+FORECAST_CANDIDATE_LIMIT = 12
+
+logger = logging.getLogger("uvicorn.error")
+
+logger.setLevel(logging.INFO)

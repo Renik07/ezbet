@@ -11,6 +11,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from services.api.app import bootstrap, runtime
 from services.api.app import migrations
 from services.api.app.migration_0001 import STATEMENTS as LEGACY_SCHEMA
 from services.api.app.migration_0002 import STATEMENTS as LEGACY_QUEUE
@@ -133,14 +134,13 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT id FROM worker_jobs").fetchall(), [('keep-job',)])
 
     def test_application_startup_requires_migrations_without_creating_tables(self):
-        from services.api.app import main
         from services.api.app.repository import NewsRepository
         repository = NewsRepository()
         repository.database_url = self.private_url
         try:
-            with patch.object(main, 'repository', repository), patch.object(main, 'validate_admin_configuration'):
+            with patch.object(runtime, 'repository', repository), patch.object(bootstrap, 'validate_admin_configuration'):
                 with self.assertRaisesRegex(RuntimeError, 'not migrated'):
-                    main._initialize_runtime()
+                    bootstrap._initialize_runtime()
             with psycopg.connect(self.private_url) as connection:
                 self.assertIsNone(connection.execute("SELECT to_regclass('news_items')").fetchone()[0])
                 self.assertIsNone(connection.execute("SELECT to_regclass('schema_migrations')").fetchone()[0])
