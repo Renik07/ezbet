@@ -109,7 +109,7 @@ export default async function ArticlePage({
   const articleUrl = absoluteUrl(`/news/${item.slug}`);
   const guideArticle = isGuideArticle(item.newsItemId);
   const articleEditor = getArticleAuthor(item.category);
-  const displayDate = formatArticleDate(item.publishedAt, guideArticle);
+  const displayDate = formatArticleDate(item.displayPublishedAt ?? item.publishedAt, guideArticle);
   const articleLead =
     item.lead && normalizeArticleText(item.lead) !== normalizeArticleText(item.dek) ? item.lead : null;
   const articleJsonLd = {

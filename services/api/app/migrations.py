@@ -10,8 +10,10 @@ from .migration_0002 import STATEMENTS as WORKER_QUEUE
 from .migration_0003 import STATEMENTS as PUBLICATION_DATES
 from .migration_0004 import STATEMENTS as SITEMAP_RANGES
 
+from .migration_0005 import STATEMENTS as NEWS_BUDGET
+
 MIGRATIONS = ((1, 'baseline', BASELINE), (2, 'worker_queue', WORKER_QUEUE),
-              (3, 'publication_dates', PUBLICATION_DATES), (4, 'sitemap_ranges', SITEMAP_RANGES))
+              (3, 'publication_dates', PUBLICATION_DATES), (4, 'sitemap_ranges', SITEMAP_RANGES), (5, 'news_budget', NEWS_BUDGET))
 MIGRATION_LOCK_KEY = 4815162351
 
 

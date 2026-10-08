@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import re
 
+from .news_budget import claim_news_stage, NEWS_HOURLY_LIMIT
+from .news_candidates import news_rejection_reason
 from .ai_client import OpenAIEditorialClient, PlannerRerankItem
 from .content_filters import detect_promotional_giveaway
 from .models import ContentPlanItem, RawItem
@@ -34,12 +36,17 @@ def run_content_planner(
     limit: int = 6,
     since: datetime | None = None,
 ) -> list[ContentPlanItem]:
+    limit = min(limit, NEWS_HOURLY_LIMIT)
     shortlist_limit = max(limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
     pool_limit = max(shortlist_limit * STRICT_SHORTLIST_POOL_MULTIPLIER, limit)
     candidate_pool = repository.list_raw_candidates_for_plan(limit=pool_limit, since=since, require_full_text=True)
+    candidate_pool = [item for item in candidate_pool if not news_rejection_reason(item)]
     candidates = build_editorial_shortlist(candidate_pool, shortlist_limit=shortlist_limit, batch_limit=limit)
     planned_items: list[ContentPlanItem] = []
     ai_client = OpenAIEditorialClient()
+    budget_candidates = candidates[:limit]
+    candidates = [item for item in budget_candidates if claim_news_stage(repository, item.id, 'planner')]
+    deferred_ids = {item.id for item in budget_candidates} - {item.id for item in candidates}
     reranked_items = select_reranked_candidates(candidates, limit=limit, ai_client=ai_client)
     selected_raw_ids = {raw_item.id for raw_item, _ in reranked_items}
 
@@ -48,7 +55,7 @@ def run_content_planner(
         planned_items.append(repository.upsert_content_plan_item(plan_item))
 
     for raw_item in candidate_pool:
-        if raw_item.id in selected_raw_ids:
+        if raw_item.id in selected_raw_ids or raw_item.id in deferred_ids:
             continue
         audit_item = build_non_selected_plan_item(raw_item, candidates)
         repository.upsert_content_plan_item(audit_item)
@@ -71,6 +78,7 @@ def build_editorial_shortlist(
     shortlist_limit: int,
     batch_limit: int,
 ) -> list[RawItem]:
+    candidates = [item for item in candidates if not news_rejection_reason(item)]
     if not candidates:
         return []
 

@@ -53,7 +53,7 @@ class PublicationRepository:
         page_meta: dict | None = None,
     ) -> list[NewsItem]:
         statement = """
-            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at, a.id
             FROM news_items n
             LEFT JOIN articles a ON a.news_item_id = n.id
         """
@@ -156,7 +156,7 @@ class PublicationRepository:
 
     def get_news_item(self, news_item_id: str, *, include_hidden: bool = False) -> NewsItem | None:
         statement = """
-            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.source, n.link, n.status, n.visibility, n.ai_reviewed, a.slug, a.updated_at, a.id
             FROM news_items n
             LEFT JOIN articles a ON a.news_item_id = n.id
             WHERE n.id = %s

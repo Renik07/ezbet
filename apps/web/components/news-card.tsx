@@ -24,13 +24,13 @@ function categoryTone(category?: string) {
 export function NewsCard({ item }: NewsCardProps) {
   const label = formatCategoryLabel(item.category);
   const href = item.articleSlug ? (`/news/${item.articleSlug}` as Route) : item.link;
-  const publishedAt = formatMoscowDateTime(item.publishedAt);
+  const publishedAt = formatMoscowDateTime(item.displayPublishedAt ?? item.publishedAt);
   const editor = getArticleAuthor(item.category);
 
   const content = (
     <article className="news-item">
       <div className="ni-meta">
-        <time className="ni-time" dateTime={item.publishedAt}>
+        <time className="ni-time" dateTime={item.displayPublishedAt ?? item.publishedAt}>
           {publishedAt}
         </time>
         <span className={`cat-pill cat-pill--${categoryTone(item.category)}`}>{label}</span>

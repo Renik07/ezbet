@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from .news_budget import claim_news_stage
+from .news_candidates import news_rejection_reason
 from .ai_client import OpenAIEditorialClient
 from .models import RawItem
 from .ingestion_article_extraction import _extract_article_enrichment_from_html
@@ -23,6 +25,8 @@ def enrich_raw_item_content(
     *,
     allow_web_search_fallback: bool = True,
 ) -> RawItem:
+    if news_rejection_reason(raw_item):
+        return raw_item
     existing_full_text = (raw_item.full_text or "").strip()
     has_usable_full_text = _is_usable_full_text(
         existing_full_text,
@@ -59,6 +63,8 @@ def enrich_raw_item_content(
         )
 
     ai_client = OpenAIEditorialClient()
+    if ai_client.enabled and not claim_news_stage(repository, raw_item.id, 'enrichment'):
+        return raw_item
     ai_html_enrichment = (
         ai_client.extract_article_enrichment(
             url=raw_item.url,

@@ -153,3 +153,17 @@ test('forecast outages have no demo fallback or false missing result', async (t)
   assert.deepEqual(await getTodayForecasts(), []);
   await assert.rejects(getLiveForecast('missing'), (error) => error.status === 503);
 });
+
+test('feed sorts by stable display times and preserves real publication dates', async (t) => {
+  liveEnvironment(t);
+  await publicDataCache.clear();
+  const previousFetch = global.fetch;
+  t.after(() => { global.fetch = previousFetch; });
+  global.fetch = async () => response({ items: [
+    { ...newsItem, id: 'a', displayPublishedAt: '2026-10-08T09:05:00Z' },
+    { ...newsItem, id: 'b', displayPublishedAt: '2026-10-08T09:45:00Z' }
+  ] });
+  const feed = await getNews();
+  assert.deepEqual(feed.items.map((item) => item.id), ['b', 'a']);
+  assert.ok(feed.items.every((item) => item.publishedAt === newsItem.publishedAt));
+});

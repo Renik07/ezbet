@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -39,7 +40,7 @@ class DeduplicationTests(unittest.TestCase):
         repo = MagicMock()
         draft = SimpleNamespace(id='draft:1', raw_item_id='raw:1', title='Спартак победил Зенит', dek='Матч чемпионата России', body='Встреча завершилась со счетом 1:0.', category='football', review_summary='OK')
         second = SimpleNamespace(**{**draft.__dict__, 'id': 'draft:2', 'raw_item_id': 'raw:2'})
-        raw = SimpleNamespace(id='raw:1', external_id='1', title=draft.title, summary=draft.dek, lead=None, full_text=draft.body, is_duplicate=False, duplicate_reason=None)
+        raw = SimpleNamespace(url="https://example.com/news/1", published_at=datetime.now(timezone.utc), id='raw:1', external_id='1', title=draft.title, summary=draft.dek, lead=None, full_text=draft.body, is_duplicate=False, duplicate_reason=None)
         repo.list_publishable_drafts.return_value = [draft, second]
         repo.get_raw_item.return_value = raw
         repo.list_article_similarity_candidates.side_effect = [[], [draft]]

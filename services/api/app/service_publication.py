@@ -1,4 +1,6 @@
 from __future__ import annotations
+from .news_budget import NEWS_HOURLY_LIMIT
+from .news_candidates import news_rejection_reason
 
 from datetime import (
     datetime,
@@ -88,12 +90,18 @@ def _run_publish_for_drafts(*, limit: int, since: datetime | None = None) -> int
 
 
 def _publish_ready_drafts(*, limit: int, since: datetime | None = None) -> int:
-    drafts = runtime.repository.list_publishable_drafts(limit=limit, since=since)
+    drafts = runtime.repository.list_publishable_drafts(limit=min(NEWS_HOURLY_LIMIT, limit), since=since)
     published = 0
 
     for draft in drafts:
         raw_item = runtime.repository.get_raw_item(draft.raw_item_id)
         if raw_item is None:
+            continue
+        rejection = news_rejection_reason(raw_item)
+        if rejection:
+            runtime.repository.set_draft_review_status(draft.id, review_status="quality_hold", status="hold",
+                review_summary=rejection, publish_decision="publish_skip", publish_reason=rejection)
+            runtime.repository.set_content_plan_status(raw_item.id, "hold")
             continue
         promotional_marker = detect_promotional_giveaway(
             raw_item.title,

@@ -253,6 +253,8 @@ class RawItemsRepository:
                 OR COALESCE(array_length(r.tags, 1), 0) = 0
               )
         """
+        statement += " AND r.published_at >= NOW() - INTERVAL '24 hours'"
+        statement += r" AND COALESCE(r.url,'') !~* '^https?://(www\.)?sports\.ru/(tags(/|$)|[^/]+/match(/|$))'"
         params: list[object] = []
         if since is not None:
             statement += " AND r.fetched_at >= %s"
@@ -364,6 +366,8 @@ class RawItemsRepository:
             WHERE r.is_duplicate = FALSE
               AND cp.raw_item_id IS NULL
         """
+        statement += " AND r.published_at >= NOW() - INTERVAL '24 hours'"
+        statement += r" AND COALESCE(r.url,'') !~* '^https?://(www\.)?sports\.ru/(tags(/|$)|[^/]+/match(/|$))'"
         params: list[object] = []
         if since is not None:
             statement += " AND r.fetched_at >= %s"
@@ -429,6 +433,8 @@ class RawItemsRepository:
             WHERE cp.status = 'planned'
               AND d.raw_item_id IS NULL
         """
+        statement += " AND r.published_at >= NOW() - INTERVAL '24 hours'"
+        statement += r" AND COALESCE(r.url,'') !~* '^https?://(www\.)?sports\.ru/(tags(/|$)|[^/]+/match(/|$))'"
         params: list[object] = []
         if since is not None:
             statement += " AND r.fetched_at >= %s"

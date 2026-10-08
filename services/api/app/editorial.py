@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
 
+from .news_budget import claim_news_stage
+from .news_candidates import news_rejection_reason
 from .ai_client import OpenAIEditorialClient
 from .content_filters import detect_promotional_giveaway
 from .deduplication import facts_conflict
@@ -256,6 +258,8 @@ def run_editorial_cycle(
     reviews: list[EditorReview] = []
 
     for raw_item in raw_candidates:
+        if news_rejection_reason(raw_item) or not claim_news_stage(repository, raw_item.id, 'editorial'):
+            continue
         raw_item = enrich_raw_item_if_needed(repository, raw_item)
         draft = generate_draft(raw_item, writer_prompt, ai_client)
         stored_draft = repository.upsert_draft(draft)

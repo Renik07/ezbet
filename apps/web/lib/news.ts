@@ -7,6 +7,7 @@ export type NewsItem = {
   description: string;
   category: string;
   publishedAt: string;
+  displayPublishedAt?: string;
   updatedAt?: string;
   source: string;
   link?: string;
@@ -29,6 +30,7 @@ export type Article = {
   sourceUrl?: string;
   tags: string[];
   publishedAt: string;
+  displayPublishedAt?: string;
   updatedAt?: string;
   aiReviewed: boolean;
 };
@@ -115,6 +117,7 @@ function filterNews(items: NewsItem[], query?: string, options?: NewsOptions) {
   if (options?.guideOnly) filtered = filtered.filter((item) => item.id.startsWith("guide:") && item.articleSlug);
   else filtered = filtered.filter((item) => !item.id.startsWith("guide:") && item.articleSlug);
   if (options?.aiOnly) filtered = filtered.filter((item) => item.aiReviewed && item.articleSlug);
+  filtered = [...filtered].sort((a, b) => Date.parse(b.displayPublishedAt ?? b.publishedAt) - Date.parse(a.displayPublishedAt ?? a.publishedAt));
   if (!query) return filtered;
   const normalized = query.trim().toLowerCase();
   return filtered.filter((item) => [item.title, item.description, item.category, item.source].join(" ").toLowerCase().includes(normalized));

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from .display_time import news_display_time
 from .models import (
     Article,
     ContentPlanItem,
@@ -38,6 +39,7 @@ class MappingRepository:
             ai_reviewed=bool(row[9]),
             article_slug=row[10],
             updated_at=row[11] if len(row) > 11 else None,
+            display_published_at=news_display_time(row[12], row[4]) if len(row) > 12 and row[12] and not str(row[0]).startswith("guide:") else None,
         )
 
     @staticmethod
@@ -56,6 +58,7 @@ class MappingRepository:
             source_url=row[10],
             tags=list(row[11] or []),
             published_at=row[12],
+            display_published_at=news_display_time(row[0], row[12]) if not str(row[3]).startswith("guide-topic:") else None,
             ai_reviewed=bool(row[13]),
             created_at=row[14],
             updated_at=row[15],

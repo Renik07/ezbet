@@ -4,6 +4,7 @@ from datetime import (
     datetime,
     timezone,
 )
+from .news_candidates import news_rejection_reason
 from .models import (
     RawItem,
     SourceSyncState,
@@ -45,6 +46,14 @@ def _filter_new_items_with_reasons(
 ) -> tuple[list[RawItem], dict[str, int]]:
     cutoff = datetime.now(timezone.utc) - DEFAULT_INGEST_MAX_ITEM_AGE
     reasons: dict[str, int] = {}
+    eligible = []
+    for item in items:
+        reason = news_rejection_reason(item)
+        if reason:
+            _add_filter_reason(reasons, reason)
+        else:
+            eligible.append(item)
+    items = eligible
     original_items = items
     items = [item for item in original_items if item.published_at >= cutoff]
     _add_filter_reason(reasons, "older_than_max_age", len(original_items) - len(items))

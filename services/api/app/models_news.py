@@ -12,6 +12,7 @@ class NewsItem(BaseModel):
     description: str
     category: str
     published_at: datetime = Field(serialization_alias="publishedAt")
+    display_published_at: Optional[datetime] = Field(default=None, serialization_alias="displayPublishedAt")
     source: str
     link: Optional[str] = None
     status: str = "published"
@@ -35,6 +36,7 @@ class Article(BaseModel):
     source_url: Optional[str] = Field(default=None, serialization_alias="sourceUrl")
     tags: list[str] = Field(default_factory=list)
     published_at: datetime = Field(serialization_alias="publishedAt")
+    display_published_at: Optional[datetime] = Field(default=None, serialization_alias="displayPublishedAt")
     ai_reviewed: bool = Field(default=True, serialization_alias="aiReviewed")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
