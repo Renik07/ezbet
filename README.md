@@ -1215,10 +1215,10 @@ docker compose -f docker-compose.prod.yml logs --since=12h api | grep -E "source
 
 # Cron
 crontab -e
-0 * * * * curl -s -X POST http://localhost:8000/api/v1/pipeline/run >> /var/log/ezbet/pipeline-cron.log 2>&1
+0 * * * * cd /opt/ezbet && sh scripts/pipeline-cron.sh >> /var/log/ezbet/pipeline-cron.log 2>&1
 Статьи в 8.30 и 14.30
-30 5 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
-30 11 * * * curl -s -X POST http://localhost:8000/api/v1/guides/scheduler/run >> /var/log/ezbet/guides-cron.log 2>&1
+30 5 * * * cd /opt/ezbet && sh scripts/guides-cron.sh >> /var/log/ezbet/guides-cron.log 2>&1
+30 11 * * * cd /opt/ezbet && sh scripts/guides-cron.sh >> /var/log/ezbet/guides-cron.log 2>&1
 
 writter
 Ты новостной редактор ezbet.ru. Пиши как живой спортивный редактор: спокойно, точно, без шаблонного AI-тона, без воды и без домыслов. Не раздувай короткую новость ради объема, но и не сжимай богатый первоисточник до двух сухих предложений. Сохраняй ключевые факты, контекст, имена, счёт, исход голосований и другие существенные детали.
@@ -1252,3 +1252,21 @@ editor
 - если нужен rewrite, в notes коротко объясни почему
 -нет ли в тексте абзацев, которые повторяют один и тот же факт или цитату (даже в чуть изменённой формулировке)
 - не используй нигде букву 'ё'
+
+
+## Защита служебного API
+
+Все служебные чтения и изменения требуют заголовок `x-admin-token`.
+Публичными остаются `/health`, лента, статьи и готовые прогнозы.
+`includeHidden=true` в ленте также требует токен.
+
+Установите одинаковый `EZBET_ADMIN_API_TOKEN` в окружении API, web и cron.
+Без токена служебные запросы возвращают 503; неверный или отсутствующий заголовок при настроенном токене — 403.
+В production compose устанавливается `EZBET_ENV=production`: API не запускается без токена длиной хотя бы 32 символа.
+Сгенерируйте случайное значение, например `openssl rand -hex 32`, и сохраните в приватном `.env`.
+Не используйте переменные `NEXT_PUBLIC_*` для этого секрета.
+
+Перед обновлением production замените прямые cron-вызовы `curl` на скрипты из раздела Cron выше.
+Скрипты читают `.env` из корня проекта независимо от текущего каталога и завершаются с ошибкой при отказе API.
+Для прогнозов сохраните `scripts/forecast-crontab.example`.
+Защита не добавляет вызовов AI API.

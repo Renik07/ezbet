@@ -6,6 +6,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       NEXT_PUBLIC_API_BASE_URL: http://api:8000
     depends_on:
       - api

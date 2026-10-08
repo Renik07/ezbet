@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     environment:
+      EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       EZBET_API_BASE_URL: http://api:8000
       NEXT_PUBLIC_API_BASE_URL: http://api:8000
     ports:
@@ -16,6 +17,7 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment:
+      EZBET_ADMIN_API_TOKEN: ${EZBET_ADMIN_API_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5}

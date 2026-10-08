@@ -9,10 +9,15 @@ import os
 import threading
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 import psycopg
 
 from .ai_client import OpenAIEditorialClient
+from .auth import (
+    authorize_api_route,
+    require_admin_api_token as _require_admin_api_token,
+    validate_admin_configuration,
+)
 from .config import get_openai_settings
 from .content_filters import detect_promotional_giveaway
 from .editorial import (
@@ -99,6 +104,7 @@ from .repository import NewsRepository
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_admin_configuration()
     repository.ensure_schema()
     _recover_runtime_state(trigger="startup")
     repository.ensure_prompt_defaults(default_prompt_configs())
@@ -120,6 +126,7 @@ app = FastAPI(
     version="0.1.0",
     description="MVP API for news collection, search, and publication.",
     lifespan=lifespan,
+    dependencies=[Depends(authorize_api_route)],
 )
 
 repository = NewsRepository()
@@ -146,16 +153,6 @@ def _run_id(phase: str) -> str:
 
 def _duration_ms(started_at: datetime, finished_at: datetime) -> int:
     return max(0, int((finished_at - started_at).total_seconds() * 1000))
-
-
-def _require_admin_api_token(request: Request) -> None:
-    expected = (os.getenv("EZBET_ADMIN_API_TOKEN") or "").strip()
-    if not expected:
-        return
-
-    provided = (request.headers.get("x-admin-token") or "").strip()
-    if provided != expected:
-        raise HTTPException(status_code=403, detail="Admin token is required for this action.")
 
 
 def _current_ingest_started_at() -> datetime | None:

@@ -580,14 +580,13 @@ async function loadStudioResource<T>(
   baseUrl: string,
   path: string,
   parse: (payload: unknown) => T,
-  fallback: T,
-  options?: { admin?: boolean }
+  fallback: T
 ): Promise<{ data: T; error?: string }> {
   try {
     const response = await fetch(new URL(path, baseUrl).toString(), {
       cache: "no-store",
       headers:
-        options?.admin && resolveAdminApiToken()
+        resolveAdminApiToken()
           ? {
               "x-admin-token": resolveAdminApiToken() as string
             }
@@ -699,15 +698,13 @@ export async function getEditorialStudioData(): Promise<EditorialStudioData> {
       baseUrl,
       "/api/v1/news?includeHidden=true&aiOnly=true&limit=24",
       (payload) => (payload as { items: NewsItem[] }).items,
-      fallbackPublishedNews,
-      { admin: true }
+      fallbackPublishedNews
     ),
     loadStudioResource(
       baseUrl,
       "/api/v1/ai-usage/summary?days=14",
       (payload) => payload as AiUsageSummary,
-      fallbackAiUsageSummary,
-      { admin: true }
+      fallbackAiUsageSummary
     )
   ]);
 
