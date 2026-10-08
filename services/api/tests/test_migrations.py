@@ -34,14 +34,14 @@ class MigrationTests(unittest.TestCase):
         with psycopg.connect(self.private_url) as connection:
             with self.assertRaisesRegex(RuntimeError, 'not migrated'):
                 migrations.check_schema(connection)
-            self.assertEqual(migrations.migrate(connection), [1, 2, 3])
+            self.assertEqual(migrations.migrate(connection), [1, 2, 3, 4])
             timestamps = connection.execute('SELECT applied_at FROM schema_migrations ORDER BY version').fetchall()
             self.assertEqual(migrations.migrate(connection), [])
-            self.assertEqual(migrations.check_schema(connection), [1, 2, 3])
+            self.assertEqual(migrations.check_schema(connection), [1, 2, 3, 4])
             self.assertEqual(timestamps, connection.execute('SELECT applied_at FROM schema_migrations ORDER BY version').fetchall())
             connection.commit()
             connection.execute('SET TRANSACTION READ ONLY')
-            self.assertEqual(migrations.check_schema(connection), [1, 2, 3])
+            self.assertEqual(migrations.check_schema(connection), [1, 2, 3, 4])
 
     def test_legacy_database_preserves_content_and_scheduler_settings(self):
         with psycopg.connect(self.private_url) as connection:
@@ -51,13 +51,13 @@ class MigrationTests(unittest.TestCase):
             connection.execute("UPDATE scheduler_settings SET enabled=TRUE, batch_size=17 WHERE id='default'")
             connection.execute("INSERT INTO worker_jobs (id,force) VALUES ('existing-job', TRUE)")
             connection.commit()
-            self.assertEqual(migrations.migrate(connection), [1, 2, 3])
+            self.assertEqual(migrations.migrate(connection), [1, 2, 3, 4])
             self.assertEqual(connection.execute("SELECT title,description FROM news_items WHERE id='existing'").fetchone(), ('Title','Body'))
             self.assertEqual(connection.execute("SELECT enabled,batch_size FROM scheduler_settings WHERE id='default'").fetchone(), (True,17))
             self.assertEqual(connection.execute("SELECT status FROM worker_jobs WHERE id='existing-job'").fetchone(), ('pending',))
 
     def test_failed_batch_rolls_back_schema_and_history(self):
-        broken = (*migrations.MIGRATIONS, (4, 'broken', ('CREATE TABLE should_rollback (id INT)', 'SELECT missing_column')))
+        broken = (*migrations.MIGRATIONS, (5, 'broken', ('CREATE TABLE should_rollback (id INT)', 'SELECT missing_column')))
         with psycopg.connect(self.private_url) as connection:
             with patch.object(migrations, 'MIGRATIONS', broken):
                 with self.assertRaises(psycopg.errors.UndefinedColumn):
@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIsNone(connection.execute("SELECT to_regclass('should_rollback')").fetchone()[0])
             self.assertIsNone(connection.execute("SELECT to_regclass('schema_migrations')").fetchone()[0])
             self.assertIsNone(connection.execute("SELECT to_regclass('news_items')").fetchone()[0])
-            self.assertEqual(migrations.migrate(connection), [1, 2, 3])
+            self.assertEqual(migrations.migrate(connection), [1, 2, 3, 4])
 
     def test_concurrent_migrations_apply_each_version_once(self):
         def upgrade(_):
@@ -73,7 +73,7 @@ class MigrationTests(unittest.TestCase):
                 return migrations.migrate(connection)
         with ThreadPoolExecutor(max_workers=4) as executor:
             results = list(executor.map(upgrade, range(4)))
-        self.assertEqual(sorted(results, key=len), [[], [], [], [1, 2, 3]])
+        self.assertEqual(sorted(results, key=len), [[], [], [], [1, 2, 3, 4]])
 
     def test_changed_or_future_history_is_rejected(self):
         with psycopg.connect(self.private_url) as connection:
@@ -91,10 +91,10 @@ class MigrationTests(unittest.TestCase):
     def test_pending_and_gapped_history_are_rejected(self):
         with psycopg.connect(self.private_url) as connection:
             migrations.migrate(connection)
-            connection.execute('DELETE FROM schema_migrations WHERE version=3')
+            connection.execute('DELETE FROM schema_migrations WHERE version=4')
             with self.assertRaisesRegex(RuntimeError, 'pending'):
                 migrations.check_schema(connection)
-            self.assertEqual(migrations.migrate(connection), [3])
+            self.assertEqual(migrations.migrate(connection), [4])
             connection.execute('DELETE FROM schema_migrations WHERE version=1')
             with self.assertRaisesRegex(RuntimeError, 'contiguous'):
                 migrations.migrate(connection)
@@ -117,7 +117,7 @@ class MigrationTests(unittest.TestCase):
             connection.execute('ALTER TABLE source_configs DROP COLUMN notes')
             connection.execute("INSERT INTO source_configs (key,title,url,category) VALUES ('old-source','Old source','https://example.com','football')")
             connection.commit()
-            self.assertEqual(migrations.migrate(connection), [1, 2, 3])
+            self.assertEqual(migrations.migrate(connection), [1, 2, 3, 4])
             self.assertEqual(connection.execute("SELECT title,notes FROM source_configs WHERE key='old-source'").fetchone(), ('Old source',''))
             self.assertEqual(connection.execute('SELECT lead FROM articles LIMIT 1').fetchall(), [])
 
@@ -126,11 +126,11 @@ class MigrationTests(unittest.TestCase):
             migrations.migrate(connection)
             connection.execute("INSERT INTO worker_jobs (id,force) VALUES ('keep-job',FALSE)")
             connection.commit()
-            broken = (*migrations.MIGRATIONS, (4, 'broken', ('DELETE FROM worker_jobs', 'SELECT missing_column')))
+            broken = (*migrations.MIGRATIONS, (5, 'broken', ('DELETE FROM worker_jobs', 'SELECT missing_column')))
             with patch.object(migrations, 'MIGRATIONS', broken):
                 with self.assertRaises(psycopg.errors.UndefinedColumn):
                     migrations.migrate(connection)
-            self.assertEqual(migrations.check_schema(connection), [1, 2, 3])
+            self.assertEqual(migrations.check_schema(connection), [1, 2, 3, 4])
             self.assertEqual(connection.execute("SELECT id FROM worker_jobs").fetchall(), [('keep-job',)])
 
     def test_application_startup_requires_migrations_without_creating_tables(self):
@@ -160,7 +160,7 @@ class MigrationTests(unittest.TestCase):
                 connection.execute("""INSERT INTO articles (id,slug,news_item_id,raw_item_id,title,dek,body,category,source_title,published_at,created_at,updated_at)
                     VALUES (%s,%s,%s,%s,'Title','Lead','Body','football','Source',%s,%s,%s)""", (key,key,key,raw_id,fake,created,modified))
             connection.commit()
-            self.assertEqual(migrations.migrate(connection), [3])
+            self.assertEqual(migrations.migrate(connection), [3, 4])
             self.assertEqual(connection.execute("SELECT published_at,updated_at,body FROM articles WHERE id='news'").fetchone(), (created,modified,'Body'))
             self.assertEqual(connection.execute("SELECT published_at FROM news_items WHERE id='news'").fetchone()[0], created)
             self.assertEqual(connection.execute("SELECT published_at FROM articles WHERE id='guide'").fetchone()[0], fake)

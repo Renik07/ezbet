@@ -103,7 +103,7 @@ export class PublicDataCache {
   async get<T>(url: string, validate: (data: unknown) => T, policy: Policy): Promise<CachedResult<T>> {
     const address = new URL(url);
     if (address.username || address.password || address.searchParams.has("includeHidden") ||
-        !/^\/api\/v1\/(news|articles\/[^/]+|forecasts(?:\/[^/]+)?)$/.test(address.pathname)) {
+        !/^\/api\/v1\/(sitemap(?:\/\d+)?|news|articles\/[^/]+|forecasts(?:\/[^/]+)?)$/.test(address.pathname)) {
       throw new PublicApiError("Only anonymous public API data may be cached.");
     }
     address.searchParams.sort();

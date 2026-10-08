@@ -10,6 +10,8 @@ from .routes_forecasts import router as forecasts_router
 from .routes_sources import router as sources_router
 from .routes_pipeline import router as pipeline_router
 
+from .routes_sitemap import router as sitemap_router
+
 app = FastAPI(
     title="ezbet API",
     version="0.1.0",
@@ -24,3 +26,5 @@ app.include_router(news_router)
 app.include_router(forecasts_router)
 app.include_router(sources_router)
 app.include_router(pipeline_router)
+
+app.include_router(sitemap_router)

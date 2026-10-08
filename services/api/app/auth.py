@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 
 
 PUBLIC_READ_ROUTES = frozenset({
+    '/api/v1/sitemap', '/api/v1/sitemap/{part}',
     '/health', '/api/v1/news', '/api/v1/articles/{slug}',
     '/api/v1/forecasts', '/api/v1/forecasts/{slug}',
 })
