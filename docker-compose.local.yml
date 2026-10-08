@@ -24,6 +24,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.migrations", "upgrade"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://ezbet:ezbet@postgres:5432/ezbet
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   worker:
     build:
@@ -39,6 +55,8 @@ services:
         condition: service_healthy
       api:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7-alpine

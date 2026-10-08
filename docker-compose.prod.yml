@@ -32,6 +32,21 @@ services:
       retries: 10
       start_period: 60s
 
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.migrations", "upgrade"]
+    restart: "no"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment: *api_environment
+
   worker:
     build:
       context: .
@@ -46,6 +61,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:

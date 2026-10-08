@@ -100,14 +100,14 @@ from .models import (
 from .planner import run_content_planner, select_pre_enrichment_candidates
 from .repository import NewsRepository
 from .jobs import JobQueue
+from .migrations import check_schema
 
 
 def _initialize_runtime() -> None:
     validate_admin_configuration()
     with repository.connect() as startup_connection:
         startup_connection.execute("SELECT pg_advisory_xact_lock(%s)", (4815162349,))
-        repository.ensure_schema()
-        JobQueue(repository).ensure_schema()
+        check_schema(startup_connection)
         _recover_runtime_state(trigger="startup")
         repository.ensure_prompt_defaults(default_prompt_configs())
         repository.maybe_activate_recommended_prompt("writer", "prompt:writer:v9")

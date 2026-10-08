@@ -34,6 +34,18 @@ services:
     ports:
       - "8000:8000"
 
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.migrations", "upgrade"]
+    restart: "no"
+    environment: *api_environment
+
   worker:
     build:
       context: .
@@ -41,4 +53,7 @@ services:
     command: ["python", "-m", "app.worker"]
     environment: *api_environment
     depends_on:
-      - api
+      api:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully

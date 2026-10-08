@@ -1303,3 +1303,31 @@ Heartbeat обновляется каждые 30 секунд; после ава
 API и worker имеют отдельные пулы; учитывайте суммарный лимит базы.
 Соединения проверяются перед выдачей, возвращаются после commit/rollback, session advisory locks очищаются перед повторным использованием.
 Пул закрывается при остановке API/worker. [Документация пула Psycopg](https://www.psycopg.org/psycopg3/docs/advanced/pool.html).
+
+### Версионированные миграции базы
+
+API и worker больше не выполняют DDL при запуске. Перед их стартом нужна актуальная схема: проверяется полный список версий и контрольные суммы миграций. В Docker Compose отдельный сервис `migrate` выполняет обновление, а API и worker ждут его успешного завершения. Не используйте `--no-deps` при обычном обновлении приложения.
+
+Для локального запуска без Compose:
+
+```sh
+DATABASE_URL=postgresql://ezbet:ezbet@localhost:5433/ezbet .venv/bin/python -m services.api.app.migrations upgrade
+DATABASE_URL=postgresql://ezbet:ezbet@localhost:5433/ezbet .venv/bin/python -m services.api.app.migrations check
+npm run dev:api
+npm run dev:worker
+```
+
+`scripts/dev.sh` выполняет миграции автоматически перед запуском API. Самостоятельный `npm run dev:api` требует предварительного `upgrade`.
+
+При обновлении production сначала сделайте резервную копию PostgreSQL и остановите обработку pipeline, чтобы старая версия worker не работала во время изменения схемы. Затем выполните:
+
+```sh
+docker compose -f docker-compose.prod.yml stop api worker
+docker compose -f docker-compose.prod.yml build migrate api worker web
+docker compose -f docker-compose.prod.yml run --rm migrate
+docker compose -f docker-compose.prod.yml up -d api worker web
+```
+
+Версия 1 переносит существующий идемпотентный SQL создания/дополнения схемы, версия 2 — очередь worker. Поэтому существующая база принимается без удаления новостей, промптов, заданий и пользовательских настроек. Первое обновление также выполняет прежнее заполнение отсутствующих `articles.raw_item_id`. Повторный запуск не повторяет уже применённый SQL. Все новые версии добавляются отдельным `migration_NNNN.py` и в `MIGRATIONS` в `app/migrations.py`; изменять применённые версии нельзя. DDL и история фиксируются одной транзакцией, параллельные обновления сериализованы PostgreSQL lock. Автоматического удаления данных или downgrade нет; откат схемы планируется отдельно для конкретной будущей миграции.
+
+`NewsRepository` и `app.models` остаются совместимыми точками импорта. Реализация репозитория разделена на `repository_database`, `repository_sources`, `repository_raw_items`, `repository_editorial`, `repository_publication`, `repository_schedulers`, `repository_prompts`, `repository_guides`, `repository_forecasts`, `repository_mapping` и общие функции `repository_support`. Модели разделены на `models_news`, `models_forecasts`, `models_editorial`, `models_sources`, `models_pipeline`, `models_monitoring`. JSON-контракты и имена публичных моделей сохранены.

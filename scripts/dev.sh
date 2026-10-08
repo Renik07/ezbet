@@ -47,6 +47,8 @@ if [ -n "$POSTGRES_CONTAINER_ID" ]; then
   done
 fi
 
+DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} .venv/bin/python -m services.api.app.migrations upgrade
+
 npm run dev:api &
 API_PID=$!
 
@@ -57,7 +59,7 @@ until curl --fail -s http://localhost:8000/health >/dev/null; do
   fi
   sleep 1
 done
-.venv/bin/python -m services.api.app.worker &
+DATABASE_URL=${DATABASE_URL:-postgresql://ezbet:ezbet@localhost:5433/ezbet} .venv/bin/python -m services.api.app.worker &
 WORKER_PID=$!
 
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 npm run dev:web

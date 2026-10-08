@@ -7,20 +7,7 @@ class JobQueue:
         self.repository = repository
 
     def ensure_schema(self):
-        with self.repository.connect() as connection:
-            connection.execute('''
-                CREATE TABLE IF NOT EXISTS worker_jobs (
-                    id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'pipeline',
-                    force BOOLEAN NOT NULL, status TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
-                    attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 2,
-                    worker_id TEXT, lease_until TIMESTAMPTZ, error TEXT, result JSONB,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            ''')
-            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_jobs_active ON worker_jobs (kind) WHERE status IN ('pending', 'running')")
-            connection.execute('CREATE INDEX IF NOT EXISTS idx_worker_jobs_created ON worker_jobs (created_at DESC)')
+        self.repository.ensure_schema()
 
     def enqueue(self, *, force):
         with self.repository.connect() as connection:
